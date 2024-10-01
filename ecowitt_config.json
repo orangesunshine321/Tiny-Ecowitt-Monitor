@@ -1,0 +1,14 @@
+{
+    "gateway_ip": "10.10.20.101",
+    "sensors": {
+        "5x5": {
+            "temp": "0x02",
+            "humidity": "0x07"
+        },
+        "10x10": {
+            "temp": "wh25_intemp",
+            "humidity": "wh25_inhumi"
+        }
+    },
+    "theme": "matrix"
+}
