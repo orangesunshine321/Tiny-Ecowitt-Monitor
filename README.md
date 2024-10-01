@@ -1,12 +1,11 @@
 # 🌿 Tiny Ecowitt Plant Monitor for Windows 🌿
 
-Welcome to the **Tiny Ecowitt Plant Monitor**! 🎉 Your compact and user-friendly application designed specifically for indoor plant enthusiasts cultivating plants in grow tents. This Windows app makes it effortless for everyone—whether you're a seasoned horticulturist or just starting—to keep track of essential environmental data to ensure your plants thrive. 🌱🌞💧
+Welcome to the **Tiny Ecowitt Plant Monitor**! 🎉 Wrote this with some help from ChatGPT in an afternoon because the web interface sucks and I'm on my computer all day anyways. Enjoy!
 
 ## 📋 Table of Contents
 
 - [🔍 How to Find Your Gateway IP Address](#-how-to-find-your-gateway-ip-address)
 - [💻 Download](#-download)
-- [🚀 Installation](#-installation)
 - [🛠️ How to Use](#️-how-to-use)
   - [1. Launch the App](#1-launch-the-app)
   - [2. Enter Your Gateway IP](#2-enter-your-gateway-ip)
@@ -15,8 +14,6 @@ Welcome to the **Tiny Ecowitt Plant Monitor**! 🎉 Your compact and user-friend
   - [5. Monitor Your Plant Environment](#5-monitor-your-plant-environment)
 - [🎨 Themes](#-themes)
 - [🔧 Troubleshooting](#-troubleshooting)
-- [🤝 Contributing](#-contributing)
-- [📬 Contact](#-contact)
 
 ## 🔍 How to Find Your Gateway IP Address
 
@@ -136,7 +133,26 @@ View real-time updates to ensure your plants are thriving:
 
 ### ❗ App Doesn't Launch
 
-**Solution**:
+💻 Windows Defender Popup for Unknown Developer
+When you first run the Tiny Ecowitt Plant Monitor, Windows Defender may display a security warning indicating that the app is from an "Unknown Publisher." 
+
+**To Bypass the Windows Defender Popup**
+
+Double-click the ecowitt3.exe file to start the application.
+
+You will see a popup from Windows Defender SmartScreen saying:
+**Windows Defender SmartScreen
+"Tiny Ecowitt Plant Monitor" is not recognized as an app from an identified publisher.**
+
+Click on "More info":
+
+After clicking "More info," a new Run anyway button will appear. Click this.
+
+You might receive another prompt asking for confirmation. Click Yes to allow the app to run.
+
+### Other
+
+**Can't connect to Gateway**:
 1. **Verify Gateway IP**:
    - Ensure the IP address entered is correct and the Ecowitt Gateway is powered on and connected to the network.
 
