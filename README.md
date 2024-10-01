@@ -2,6 +2,8 @@
 
 Welcome to the **Tiny Ecowitt Plant Monitor**! 🎉 Wrote this with some help from ChatGPT in an afternoon because the web interface sucks and I'm on my computer all day anyways. Enjoy!
 
+![Screenshot](https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/Screenshot%202024-10-01%20160613.png)
+
 ## 📋 Table of Contents
 
 - [🔍 How to Find Your Gateway IP Address](#-how-to-find-your-gateway-ip-address)
