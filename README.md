@@ -1,6 +1,14 @@
-# 🌿 Tiny Ecowitt Plant Monitor for Windows 🌿
+# 🌿 Tiny Ecowitt Monitor for Windows (v1/Beta)🌿
 
-Welcome to the **Tiny Ecowitt Plant Monitor**! 🎉 Wrote this with some help from ChatGPT in an afternoon because the web interface sucks and I'm on my computer all day anyways. Enjoy!
+🎉 Put this together with my friend ChatGPT in an afternoon because the Ecowitt web interface sucks and I'm on my computer all day anyways. Enjoy!
+**NOTE: This has ONLY been tested with a GW1100 Firmware Version 2.3.4, so this may not work with other gateways/sensors.**
+
+## 🌟 Features
+
+- View all of the Data from your Ecowitt Gateway/Sensors in a tiny Windows app.
+- Added automatic VPD calculator based on current readings.
+- Hopefully easy to configure and see just what you want to.
+- Updates every second, shows when last update occured.
 
 ![Screenshot](https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/Screenshot%202024-10-01%20160613.png)
 
