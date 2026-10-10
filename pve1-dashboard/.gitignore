@@ -1,7 +1,0 @@
-node_modules/
-dist/
-.data/
-config.yaml
-*.log
-test-results/
-screenshots/tmp/
