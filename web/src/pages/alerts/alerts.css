@@ -1,0 +1,249 @@
+/* Alerts page (DESIGN §5). Page-local classes use the "al-" prefix. */
+
+.al-wrap {
+  container-type: inline-size;
+  container-name: al;
+}
+.al-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--s6) var(--s5);
+  align-items: start;
+}
+@container al (min-width: 940px) {
+  .al-page {
+    grid-template-columns: minmax(0, 1.15fr) minmax(340px, 1fr);
+  }
+}
+
+.al-active {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s5);
+  min-width: 0;
+}
+.al-allclear .ui-card-body {
+  padding-block: var(--s5);
+}
+
+/* severity section header: icon + label + count (status is never colour alone) */
+.al-group-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.al-group-header[data-tone='crit'] {
+  color: color-mix(in oklab, var(--status-crit) 80%, var(--label));
+}
+.al-group-header[data-tone='warn'] {
+  color: color-mix(in oklab, var(--status-warn) 72%, var(--label));
+}
+.al-group-header[data-tone='info'] {
+  color: color-mix(in oklab, var(--status-info) 75%, var(--label));
+}
+.al-group-count {
+  font-weight: 500;
+  color: var(--label-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* active rows: title, body, meta */
+.al-group .ui-row {
+  align-items: flex-start;
+  padding-block: 11px;
+}
+.al-group .ui-row-icon {
+  margin-top: 1px;
+}
+.al-group .ui-row-chevron {
+  align-self: center;
+}
+.al-row-title {
+  font-weight: 600;
+}
+.al-row-sub {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.al-row-body {
+  font-size: var(--fs-subhead);
+  line-height: var(--lh-subhead);
+  color: var(--label-2);
+  overflow-wrap: anywhere;
+}
+.al-row-meta {
+  color: var(--label-3);
+}
+
+/* ───────────────────────────── history timeline */
+.al-history .ui-card-body {
+  padding-top: var(--s2);
+}
+.al-history-empty {
+  padding: var(--s5) var(--s4) var(--s6);
+}
+.al-tl {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: var(--s2);
+}
+.al-tl-day + .al-tl-day {
+  margin-top: var(--s2);
+}
+.al-tl-dayhead {
+  padding: var(--s2) var(--s5) 4px;
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--label-2);
+}
+.al-tl-list {
+  list-style: none;
+}
+.al-tl-row {
+  --_node: 22px;
+  position: relative;
+  display: grid;
+  grid-template-columns: 4.6em var(--_node) minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 8px;
+  padding: 8px var(--s4) 8px var(--s4);
+  color: var(--label);
+  text-decoration: none;
+  transition: background-color 120ms ease;
+}
+a.al-tl-row:hover {
+  text-decoration: none;
+  background: var(--row-hover);
+}
+a.al-tl-row:active {
+  background: var(--fill-3);
+}
+a.al-tl-row:focus-visible {
+  outline-offset: -3px;
+}
+.al-tl-time {
+  padding-top: 1px;
+  text-align: right;
+  font-size: var(--fs-footnote);
+  line-height: 18px;
+  color: var(--label-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* the node: a severity dot on a continuous rail */
+.al-tl-node {
+  position: relative;
+  align-self: stretch;
+  display: flex;
+  justify-content: center;
+}
+.al-tl-node::before {
+  content: '';
+  position: absolute;
+  top: -8px;
+  bottom: -8px;
+  left: 50%;
+  width: 1.5px;
+  transform: translateX(-50%);
+  background: var(--separator);
+}
+.al-tl-item:first-child .al-tl-node::before {
+  top: 9px;
+}
+.al-tl-item:last-child .al-tl-node::before {
+  bottom: calc(100% - 9px);
+}
+.al-tl-item:only-child .al-tl-node::before {
+  display: none;
+}
+.al-tl-node > i {
+  position: relative;
+  margin-top: 4px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--_c, var(--status-off));
+  box-shadow:
+    0 0 0 3px var(--card-solid),
+    0 0 0 3.5px color-mix(in srgb, var(--_c, var(--status-off)) 30%, transparent);
+}
+.al-tl-item[data-tone='crit'] {
+  --_c: var(--status-crit);
+}
+.al-tl-item[data-tone='warn'] {
+  --_c: var(--status-warn);
+}
+.al-tl-item[data-tone='info'] {
+  --_c: var(--status-info);
+}
+/* resolved: a hollow ring in the severity colour */
+.al-tl-item[data-resolved] .al-tl-node > i {
+  background: var(--card-solid);
+  box-shadow:
+    inset 0 0 0 2.5px var(--_c, var(--status-off)),
+    0 0 0 3px var(--card-solid);
+}
+.al-tl-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.al-tl-title {
+  font-size: var(--fs-callout);
+  line-height: var(--lh-callout);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.al-tl-item[data-resolved] .al-tl-title {
+  font-weight: 500;
+}
+.al-tl-text {
+  font-size: var(--fs-subhead);
+  line-height: var(--lh-subhead);
+  color: var(--label-2);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.al-tl-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin-top: 4px;
+}
+.al-tl-kind {
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  color: var(--label-3);
+}
+.al-tl-chevron {
+  align-self: center;
+  color: var(--label-3);
+}
+.al-tl-more {
+  display: flex;
+  justify-content: center;
+  padding: var(--s2) 0 var(--s1);
+}
+
+@media (max-width: 767.98px) {
+  .al-tl-row {
+    grid-template-columns: 3.9em var(--_node) minmax(0, 1fr) auto;
+    padding-inline: var(--s3) var(--s4);
+  }
+}
+
+/* two columns: start the history card level with the first alert list (below its section header) */
+@container al (min-width: 940px) {
+  .al-history {
+    margin-top: calc(var(--lh-footnote) + 6px);
+  }
+}

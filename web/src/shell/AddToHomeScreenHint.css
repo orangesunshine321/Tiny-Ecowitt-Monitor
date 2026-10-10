@@ -1,0 +1,66 @@
+.shell-a2hs {
+  display: flex;
+  gap: var(--s4);
+  align-items: flex-start;
+  padding: var(--s4) var(--s5);
+}
+.shell-a2hs img {
+  flex: none;
+  width: 52px;
+  height: 52px;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px -2px rgb(0 20 80 / 0.4);
+}
+.shell-a2hs-title {
+  font-size: var(--fs-headline);
+  line-height: var(--lh-headline);
+  font-weight: 600;
+}
+.shell-a2hs-text {
+  margin-top: 2px;
+  font-size: var(--fs-subhead);
+  line-height: var(--lh-subhead);
+  color: var(--label-2);
+}
+.shell-a2hs ol {
+  margin: var(--s3) 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: var(--fs-subhead);
+  line-height: var(--lh-subhead);
+}
+.shell-a2hs li {
+  counter-increment: step;
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  align-items: center;
+  gap: 10px;
+}
+.shell-a2hs li::before {
+  content: counter(step);
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--accent);
+}
+.shell-a2hs-glyph {
+  display: inline-grid;
+  margin: -3px 0;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  color: var(--accent);
+  background: var(--fill-3);
+  vertical-align: middle;
+}

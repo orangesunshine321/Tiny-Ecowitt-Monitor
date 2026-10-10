@@ -1,0 +1,54 @@
+.ui-appicon {
+  --_s: 40px;
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: var(--_s);
+  height: var(--_s);
+  /* ≈ iOS icon corner (22.4% of the size) */
+  border-radius: calc(var(--_s) * 0.224);
+  overflow: hidden;
+  background: linear-gradient(180deg, #ffffff, #f1f1f5);
+  box-shadow:
+    0 0 0 0.5px rgb(0 0 0 / 0.1),
+    0 1px 2px rgb(0 0 0 / 0.08),
+    0 2px 8px -2px rgb(0 0 0 / 0.08);
+}
+:root[data-theme='dark'] .ui-appicon:not([data-monogram]):not([data-glyph]) {
+  background: linear-gradient(180deg, #f2f2f6, #dedee4);
+  box-shadow:
+    0 0 0 0.5px rgb(255 255 255 / 0.12),
+    0 2px 8px -2px rgb(0 0 0 / 0.5);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .ui-appicon:not([data-monogram]):not([data-glyph]) {
+    background: linear-gradient(180deg, #f2f2f6, #dedee4);
+    box-shadow:
+      0 0 0 0.5px rgb(255 255 255 / 0.12),
+      0 2px 8px -2px rgb(0 0 0 / 0.5);
+  }
+}
+.ui-appicon img {
+  width: 72%;
+  height: 72%;
+  object-fit: contain;
+}
+.ui-appicon[data-monogram] {
+  background: linear-gradient(160deg, color-mix(in oklab, var(--_c) 72%, white), var(--_c));
+  color: #fff;
+  font-family: var(--font-rounded);
+  font-weight: 600;
+  font-size: calc(var(--_s) * 0.4);
+  letter-spacing: -0.01em;
+  line-height: 1;
+  text-shadow: 0 1px 1px rgb(0 0 0 / 0.12);
+}
+.ui-appicon[data-glyph] {
+  background: linear-gradient(160deg, color-mix(in oklab, var(--_c, var(--gray)) 62%, white), var(--_c, var(--gray)));
+  color: #fff;
+}
+.ui-appicon[data-glyph] svg {
+  width: 56%;
+  height: 56%;
+}

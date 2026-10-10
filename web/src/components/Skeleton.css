@@ -1,0 +1,39 @@
+.ui-skel {
+  display: block;
+  width: var(--_w, 100%);
+  height: var(--_h, 14px);
+  border-radius: var(--_r, 6px);
+  background: linear-gradient(90deg, var(--fill-3) 0%, var(--fill-4) 40%, var(--fill-3) 80%) 0 0 / 300% 100%;
+  animation: ui-shimmer 1.6s linear infinite;
+}
+.ui-skel + .ui-skel {
+  margin-top: 8px;
+}
+@keyframes ui-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -50% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-skel {
+    animation: none;
+  }
+}
+.ui-skel-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s5);
+  padding-top: var(--s2);
+}
+.ui-skel-page-grid {
+  display: grid;
+  gap: var(--s4);
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+}
+.ui-skel-card {
+  padding: var(--s5);
+  min-height: 168px;
+}

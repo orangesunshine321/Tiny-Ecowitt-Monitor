@@ -87,10 +87,12 @@ export interface HostHelper {
   pkgUpdates(): Promise<unknown[] | null>;
   /** raw JSON array from `pvesh get /nodes/<node>/storage/<storage>/content --content backup --output-format json` */
   backups(storage: string): Promise<unknown[] | null>;
-  /** host temperatures parsed from `sensors -j`; null if lm-sensors is missing */
+  /** host temperatures parsed from `sensors -j` (sensorsAvailable=false when lm-sensors is missing); null on failure */
   host(): Promise<HostInventory | null>;
   /** inventories of running LXCs (pct exec) and agent-enabled running VMs (qm guest exec); one guest when vmid given */
   guests(vmid?: number): Promise<GuestInventory[] | null>;
+  /** last error message for a helper command (e.g. "inventory", "sensors"), for collector status */
+  lastError?(command: string): string | undefined;
 }
 
 // ── Inventory (apps & services inside guests)

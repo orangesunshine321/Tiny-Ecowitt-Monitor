@@ -1,0 +1,439 @@
+/*
+ * pve1-dash design tokens (docs/DESIGN.md §3, docs/research/design-lang.md §1.6, §2, §3, §4).
+ *
+ * Theme model:
+ *  - Light values live on :root.
+ *  - Dark values apply when the OS is dark and the user did not force light
+ *    (`@media (prefers-color-scheme: dark) :root:not([data-theme="light"])`), or when the user forced dark
+ *    (`:root[data-theme="dark"]`). The two dark blocks are intentionally identical: keep them in sync.
+ *  - `prefers-contrast: more` swaps in the Increased Contrast system colours, stronger labels and opaque materials.
+ *  - `data-reduce-transparency` (in-app toggle; Safari has no prefers-reduced-transparency) is handled in glass.css.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* ── system colours, 2025 values (research §2.1) */
+  --red: #ff383c;
+  --orange: #ff8d28;
+  --yellow: #ffcc00;
+  --green: #34c759;
+  --mint: #00c8b3;
+  --teal: #00c3d0;
+  --cyan: #00c0e8;
+  --blue: #0088ff;
+  --indigo: #6155f5;
+  --purple: #cb30e0;
+  --pink: #ff2d55;
+  --brown: #ac7f5e;
+  --gray: #8e8e93;
+  --gray-2: #aeaeb2;
+  --gray-3: #c7c7cc;
+  --gray-4: #d1d1d6;
+  --gray-5: #e5e5ea;
+  --gray-6: #f2f2f7;
+
+  /* ── labels, separators, fills (research §2.3) */
+  --label: #000;
+  --label-2: rgb(60 60 67 / 0.6);
+  --label-3: rgb(60 60 67 / 0.3);
+  --label-4: rgb(60 60 67 / 0.18);
+  --separator: rgb(60 60 67 / 0.29);
+  --separator-opaque: #c6c6c8;
+  --hairline: rgb(60 60 67 / 0.14);
+  --fill-1: rgb(120 120 128 / 0.2);
+  --fill-2: rgb(120 120 128 / 0.16);
+  --fill-3: rgb(118 118 128 / 0.12);
+  --fill-4: rgb(116 116 128 / 0.08);
+  --bg: #f2f2f7;
+  --bg-elevated: #fff;
+
+  /* ── accent & status aliases (colour always paired with icon + text) */
+  --accent: var(--blue);
+  --on-accent: #fff;
+  --status-ok: var(--green);
+  --status-warn: var(--orange);
+  --status-crit: var(--red);
+  --status-off: var(--gray);
+  --status-info: var(--blue);
+  /* meters and rings: fill carries severity (accent → warning → critical) */
+  --meter-ok: var(--blue);
+
+  /*
+   * Chart series, fixed order blue → purple → teal → orange (DESIGN §6). Apple hues with lightness snapped so the set
+   * passes the dataviz validator on the card surface in both modes (adjacent CVD ΔE ≥ 8, normal ΔE ≥ 15, ≥ 3:1).
+   */
+  --series-1: #0088ff;
+  --series-2: #b708cc;
+  --series-3: #07a0ab;
+  --series-4: #dc7304;
+  --chart-grid: rgb(60 60 67 / 0.12);
+  --chart-axis: rgb(60 60 67 / 0.26);
+  --chart-surface: #fafafc; /* ring colour around end dots; matches the card fill over the wallpaper */
+
+  /* ── Liquid Glass (chrome layer: sidebar, toolbars, tab bar, sheets, popovers, toasts, Spotlight) */
+  --glass-blur: 24px;
+  --glass-blur-large: 34px;
+  --glass-sat: 180%;
+  --glass-fill: rgb(255 255 255 / 0.56);
+  --glass-fill-chrome: rgb(250 250 252 / 0.66);
+  --glass-fill-thick: rgb(250 250 252 / 0.8);
+  --glass-fill-clear: rgb(255 255 255 / 0.14);
+  --glass-solid: #f6f6f8;
+  --glass-rim-hi: rgb(255 255 255 / 0.75);
+  --glass-rim-lo: rgb(255 255 255 / 0.18);
+  --glass-hairline: rgb(0 0 0 / 0.08);
+  --glass-shadow: 0 10px 30px -8px rgb(0 0 0 / 0.22), 0 2px 6px rgb(0 0 0 / 0.08);
+  --glass-shadow-large: 0 24px 60px -12px rgb(0 0 0 / 0.3), 0 4px 14px rgb(0 0 0 / 0.08);
+  --glass-sheen-1: rgb(255 255 255 / 0.38);
+  --glass-sheen-2: rgb(255 255 255 / 0.1);
+  --dim-clear: rgb(0 0 0 / 0.35);
+  --scrim: rgb(0 0 0 / 0.2);
+
+  /* ── content material (cards): quiet, mostly opaque */
+  --card-fill: rgb(255 255 255 / 0.78);
+  --card-solid: #fff;
+  --card-blur: 8px;
+  --card-hairline: rgb(0 0 0 / 0.06);
+  --card-shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 6px 18px -6px rgb(0 0 0 / 0.1);
+  --card-inset: rgb(120 120 128 / 0.07); /* nested wells inside cards */
+
+  /* ── selection & focus */
+  --row-selected: color-mix(in srgb, var(--accent) 14%, transparent);
+  --row-hover: rgb(120 120 128 / 0.1);
+  --row-alt: rgb(116 116 128 / 0.045);
+  --focus-ring-color: color-mix(in srgb, var(--accent) 55%, transparent);
+
+  /* ── wallpaper (fixed behind everything) */
+  --wp-base: #e4eaf4;
+  --wp-1: #3d9bff;
+  --wp-2: #d277f0;
+  --wp-3: #3fd3dc;
+  --wp-4: #ffae6b;
+  --wp-blob-opacity: 0.62;
+  --wp-noise-opacity: 0.035;
+  --wp-calm: linear-gradient(160deg, #e9eef6 0%, #dfe6f1 55%, #e8e3ef 100%);
+
+  /* ── radii (concentric: inner = outer − padding) */
+  --r-window: 26px;
+  --r-sidebar: 24px;
+  --r-card: 22px;
+  --r-sheet: 26px;
+  --r-control: 12px;
+  --r-small: 8px;
+  --r-capsule: 999px;
+
+  /* ── spacing (4/8 based) */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 20px;
+  --s6: 24px;
+  --s7: 32px;
+  --s8: 48px;
+
+  /* ── motion: SwiftUI springs as linear() (research §4.3); durations are settle times */
+  --spring-smooth: linear(0, 0.023, 0.08, 0.155, 0.238, 0.324, 0.406, 0.484, 0.555, 0.618, 0.675, 0.724, 0.767, 0.804, 0.836, 0.863, 0.886, 0.905, 0.921, 0.935, 0.946, 0.955, 0.963, 0.97, 0.975, 0.98, 0.983, 0.986, 0.989, 0.991, 0.993, 0.994, 0.995, 0.996, 0.997, 0.997, 0.998, 0.998, 0.999, 0.999, 1);
+  --spring-snappy: linear(0, 0.021, 0.075, 0.15, 0.235, 0.324, 0.413, 0.498, 0.576, 0.647, 0.71, 0.765, 0.812, 0.853, 0.886, 0.914, 0.936, 0.954, 0.968, 0.98, 0.988, 0.994, 0.999, 1.002, 1.004, 1.005, 1.006, 1.006, 1.006, 1.006, 1.005, 1.005, 1.004, 1.004, 1.003, 1.003, 1.002, 1.002, 1.002, 1.001, 1);
+  --spring-bouncy: linear(0, 0.029, 0.104, 0.205, 0.32, 0.438, 0.551, 0.655, 0.746, 0.824, 0.888, 0.939, 0.978, 1.006, 1.026, 1.038, 1.044, 1.046, 1.045, 1.042, 1.037, 1.032, 1.026, 1.021, 1.016, 1.012, 1.008, 1.005, 1.003, 1.001, 1, 0.999, 0.998, 0.998, 0.998, 0.998, 0.998, 0.998, 0.999, 0.999, 1);
+  --spring-glass: linear(0, 0.021, 0.074, 0.147, 0.233, 0.324, 0.414, 0.501, 0.583, 0.656, 0.722, 0.78, 0.829, 0.871, 0.905, 0.933, 0.956, 0.974, 0.987, 0.997, 1.005, 1.01, 1.013, 1.014, 1.015, 1.015, 1.014, 1.013, 1.012, 1.011, 1.009, 1.008, 1.007, 1.006, 1.005, 1.004, 1.003, 1.002, 1.002, 1.001, 1);
+  --dur-smooth: 740ms;
+  --dur-snappy: 700ms;
+  --dur-bouncy: 820ms;
+  --dur-glass: 480ms;
+  --ease-out: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+
+  /* ── typography: system fonts only (never bundle SF; research §3.5) */
+  --font-ui: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-rounded: ui-rounded, 'SF Pro Rounded', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', 'DejaVu Sans Mono', monospace;
+
+  /* web-tuned Apple scale (DESIGN §3): size / line-height / tracking (research §3.3) */
+  --fs-large-title: 34px;
+  --lh-large-title: 41px;
+  --tr-large-title: 0.012em;
+  --fs-title1: 28px;
+  --lh-title1: 34px;
+  --tr-title1: 0.014em;
+  --fs-title2: 22px;
+  --lh-title2: 28px;
+  --tr-title2: -0.012em;
+  --fs-title3: 20px;
+  --lh-title3: 25px;
+  --tr-title3: -0.023em;
+  --fs-headline: 15px;
+  --lh-headline: 20px;
+  --tr-headline: -0.016em;
+  --fs-body: 15px;
+  --lh-body: 20px;
+  --tr-body: -0.016em;
+  --fs-callout: 14px;
+  --lh-callout: 19px;
+  --tr-callout: -0.011em;
+  --fs-subhead: 13px;
+  --lh-subhead: 18px;
+  --tr-subhead: -0.006em;
+  --fs-footnote: 12px;
+  --lh-footnote: 16px;
+  --tr-footnote: 0em;
+  --fs-caption: 11px;
+  --lh-caption: 13px;
+  --tr-caption: 0.006em;
+
+  /* ── layout (DESIGN §2); the shell overrides these per breakpoint */
+  --sidebar-w: 248px;
+  --rail-w: 76px;
+  --chrome-inset: 10px;
+  --content-max: 1440px;
+  --tabbar-h: 62px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+}
+
+/* Browsers without linear() (Safari < 17.2) get cubic-bezier approximations. */
+@supports not (transition-timing-function: linear(0, 1)) {
+  :root {
+    --spring-smooth: cubic-bezier(0.25, 0.8, 0.25, 1);
+    --spring-snappy: cubic-bezier(0.32, 0.72, 0, 1);
+    --spring-bouncy: cubic-bezier(0.34, 1.36, 0.64, 1);
+    --spring-glass: cubic-bezier(0.3, 1.15, 0.6, 1);
+  }
+}
+
+/* ───────────────────────────── dark (system) — keep identical to the forced-dark block below */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --red: #ff4245;
+    --orange: #ff9230;
+    --yellow: #ffd600;
+    --green: #30d158;
+    --mint: #00dac3;
+    --teal: #00d2e0;
+    --cyan: #3cd3fe;
+    --blue: #0091ff;
+    --indigo: #6d7cff;
+    --purple: #db34f2;
+    --pink: #ff375f;
+    --brown: #b78a66;
+    --gray: #8e8e93;
+    --gray-2: #636366;
+    --gray-3: #48484a;
+    --gray-4: #3a3a3c;
+    --gray-5: #2c2c2e;
+    --gray-6: #1c1c1e;
+    --label: #fff;
+    --label-2: rgb(235 235 245 / 0.6);
+    --label-3: rgb(235 235 245 / 0.3);
+    --label-4: rgb(235 235 245 / 0.16);
+    --separator: rgb(84 84 88 / 0.6);
+    --separator-opaque: #38383a;
+    --hairline: rgb(255 255 255 / 0.1);
+    --fill-1: rgb(120 120 128 / 0.36);
+    --fill-2: rgb(120 120 128 / 0.32);
+    --fill-3: rgb(118 118 128 / 0.24);
+    --fill-4: rgb(118 118 128 / 0.18);
+    --bg: #000;
+    --bg-elevated: #1c1c1e;
+    --series-1: #0091ff;
+    --series-2: #ba00d0;
+    --series-3: #0ca8b3;
+    --series-4: #d97504;
+    --chart-grid: rgb(235 235 245 / 0.1);
+    --chart-axis: rgb(235 235 245 / 0.22);
+    --chart-surface: #1c1c20;
+    --glass-fill: rgb(40 40 44 / 0.52);
+    --glass-fill-chrome: rgb(34 34 38 / 0.58);
+    --glass-fill-thick: rgb(30 30 34 / 0.78);
+    --glass-fill-clear: rgb(255 255 255 / 0.06);
+    --glass-solid: #222226;
+    --glass-rim-hi: rgb(255 255 255 / 0.28);
+    --glass-rim-lo: rgb(255 255 255 / 0.06);
+    --glass-hairline: rgb(255 255 255 / 0.1);
+    --glass-shadow: 0 12px 34px -8px rgb(0 0 0 / 0.55), 0 2px 6px rgb(0 0 0 / 0.35);
+    --glass-shadow-large: 0 28px 70px -12px rgb(0 0 0 / 0.7), 0 4px 14px rgb(0 0 0 / 0.4);
+    --glass-sheen-1: rgb(255 255 255 / 0.16);
+    --glass-sheen-2: rgb(255 255 255 / 0.04);
+    --scrim: rgb(0 0 0 / 0.42);
+    --card-fill: rgb(28 28 32 / 0.72);
+    --card-solid: #1c1c1e;
+    --card-hairline: rgb(255 255 255 / 0.07);
+    --card-shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 22px -8px rgb(0 0 0 / 0.5);
+    --card-inset: rgb(255 255 255 / 0.05);
+    --row-selected: color-mix(in srgb, var(--accent) 24%, transparent);
+    --row-hover: rgb(255 255 255 / 0.07);
+  --row-alt: rgb(255 255 255 / 0.028);
+    --focus-ring-color: color-mix(in srgb, var(--accent) 70%, transparent);
+    --wp-base: #070a14;
+    --wp-1: #0a5fd6;
+    --wp-2: #7b22b8;
+    --wp-3: #007f8e;
+    --wp-4: #b8521a;
+    --wp-blob-opacity: 0.58;
+    --wp-noise-opacity: 0.045;
+    --wp-calm: linear-gradient(160deg, #10131c 0%, #0b0d14 55%, #141019 100%);
+  }
+}
+
+/* ───────────────────────────── dark (forced) */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --red: #ff4245;
+  --orange: #ff9230;
+  --yellow: #ffd600;
+  --green: #30d158;
+  --mint: #00dac3;
+  --teal: #00d2e0;
+  --cyan: #3cd3fe;
+  --blue: #0091ff;
+  --indigo: #6d7cff;
+  --purple: #db34f2;
+  --pink: #ff375f;
+  --brown: #b78a66;
+  --gray: #8e8e93;
+  --gray-2: #636366;
+  --gray-3: #48484a;
+  --gray-4: #3a3a3c;
+  --gray-5: #2c2c2e;
+  --gray-6: #1c1c1e;
+  --label: #fff;
+  --label-2: rgb(235 235 245 / 0.6);
+  --label-3: rgb(235 235 245 / 0.3);
+  --label-4: rgb(235 235 245 / 0.16);
+  --separator: rgb(84 84 88 / 0.6);
+  --separator-opaque: #38383a;
+  --hairline: rgb(255 255 255 / 0.1);
+  --fill-1: rgb(120 120 128 / 0.36);
+  --fill-2: rgb(120 120 128 / 0.32);
+  --fill-3: rgb(118 118 128 / 0.24);
+  --fill-4: rgb(118 118 128 / 0.18);
+  --bg: #000;
+  --bg-elevated: #1c1c1e;
+  --series-1: #0091ff;
+  --series-2: #ba00d0;
+  --series-3: #0ca8b3;
+  --series-4: #d97504;
+  --chart-grid: rgb(235 235 245 / 0.1);
+  --chart-axis: rgb(235 235 245 / 0.22);
+  --chart-surface: #1c1c20;
+  --glass-fill: rgb(40 40 44 / 0.52);
+  --glass-fill-chrome: rgb(34 34 38 / 0.58);
+  --glass-fill-thick: rgb(30 30 34 / 0.78);
+  --glass-fill-clear: rgb(255 255 255 / 0.06);
+  --glass-solid: #222226;
+  --glass-rim-hi: rgb(255 255 255 / 0.28);
+  --glass-rim-lo: rgb(255 255 255 / 0.06);
+  --glass-hairline: rgb(255 255 255 / 0.1);
+  --glass-shadow: 0 12px 34px -8px rgb(0 0 0 / 0.55), 0 2px 6px rgb(0 0 0 / 0.35);
+  --glass-shadow-large: 0 28px 70px -12px rgb(0 0 0 / 0.7), 0 4px 14px rgb(0 0 0 / 0.4);
+  --glass-sheen-1: rgb(255 255 255 / 0.16);
+  --glass-sheen-2: rgb(255 255 255 / 0.04);
+  --scrim: rgb(0 0 0 / 0.42);
+  --card-fill: rgb(28 28 32 / 0.72);
+  --card-solid: #1c1c1e;
+  --card-hairline: rgb(255 255 255 / 0.07);
+  --card-shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 22px -8px rgb(0 0 0 / 0.5);
+  --card-inset: rgb(255 255 255 / 0.05);
+  --row-selected: color-mix(in srgb, var(--accent) 24%, transparent);
+  --row-hover: rgb(255 255 255 / 0.07);
+  --row-alt: rgb(255 255 255 / 0.028);
+  --focus-ring-color: color-mix(in srgb, var(--accent) 70%, transparent);
+  --wp-base: #070a14;
+  --wp-1: #0a5fd6;
+  --wp-2: #7b22b8;
+  --wp-3: #007f8e;
+  --wp-4: #b8521a;
+  --wp-blob-opacity: 0.58;
+  --wp-noise-opacity: 0.045;
+  --wp-calm: linear-gradient(160deg, #10131c 0%, #0b0d14 55%, #141019 100%);
+}
+
+/* ───────────────────────────── Increase Contrast (research §2.1 IC columns; §1.6) */
+@media (prefers-contrast: more) {
+  :root {
+    --red: #e9152d;
+    --orange: #c55300;
+    --yellow: #a16a00;
+    --green: #008932;
+    --mint: #008575;
+    --teal: #008198;
+    --cyan: #007eae;
+    --blue: #1e6ef4;
+    --indigo: #564ade;
+    --purple: #b02fc2;
+    --pink: #e7124d;
+    --brown: #956d51;
+    --gray: #6c6c70;
+    --label-2: rgb(60 60 67 / 0.68);
+    --label-3: rgb(60 60 67 / 0.38);
+    --label-4: rgb(60 60 67 / 0.26);
+    --separator: rgb(60 60 67 / 0.37);
+    --hairline: rgb(0 0 0 / 0.4);
+    --glass-fill: rgb(255 255 255 / 0.92);
+    --glass-fill-chrome: rgb(255 255 255 / 0.94);
+    --glass-fill-thick: rgb(255 255 255 / 0.96);
+    --glass-hairline: #000;
+    --card-fill: #fff;
+    --card-hairline: rgb(0 0 0 / 0.45);
+  }
+}
+@media (prefers-contrast: more) and (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --red: #ff6165;
+    --orange: #ffa056;
+    --yellow: #fedf43;
+    --green: #4ad968;
+    --mint: #54dfcb;
+    --teal: #3bddec;
+    --cyan: #6dd9ff;
+    --blue: #5cb8ff;
+    --indigo: #a7aaff;
+    --purple: #ea8dff;
+    --pink: #ff8ac4;
+    --brown: #dba679;
+    --gray: #aeaeb2;
+    --label-2: rgb(235 235 245 / 0.68);
+    --label-3: rgb(235 235 245 / 0.38);
+    --label-4: rgb(235 235 245 / 0.24);
+    --separator: rgb(210 210 210 / 0.68);
+    --hairline: rgb(255 255 255 / 0.5);
+    --glass-fill: rgb(20 20 22 / 0.92);
+    --glass-fill-chrome: rgb(20 20 22 / 0.94);
+    --glass-fill-thick: rgb(20 20 22 / 0.96);
+    --glass-hairline: #fff;
+    --card-fill: #141416;
+    --card-hairline: rgb(255 255 255 / 0.5);
+  }
+}
+@media (prefers-contrast: more) {
+  :root[data-theme='dark'] {
+    --red: #ff6165;
+    --orange: #ffa056;
+    --yellow: #fedf43;
+    --green: #4ad968;
+    --mint: #54dfcb;
+    --teal: #3bddec;
+    --cyan: #6dd9ff;
+    --blue: #5cb8ff;
+    --indigo: #a7aaff;
+    --purple: #ea8dff;
+    --pink: #ff8ac4;
+    --brown: #dba679;
+    --gray: #aeaeb2;
+    --label-2: rgb(235 235 245 / 0.68);
+    --label-3: rgb(235 235 245 / 0.38);
+    --label-4: rgb(235 235 245 / 0.24);
+    --separator: rgb(210 210 210 / 0.68);
+    --hairline: rgb(255 255 255 / 0.5);
+    --glass-fill: rgb(20 20 22 / 0.92);
+    --glass-fill-chrome: rgb(20 20 22 / 0.94);
+    --glass-fill-thick: rgb(20 20 22 / 0.96);
+    --glass-hairline: #fff;
+    --card-fill: #141416;
+    --card-hairline: rgb(255 255 255 / 0.5);
+  }
+}

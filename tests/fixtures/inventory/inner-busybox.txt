@@ -1,0 +1,40 @@
+##pve1-dash:inventory v1
+##pve1-dash:section os-release
+##pve1-dash:section kernel
+6.12.48-0-lts
+##pve1-dash:section uptime
+86400.00 340000.12
+##pve1-dash:section loadavg
+0.00 0.01 0.05 1/61 1203
+##pve1-dash:section init
+unknown
+##pve1-dash:section services
+##pve1-dash:section docker
+absent
+##pve1-dash:section ip
+eth0      Link encap:Ethernet  HWaddr BC:24:11:5E:0A:91  
+          inet addr:10.10.20.70  Bcast:10.10.20.255  Mask:255.255.255.0
+          inet6 addr: fe80::be24:11ff:fe5e:a91/64 Scope:Link
+          inet6 addr: fd00:10:20::70/64 Scope:Global
+          UP BROADCAST RUNNING MULTICAST  MTU:1500  Metric:1
+          RX packets:183311 errors:0 dropped:12 overruns:0 frame:0
+          TX packets:90122 errors:0 dropped:0 overruns:0 carrier:0
+          collisions:0 txqueuelen:1000 
+          RX bytes:24398510 (23.2 MiB)  TX bytes:7802835 (7.4 MiB)
+
+lo        Link encap:Local Loopback  
+          inet addr:127.0.0.1  Mask:255.0.0.0
+          inet6 addr: ::1/128 Scope:Host
+          UP LOOPBACK RUNNING  MTU:65536  Metric:1
+          RX packets:55 errors:0 dropped:0 overruns:0 frame:0
+          TX packets:55 errors:0 dropped:0 overruns:0 carrier:0
+          collisions:0 txqueuelen:1000 
+          RX bytes:4420 (4.3 KiB)  TX bytes:4420 (4.3 KiB)
+
+##pve1-dash:section listen
+Active Internet connections (only servers)
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       
+tcp        0      0 0.0.0.0:80              0.0.0.0:*               LISTEN      
+tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN      
+tcp        0      0 :::22                   :::*                    LISTEN      
+##pve1-dash:end

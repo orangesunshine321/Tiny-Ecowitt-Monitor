@@ -1,0 +1,50 @@
+/* Inset stat tile (Overview rings row, guest detail resources). */
+.ov-stat {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+  padding: 10px 14px 11px;
+  border-radius: 16px;
+  background: var(--card-inset);
+}
+.ov-stat-label {
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--label-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ov-stat-value {
+  font-family: var(--font-rounded);
+  font-size: 24px;
+  line-height: 29px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--label);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ov-stat-value small {
+  margin-left: 2px;
+  font-size: 0.58em;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--label-2);
+}
+.ov-stat-caption {
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  color: var(--label-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

@@ -1,0 +1,147 @@
+/* iOS inset-grouped list. */
+.ui-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.ui-list-header {
+  padding: 0 var(--s4);
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  font-weight: 600;
+  color: var(--label-2);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.ui-list-footer {
+  padding: 0 var(--s4);
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  color: var(--label-2);
+}
+.ui-list-body {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--r-card);
+  overflow: clip;
+}
+.ui-list[data-plain] .ui-list-body {
+  padding-bottom: 6px;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.ui-row {
+  --_inset: var(--s4);
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  min-height: 48px;
+  padding: 8px var(--s4);
+  color: var(--label);
+  text-decoration: none;
+  text-align: left;
+  width: 100%;
+  min-width: 0;
+  transition: background-color 120ms ease;
+}
+.ui-row[data-dense] {
+  min-height: 40px;
+  padding-block: 6px;
+}
+.ui-row:hover {
+  text-decoration: none;
+}
+a.ui-row:hover,
+button.ui-row:hover {
+  background: var(--row-hover);
+}
+a.ui-row:active,
+button.ui-row:active {
+  background: var(--fill-3);
+}
+a.ui-row[aria-current='page'] {
+  background: var(--row-selected);
+}
+.ui-row:focus-visible {
+  outline-offset: -3px;
+}
+/* inset hairline between rows (starts after the icon, like iOS) */
+.ui-row + .ui-row::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: var(--_line-left, var(--s4));
+  height: 0.5px;
+  background: var(--separator);
+}
+.ui-row[data-has-icon] + .ui-row[data-has-icon]::before {
+  --_line-left: calc(var(--s4) + 30px + var(--s3));
+}
+.ui-row-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  color: var(--accent);
+}
+.ui-row-icon[data-tinted] {
+  color: #fff;
+  background: var(--_icon-bg);
+  box-shadow: inset 0 0.5px 0 rgb(255 255 255 / 0.3);
+}
+.ui-row-icon > svg {
+  width: 18px;
+  height: 18px;
+}
+.ui-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.ui-row-title {
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ui-row-subtitle {
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  color: var(--label-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ui-row[data-wrap] .ui-row-title,
+.ui-row[data-wrap] .ui-row-subtitle {
+  white-space: normal;
+}
+.ui-row-value {
+  flex: none;
+  max-width: 50%;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  font-size: var(--fs-body);
+  color: var(--label-2);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ui-row-chevron {
+  flex: none;
+  color: var(--label-3);
+  margin-right: -4px;
+}

@@ -146,7 +146,7 @@ export const DEMO_GUESTS: DemoGuest[] = [
   {
     vmid: 106, type: 'qemu', name: 'win11', status: 'stopped', tags: ['desktop'], cores: 8, memoryMiB: 16384,
     cpuBase: 0.0, memBase: 0.0, diskGiB: 256, storage: 'local-zfs', mac: 'BC:24:11:3A:5E:07',
-    ostype: 'win11', agent: true, inventoryVia: 'none', lastBackupHoursAgo: 24 * 19, backupStorage: 'nas-backups',
+    ostype: 'win11', agent: true, inventoryVia: 'none', lastBackupHoursAgo: 24 * 4, backupStorage: 'nas-backups',
   },
   {
     vmid: 107, type: 'lxc', name: 'unifi', status: 'running', tags: ['network'], cores: 2, memoryMiB: 2048,
@@ -167,6 +167,7 @@ export const DEMO_GUESTS: DemoGuest[] = [
     cpuBase: 0.01, memBase: 0.38, diskGiB: 2, diskUsed: 0.52, storage: 'local-zfs', ip: '10.10.20.7', mac: 'BC:24:11:3A:5E:0A',
     ostype: 'alpine', osPretty: 'Alpine Linux v3.22', uptimeDays: 23.4, inventoryVia: 'pct-exec',
     services: ['tailscale'],
+    lastBackupHoursAgo: 20, backupStorage: 'pbs',
   },
   {
     vmid: 110, type: 'lxc', name: 'dev-sandbox', status: 'stopped', tags: ['dev'], cores: 2, memoryMiB: 2048,
@@ -220,7 +221,7 @@ export const DEMO_TASKS: { type: string; id: string; hoursAgo: number; durationS
   { type: 'aptupdate', id: '', hoursAgo: 5, durationS: 9, status: 'OK', user: 'root@pam' },
   { type: 'zfsscrub', id: 'tank', hoursAgo: 70, durationS: 30600, status: 'WARNINGS: 1', user: 'root@pam' },
   { type: 'vncproxy', id: '100', hoursAgo: 2, durationS: 640, status: 'OK', user: 'root@pam' },
-  { type: 'vzdump', id: '106', hoursAgo: 24 * 19, durationS: 2210, status: 'OK', user: 'root@pam' },
+  { type: 'vzdump', id: '106', hoursAgo: 24 * 4, durationS: 2210, status: 'OK', user: 'root@pam' },
   { type: 'imgcopy', id: '', hoursAgo: 0.02, durationS: undefined, status: 'RUNNING', user: 'root@pam' },
 ];
 
@@ -232,6 +233,6 @@ export const DEMO_UPDATES = [
 ];
 
 export const DEMO_BACKUP_JOBS = [
-  { id: 'backup-nightly', schedule: '02:00', storage: 'pbs', mode: 'snapshot', all: 1, exclude: '106,110,9000', enabled: 1, comment: 'Nightly to PBS' },
+  { id: 'backup-nightly', schedule: '02:00', storage: 'pbs', mode: 'snapshot', all: 1, exclude: '106,108,110,9000', enabled: 1, comment: 'Nightly to PBS' },
   { id: 'backup-weekly-nas', schedule: 'sun 03:30', storage: 'nas-backups', mode: 'snapshot', vmid: '106', enabled: 1, comment: 'Weekly Windows VM' },
 ];

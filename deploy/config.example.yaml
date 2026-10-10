@@ -1,0 +1,222 @@
+# pve1-dash configuration: every option, with its default value and examples.
+#
+# The installer writes a short /etc/pve1-dash/config.yaml with only what it needs; copy anything from here into that
+# file and restart:  systemctl restart pve1-dash   (problems show up in: journalctl -u pve1-dash -n 50)
+# Another location can be used with PVE1_DASH_CONFIG=/path/to/config.yaml.
+#
+# Lines without a comment marker show the default value unless the comment says "example". Options you leave out
+# get their default, so a minimal config only needs proxmox.url, proxmox.tokenId and a token secret.
+# The schema lives in server/config.ts; tests/deploy-config.test.ts checks that this file parses and that the
+# defaults shown here are the real ones.
+
+# Name shown in the sidebar, the browser tab and notifications (the installer uses the node name).
+title: pve1
+
+# Where the dashboard listens. Keep it on the LAN and put your HTTPS reverse proxy in front
+# (deploy/reverse-proxy/README.md). PVE1_DASH_PORT in the environment overrides the port.
+listen:
+  host: 0.0.0.0
+  port: 8080
+
+# Example. Public HTTPS URL of the dashboard behind your reverse proxy. Needed for notification links (Web Push
+# requires absolute URLs) and for the guest setup command. No default.
+publicUrl: https://dash.home.lan
+
+# Where state is kept: VAPID keys and push devices (push.json), alert history (alerts.json) and service uptime
+# history (health.json). The systemd unit creates /var/lib/pve1-dash for the service user.
+dataDir: /var/lib/pve1-dash
+
+# Demo mode: a built-in fake Proxmox node instead of a real one (same as PVE1_DASH_DEMO=1). Never on a real install.
+demo: false
+
+proxmox:
+  # Example (required). The Proxmox API of your node. Use the address that matches the certificate pin below.
+  url: https://192.168.1.10:8006
+  # Node name as shown in the Proxmox UI.
+  node: pve1
+  # Example (required). The read-only API token, "user@realm!tokenname" (PVEAuditor on /, see docs/SETUP.md).
+  tokenId: pve1dash@pve!dashboard
+  # The token secret: either inline (tokenSecret) or, better, in a file readable by the service (tokenSecretFile).
+  # tokenSecret: 00000000-0000-0000-0000-000000000000
+  tokenSecretFile: /etc/pve1-dash/token
+  tls:
+    # Example. Pin the SHA-256 fingerprint of the Proxmox certificate (Proxmox UI → node → System → Certificates,
+    # or: openssl x509 -in /etc/pve/local/pve-ssl.pem -noout -fingerprint -sha256). Colons and case are ignored.
+    # Only this exact certificate is accepted; the host name and CA are not checked. Update it after the
+    # certificate is renewed (docs/TROUBLESHOOTING.md). No default.
+    fingerprint: 3F:9A:61:C2:0B:7E:D4:58:A1:6C:E2:93:47:B8:0D:F5:2C:11:9E:6B:A4:70:3D:C8:E5:56:0F:B2:79:4A:D1:8E
+    # Alternative to the pin: a PEM CA bundle, e.g. a copy of /etc/pve/pve-root-ca.pem. The URL's host must then be
+    # one of the certificate's names (the node IP from /etc/hosts or the node name). Survives renewals. No default.
+    # ca: /etc/pve1-dash/pve-root-ca.pem
+    # Skip certificate checks entirely. Not recommended; anyone on the path could read the token.
+    insecure: false
+  # Base URL for links into the Proxmox web UI ("Open in Proxmox", console buttons). Defaults to `url`; set it
+  # when you reach the UI under another name, e.g. https://pve1.home.lan:8006.
+  # uiUrl: https://pve1.home.lan:8006
+  # Timeout of each API request, in milliseconds.
+  timeoutMs: 10000
+
+# How often each part is refreshed, in seconds.
+polling:
+  status: 5 # node status and the guest list (/cluster/resources)
+  rrd: 60 # latest node RRD sample: network rates, pressure, ZFS ARC
+  storage: 30
+  zfs: 60
+  disks: 600 # disk list incl. SMART health and wear
+  tasks: 30
+  backups: 300 # backup coverage and backup files
+  backupJobs: 600
+  guestDetails: 120 # guest configs, container interfaces, guest agent info
+  network: 600
+  updates: 3600 # pending package updates (read through the host helper)
+  hostInfo: 3600 # version, subscription, certificate, host services
+
+# Apps & services inside guests, collected over SSH with forced-command keys (docs/HELPER_PROTOCOL.md).
+inventory:
+  # Default false; the installer turns it on.
+  enabled: true
+  # Seconds between full inventory sweeps.
+  interval: 300
+  # The dashboard's SSH key (created by the installer) and the file that pins host keys. The Proxmox host's key must
+  # be in known_hosts already; keys of VMs reached directly are learned on first use.
+  privateKey: /etc/pve1-dash/ssh/id_ed25519
+  knownHosts: /etc/pve1-dash/ssh/known_hosts
+  # Timeout of each SSH command, in milliseconds.
+  timeoutMs: 120000
+  # Example. The Proxmox host. Its key may only run /usr/local/sbin/pve1-dash-helper, which inspects running
+  # containers (pct exec) and VMs with the guest agent (qm guest exec). Defaults: port 22, user root. No default host.
+  host:
+    address: 192.168.1.10
+    port: 22
+    user: root
+  # Example. VMs WITHOUT the QEMU guest agent, reached directly over SSH. Set each one up with the command from
+  # Settings → Data sources (curl -fsSL https://<dashboard>/setup/guest.sh | sh inside the VM). Default: none.
+  guests:
+    - vmid: 108
+      address: 192.168.1.60
+      port: 22
+      user: root
+
+# The service launcher and its health checks.
+services:
+  # Example. Your own tiles. Fields:
+  #   name          (required) tile title
+  #   url           what the tile opens (and checks, unless `check` says otherwise)
+  #   check         omitted: HTTP GET of url · "tcp": TCP connect to url's host:port · "tcp://host:port"
+  #                 · "https://other/health": HTTP GET of that URL instead · "none": no check
+  #   expectStatus  accepted HTTP status codes (default: 200-399)
+  #   icon          a dashboard-icons name (https://github.com/homarr-labs/dashboard-icons) or an image URL
+  #   group         section on the Services page
+  #   description   small print under the name
+  #   vmid          the guest it runs in (shows its name, links to it)
+  #   alert         push an alert when it goes down (default true)
+  #   insecureTls   accept self-signed certificates for the check (default true: homelab reality)
+  # Default: no items.
+  items:
+    - name: Proxmox VE
+      url: https://192.168.1.10:8006
+      icon: proxmox
+      group: Infrastructure
+      description: pve1 web UI
+    - name: Home Assistant
+      url: http://192.168.1.40:8123
+      icon: home-assistant
+      group: Home
+      vmid: 100
+    - name: Pi-hole
+      url: http://192.168.1.53/admin/
+      # A TCP check: is DNS answering on port 53? (The tile still opens the admin page.)
+      check: tcp://192.168.1.53:53
+      icon: pi-hole
+      group: Network
+      vmid: 101
+    - name: Vaultwarden
+      url: https://vault.home.lan
+      # Check its health endpoint instead of the login page; only 200 counts as up. No push alerts for this one.
+      check: https://vault.home.lan/alive
+      expectStatus: [200]
+      icon: vaultwarden
+      group: Apps
+      alert: false
+      insecureTls: false
+
+  # Docker containers with a published TCP port become tiles automatically.
+  autoDiscoverDocker: true
+  # Example. Discovered containers to leave out: a container name, a compose service name, or "docker-<vmid>-<name>".
+  # Default: none.
+  hide:
+    - watchtower
+    - docker-102-portainer_agent
+  # Example. Adjust discovered containers, keyed by container name. Each field is optional:
+  # name, icon, group, url (what the tile opens and checks), alert. Default: none.
+  overrides:
+    jellyfin:
+      name: Jellyfin
+      icon: jellyfin
+      group: Media
+      url: https://jellyfin.home.lan
+    sonarr:
+      group: Media
+      alert: false
+
+  # Seconds between health checks.
+  checkInterval: 30
+  # Timeout of one check, in milliseconds.
+  timeoutMs: 5000
+  # Responses slower than this (ms) count as "slow" (DELAYED on the departure board).
+  slowMs: 1500
+  # Consecutive failed checks before a service counts as down.
+  afterFailures: 2
+
+# The split-flap departure board (/board).
+board:
+  title: DEPARTURES
+  station: PVE1 CENTRAL
+  # The "clack" sound; off by default (each viewer can also toggle it in Settings → Appearance).
+  sound: false
+
+# Alerts, shown on the Alerts page and pushed to subscribed devices (Settings → Notifications).
+alerts:
+  enabled: true
+  # Example (default "mailto:admin@example.com"). The Web Push contact: a real mailto: address or an https: URL
+  # you own. Apple's push service rejects localhost and placeholder addresses (403 BadJwtToken), so set yours.
+  vapidSubject: mailto:you@example.org
+  # Don't send the same alert again within this many minutes.
+  cooldownMinutes: 30
+  rules:
+    # The Proxmox API has not answered for this long.
+    nodeUnreachable:
+      enabled: true
+      afterSeconds: 60
+    # A guest that was running stopped. watch: "all", "tag:<tag>" (e.g. tag:prod), or a list of ids like [100, 101].
+    guestStopped:
+      enabled: true
+      watch: all
+    # A service from the launcher went down (only those with alert: true).
+    serviceDown:
+      enabled: true
+    # A Docker container is unhealthy or exited.
+    containerUnhealthy:
+      enabled: true
+    backupFailed:
+      enabled: true
+    # A guest has no backup newer than this many days.
+    backupStale:
+      enabled: true
+      days: 7
+    storageUsage:
+      enabled: true
+      warnPercent: 85
+      critPercent: 95
+    # SMART failures, and SSD wear above this percentage.
+    diskHealth:
+      enabled: true
+      wearWarnPercent: 80
+    zfsDegraded:
+      enabled: true
+    # Off by default: a homelab almost always has some update pending.
+    updatesAvailable:
+      enabled: false
+
+# debug | info | warn | error
+logLevel: info

@@ -1,0 +1,38 @@
+/* Toolbar: right-aligned glass capsule groups (DESIGN §2). Max ~3 groups per HIG. */
+.ui-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s2);
+  min-width: 0;
+}
+.ui-toolbar-group {
+  --glass-radius: var(--r-capsule);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: var(--toolbar-control-h, 38px);
+  padding: 3px;
+  flex: none;
+}
+.ui-toolbar-group > .ui-iconbtn {
+  --_s: calc(var(--toolbar-control-h, 38px) - 6px);
+}
+.ui-toolbar-group > .ui-btn {
+  --_h: calc(var(--toolbar-control-h, 38px) - 6px);
+  background: none;
+  box-shadow: none;
+}
+.ui-toolbar-group > .ui-btn:hover {
+  background: var(--row-hover);
+}
+.ui-toolbar-group > .ui-seg {
+  --seg-h: calc(var(--toolbar-control-h, 38px) - 6px);
+  background: none;
+}
+.ui-toolbar-separator {
+  width: 0.5px;
+  align-self: stretch;
+  margin: 6px 2px;
+  background: var(--separator);
+}

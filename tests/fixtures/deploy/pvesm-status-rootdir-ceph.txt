@@ -1,0 +1,3 @@
+Name            Type     Status     Total (KiB)      Used (KiB) Available (KiB)        %
+ceph-rbd         rbd     active      9855602688       123456789      9732145899    1.25%
+scratch          dir     active        98497780        12345678        81098765   12.53%

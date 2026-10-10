@@ -1,0 +1,75 @@
+.ui-toast {
+  --glass-radius: 20px;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+  width: min(420px, calc(100vw - 24px));
+  padding: 12px 12px 12px 14px;
+  pointer-events: auto;
+  cursor: default;
+  touch-action: pan-x;
+  animation: ui-toast-in 520ms var(--spring-glass) both;
+}
+.ui-toast[data-clickable] {
+  cursor: pointer;
+}
+.ui-toast[data-leaving] {
+  animation: ui-toast-out 220ms var(--ease-in) both;
+}
+@keyframes ui-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-18px) scale(0.94);
+  }
+}
+@keyframes ui-toast-out {
+  to {
+    opacity: 0;
+    transform: translateY(-14px) scale(0.96);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-toast,
+  .ui-toast[data-leaving] {
+    animation-duration: 1ms;
+  }
+}
+.ui-toast-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  margin-top: 1px;
+  border-radius: 9px;
+  color: #fff;
+  background: var(--_tone);
+  box-shadow: inset 0 0.5px 0 rgb(255 255 255 / 0.35);
+}
+.ui-toast-text {
+  flex: 1;
+  min-width: 0;
+}
+.ui-toast-title {
+  font-size: var(--fs-subhead);
+  line-height: var(--lh-subhead);
+  font-weight: 600;
+  color: var(--label);
+}
+.ui-toast-body {
+  margin-top: 1px;
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  color: var(--label-2);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.ui-toast-side {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  align-self: center;
+}

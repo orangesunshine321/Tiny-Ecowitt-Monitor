@@ -1,0 +1,383 @@
+/*
+ * Fullscreen departure board page (no app chrome). The page is always dark: a station board is a physical object.
+ * Glass is only used for the floating controls (top right), which sit beside the board, never around the flaps.
+ */
+
+.bd-page {
+  /* dark material tokens for the glass controls, whatever the app theme */
+  --label: #fff;
+  --label-2: rgb(235 235 245 / 0.6);
+  --label-3: rgb(235 235 245 / 0.3);
+  --separator: rgb(84 84 88 / 0.6);
+  --fill-2: rgb(120 120 128 / 0.32);
+  --fill-3: rgb(118 118 128 / 0.24);
+  --fill-4: rgb(118 118 128 / 0.18);
+  --row-hover: rgb(255 255 255 / 0.08);
+  --glass-fill: rgb(44 44 48 / 0.55);
+  --glass-solid: #222226;
+  --glass-rim-hi: rgb(255 255 255 / 0.24);
+  --glass-rim-lo: rgb(255 255 255 / 0.06);
+  --glass-hairline: rgb(255 255 255 / 0.1);
+  --glass-shadow: 0 10px 28px -8px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.35);
+  --glass-sheen-1: rgb(255 255 255 / 0.14);
+  --glass-sheen-2: rgb(255 255 255 / 0.03);
+  --bd-amber: #ffb000;
+
+  color-scheme: dark;
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(10px, 1.6vh, 18px);
+  padding: max(var(--safe-top), 18px) max(var(--safe-right), clamp(14px, 2.4vw, 32px)) max(var(--safe-bottom), 12px)
+    max(var(--safe-left), clamp(14px, 2.4vw, 32px));
+  color: #fff;
+  background:
+    radial-gradient(120% 70% at 50% -10%, rgb(255 176 0 / 0.07), transparent 60%),
+    radial-gradient(90% 60% at 50% 115%, rgb(80 90 120 / 0.14), transparent 65%), #060607;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+/* ───────────────────────────── header */
+.bd-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s4);
+  min-width: 0;
+}
+.bd-sign {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.bd-sign-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 11px;
+  color: #120c02;
+  background: linear-gradient(180deg, #ffc23d, #ff9f0a);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.45),
+    0 0 18px rgb(255 176 0 / 0.28);
+}
+.bd-sign-text {
+  min-width: 0;
+}
+.bd-title {
+  margin: 0;
+  font-size: clamp(20px, 2.2vw, 30px);
+  line-height: 1.05;
+  font-weight: 750;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bd-station {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgb(255 176 0 / 0.78);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bd-head-trailing {
+  display: flex;
+  align-items: center;
+  gap: clamp(12px, 2vw, 28px);
+  flex: none;
+}
+.bd-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+.bd-done {
+  --_h: 38px;
+  padding-inline: 18px;
+}
+
+/* flip clock (its own flap size) */
+.bd-clock {
+  --cw: clamp(24px, 2.3vw, 34px);
+  --ch: calc(var(--cw) * 1.42);
+  --cg: 3px;
+  flex-direction: row;
+  align-items: center;
+  gap: 5px;
+}
+.bd-clock .flap {
+  color: var(--bd-amber);
+  text-shadow: 0 0 calc(var(--ch) * 0.14) rgb(255 176 0 / 0.42);
+}
+.bd-clock-colon {
+  display: inline-flex;
+  flex-direction: column;
+  gap: calc(var(--ch) * 0.22);
+  padding: 0 1px;
+}
+.bd-clock-colon i {
+  width: calc(var(--cw) * 0.16);
+  height: calc(var(--cw) * 0.16);
+  border-radius: 50%;
+  background: var(--bd-amber);
+  box-shadow: 0 0 6px rgb(255 176 0 / 0.6);
+  animation: bd-colon 2s steps(1, end) infinite;
+}
+@keyframes bd-colon {
+  50% {
+    opacity: 0.18;
+  }
+}
+
+/* ───────────────────────────── the board */
+.bd-frame {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: clamp(14px, 2.2vw, 30px) clamp(12px, 2vw, 28px);
+  border-radius: clamp(16px, 2vw, 26px);
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.025), transparent 18%), linear-gradient(180deg, #121214, #0b0b0c);
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 0.06),
+    inset 0 1px 0 rgb(255 255 255 / 0.07),
+    inset 0 -12px 30px rgb(0 0 0 / 0.5),
+    0 0 0 1px #000,
+    0 30px 60px -24px rgb(0 0 0 / 0.9);
+  overflow: hidden;
+  isolation: isolate;
+}
+.bd-area {
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  overflow: hidden;
+}
+.bd-board {
+  flex: none;
+}
+
+/* faint glass cover over the board: a static top glare plus a slow reflection sweep (transform only) */
+.bd-sweep {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  border-radius: inherit;
+  overflow: hidden;
+  pointer-events: none;
+  background: linear-gradient(170deg, rgb(255 255 255 / 0.045), transparent 32%);
+}
+.bd-sweep::before {
+  content: '';
+  position: absolute;
+  top: -20%;
+  bottom: -20%;
+  left: 0;
+  width: 45%;
+  background: linear-gradient(
+    100deg,
+    transparent 0%,
+    rgb(255 255 255 / 0.025) 38%,
+    rgb(255 255 255 / 0.07) 50%,
+    rgb(255 255 255 / 0.025) 62%,
+    transparent 100%
+  );
+  transform: translateX(-120%) skewX(-12deg);
+  animation: bd-sweep 16s cubic-bezier(0.45, 0, 0.35, 1) 2.5s infinite;
+  will-change: transform;
+}
+@keyframes bd-sweep {
+  0% {
+    transform: translateX(-120%) skewX(-12deg);
+  }
+  38%,
+  100% {
+    transform: translateX(330%) skewX(-12deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bd-sweep::before {
+    animation: none;
+    opacity: 0;
+  }
+  .bd-clock-colon i {
+    animation: none;
+  }
+}
+
+/* ───────────────────────────── footer */
+.bd-foot {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--s3);
+  min-height: 24px;
+  font-size: 12px;
+  line-height: 16px;
+  color: rgb(255 255 255 / 0.55);
+}
+.bd-foot-start {
+  min-width: 0;
+}
+.bd-foot-end {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+}
+.bd-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bd-note[data-tone='warn'] {
+  color: var(--bd-amber);
+}
+.bd-pages {
+  grid-column: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.bd-page-dot {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 24px;
+}
+.bd-page-dot::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 0.25);
+  transition:
+    background-color 200ms ease,
+    transform 300ms var(--spring-bouncy);
+}
+.bd-page-dot[aria-current='page']::before {
+  background: var(--bd-amber);
+  box-shadow: 0 0 8px rgb(255 176 0 / 0.6);
+  transform: scale(1.15);
+}
+.bd-page-dot:focus-visible {
+  outline-offset: -4px;
+  border-radius: 6px;
+}
+.bd-page-label {
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.08em;
+  color: rgb(255 176 0 / 0.75);
+}
+.bd-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.bd-legend i {
+  width: 7px;
+  height: 7px;
+  margin-left: 8px;
+  border-radius: 50%;
+}
+.bd-legend i:first-child {
+  margin-left: 0;
+}
+.bd-legend i[data-lamp='green'] {
+  background: #3ddc68;
+  box-shadow: 0 0 6px rgb(61 220 104 / 0.6);
+}
+.bd-legend i[data-lamp='amber'] {
+  background: #ffb000;
+  box-shadow: 0 0 6px rgb(255 176 0 / 0.6);
+}
+.bd-legend i[data-lamp='red'] {
+  background: #ff453a;
+  box-shadow: 0 0 6px rgb(255 69 58 / 0.6);
+}
+
+/* ───────────────────────────── narrow screens */
+@media (max-width: 899.98px) {
+  .bd-legend {
+    display: none;
+  }
+}
+@media (max-width: 639.98px) {
+  .bd-station-summary {
+    display: none;
+  }
+  .bd-head {
+    flex-wrap: wrap;
+    row-gap: 10px;
+  }
+  .bd-sign {
+    flex: 1 1 auto;
+  }
+  .bd-sign-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+  }
+  .bd-head-trailing {
+    flex: 1 1 100%;
+    justify-content: space-between;
+  }
+  .bd-clock {
+    --cw: 22px;
+  }
+  .bd-foot {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .bd-pages {
+    grid-column: 2;
+  }
+  .bd-foot-end {
+    display: none;
+  }
+}
+/* short landscape phones: a slimmer header */
+@media (max-height: 500px) {
+  .bd-page {
+    gap: 8px;
+  }
+  .bd-sign-icon {
+    width: 32px;
+    height: 32px;
+  }
+  .bd-title {
+    font-size: 18px;
+  }
+  .bd-station {
+    margin-top: 1px;
+    font-size: 11px;
+  }
+  .bd-clock {
+    --cw: 20px;
+  }
+  .bd-frame {
+    padding: 10px 12px;
+  }
+}

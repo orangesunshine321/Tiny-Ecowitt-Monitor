@@ -1,0 +1,104 @@
+/* iOS 26 segmented control: capsule track, raised capsule thumb that slides with a spring. Equal-width segments. */
+.ui-seg {
+  --seg-h: 32px;
+  --_n: 2;
+  --_i: 0;
+  position: relative;
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  align-items: stretch;
+  height: var(--seg-h);
+  padding: 2px;
+  border-radius: var(--r-capsule);
+  background: var(--fill-3);
+  isolation: isolate;
+  user-select: none;
+  -webkit-user-select: none;
+  max-width: 100%;
+}
+.ui-seg[data-size='small'] {
+  --seg-h: 28px;
+}
+.ui-seg[data-size='large'] {
+  --seg-h: 36px;
+}
+.ui-seg[data-full] {
+  display: grid;
+  width: 100%;
+}
+.ui-seg-thumb {
+  position: absolute;
+  z-index: 0;
+  top: 2px;
+  bottom: 2px;
+  left: 2px;
+  width: calc((100% - 4px) / var(--_n));
+  border-radius: var(--r-capsule);
+  background: var(--seg-thumb, #fff);
+  box-shadow:
+    0 3px 8px rgb(0 0 0 / 0.12),
+    0 1px 1px rgb(0 0 0 / 0.04),
+    0 0 0 0.5px rgb(0 0 0 / 0.04);
+  transform: translateX(calc(var(--_i) * 100%));
+  transition: transform var(--dur-snappy) var(--spring-snappy);
+}
+:root[data-theme='dark'] .ui-seg-thumb {
+  --seg-thumb: rgb(255 255 255 / 0.2);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .ui-seg-thumb {
+    --seg-thumb: rgb(255 255 255 / 0.2);
+  }
+}
+.ui-seg[data-none] .ui-seg-thumb {
+  opacity: 0;
+}
+.ui-seg-item {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 0 clamp(8px, 2vw, 12px);
+  border-radius: var(--r-capsule);
+  font-size: var(--fs-subhead);
+  font-weight: 500;
+  color: var(--label);
+  white-space: nowrap;
+  transition: transform 300ms var(--spring-snappy);
+}
+.ui-seg[data-size='small'] .ui-seg-item {
+  padding: 0 clamp(6px, 1.6vw, 10px);
+  font-size: var(--fs-footnote);
+}
+.ui-seg-item[aria-checked='true'] {
+  font-weight: 600;
+}
+.ui-seg-item > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ui-seg-item:active {
+  transform: scale(0.95);
+}
+.ui-seg-item:focus-visible {
+  outline-offset: -1px;
+}
+.ui-seg-item:not([aria-checked='true']):hover {
+  color: var(--label);
+  background: var(--fill-4);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-seg-thumb,
+  .ui-seg-item {
+    transition: none;
+  }
+}
+@media (prefers-contrast: more) {
+  .ui-seg-thumb {
+    box-shadow: 0 0 0 1px var(--label);
+  }
+}

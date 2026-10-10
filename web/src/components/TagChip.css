@@ -1,0 +1,45 @@
+.ui-tag {
+  --_c: var(--gray);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: var(--r-capsule);
+  font-size: var(--fs-footnote);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  color: color-mix(in oklab, var(--_c) 62%, var(--label));
+  background: color-mix(in srgb, var(--_c) 14%, transparent);
+  border: 0;
+  max-width: 100%;
+}
+.ui-tag[data-size='small'] {
+  height: 18px;
+  padding: 0 7px;
+  font-size: var(--fs-caption);
+}
+.ui-tag > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+button.ui-tag {
+  cursor: pointer;
+  transition:
+    background-color 150ms ease,
+    transform 300ms var(--spring-bouncy);
+}
+button.ui-tag:hover {
+  background: color-mix(in srgb, var(--_c) 22%, transparent);
+}
+button.ui-tag:active {
+  transform: scale(0.95);
+}
+.ui-tag[aria-pressed='true'] {
+  color: #fff;
+  background: var(--_c);
+}
+.ui-tag[aria-pressed='true']:hover {
+  background: color-mix(in oklab, var(--_c) 88%, #000);
+}

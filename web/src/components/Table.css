@@ -1,0 +1,143 @@
+/* macOS-style table: hairline rows, sortable headers, sticky glass header ("hard" scroll edge). */
+.ui-table-wrap {
+  position: relative;
+  min-width: 0;
+}
+.ui-table-wrap[data-scroll-x] {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.ui-table-wrap[data-max-height] {
+  overflow: auto;
+}
+.ui-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--fs-callout);
+  line-height: var(--lh-callout);
+  font-variant-numeric: tabular-nums;
+}
+.ui-table th,
+.ui-table td {
+  padding: 9px 12px;
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.ui-table th:first-child,
+.ui-table td:first-child {
+  padding-left: var(--s5);
+}
+.ui-table th:last-child,
+.ui-table td:last-child {
+  padding-right: var(--s5);
+}
+.ui-table[data-dense] th,
+.ui-table[data-dense] td {
+  padding-block: 6px;
+}
+.ui-table thead th {
+  position: sticky;
+  top: var(--_sticky-top, 0px);
+  z-index: 2;
+  padding-block: 7px;
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  font-weight: 600;
+  color: var(--label-2);
+  background: color-mix(in srgb, var(--card-solid) 86%, transparent);
+  -webkit-backdrop-filter: blur(12px) saturate(170%);
+  backdrop-filter: blur(12px) saturate(170%);
+  box-shadow: inset 0 -0.5px 0 var(--separator);
+  user-select: none;
+  -webkit-user-select: none;
+}
+:root[data-reduce-transparency] .ui-table thead th {
+  background: var(--card-solid);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.ui-table-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin: -3px -6px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  font: inherit;
+  color: inherit;
+}
+.ui-table-sort:hover {
+  color: var(--label);
+  background: var(--fill-4);
+}
+.ui-table th[aria-sort] .ui-table-sort {
+  color: var(--label);
+}
+.ui-table-sort svg {
+  opacity: 0;
+  transition: opacity 120ms ease, transform 200ms var(--spring-snappy);
+}
+.ui-table th[aria-sort] .ui-table-sort svg,
+.ui-table-sort:hover svg {
+  opacity: 1;
+}
+.ui-table th[aria-sort='descending'] .ui-table-sort svg {
+  transform: rotate(180deg);
+}
+.ui-table td {
+  border-bottom: 0.5px solid var(--hairline);
+  color: var(--label);
+}
+.ui-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.ui-table [data-align='right'] {
+  text-align: right;
+}
+.ui-table [data-align='right'] .ui-table-sort {
+  flex-direction: row-reverse;
+}
+.ui-table [data-align='center'] {
+  text-align: center;
+}
+.ui-table [data-wrap] {
+  white-space: normal;
+}
+.ui-table [data-truncate] {
+  max-width: var(--_max, 280px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ui-table tbody tr[data-clickable] {
+  cursor: pointer;
+}
+.ui-table tbody tr[data-clickable]:hover td {
+  background: var(--row-hover);
+}
+.ui-table tbody tr[data-clickable]:focus-visible {
+  outline: none;
+}
+.ui-table tbody tr[data-clickable]:focus-visible td {
+  background: var(--row-selected);
+}
+.ui-table tbody tr:nth-child(even) td {
+  background-image: linear-gradient(var(--row-alt), var(--row-alt));
+}
+.ui-table-empty {
+  padding: var(--s7) var(--s4);
+  text-align: center;
+  color: var(--label-3);
+}
+@media (max-width: 767.98px) {
+  .ui-table [data-hide-below='iphone'] {
+    display: none;
+  }
+}
+@media (max-width: 1099.98px) {
+  .ui-table [data-hide-below='ipad'] {
+    display: none;
+  }
+}

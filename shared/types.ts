@@ -124,7 +124,10 @@ export interface NodeSummary {
   /* temperatures live in Snapshot.hostInventory.temps (written by the inventory module) */
   certificate?: { subject?: string; issuer?: string; notAfter?: number; fingerprint?: string; filename?: string; san?: string[] };
 
-  /** short live history ring for sparklines (oldest → newest), ~120 samples */
+  /**
+   * short live history ring for sparklines (oldest → newest), ~120 samples.
+   * t: epoch ms · cpu: fraction 0..1 · mem: BYTES used · netIn/netOut: bytes/s (repeats the latest 1-min RRD average)
+   */
   history: { t: number[]; cpu: number[]; mem: number[]; netIn: number[]; netOut: number[] };
 }
 
@@ -245,7 +248,7 @@ export interface Guest {
 
   lastBackup?: { time: number; storage: string; size?: number; volid: string; verification?: string; protected?: boolean };
 
-  /** short live history ring (oldest → newest), ~120 samples */
+  /** short live history ring (oldest → newest), ~120 samples. t: epoch ms · cpu: fraction 0..1 · mem: BYTES used */
   history: { t: number[]; cpu: number[]; mem: number[] };
 }
 
@@ -681,7 +684,9 @@ export interface Snapshot {
 export type SnapshotKey = keyof Snapshot;
 
 /**
- * Server-sent events on GET /api/stream. The SSE `event:` name equals `type`; `data:` is the JSON of the object.
+ * Server-sent events on GET /api/stream. The SSE `event:` name equals `type`; `data:` is the JSON of the WHOLE event
+ * object (e.g. {"type":"patch","key":"storage","value":…}). The server also sends a `patch` for `meta` every ~15 s when
+ * collector freshness changed, so the UI's freshness view stays current.
  * The client must reconnect itself if the stream ends or errors (EventSource gives up on non-200 responses).
  */
 export type StreamEvent =

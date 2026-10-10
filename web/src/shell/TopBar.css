@@ -1,0 +1,147 @@
+/*
+ * Fixed top bar over the content column: page toolbar groups + the global group (Spotlight, Live) on the trailing
+ * edge, an optional back button, and the compact title that appears once the large title scrolls away. Behind it, a
+ * soft scroll-edge effect (blur band fading out) appears when content scrolls underneath (research §1.6).
+ */
+.shell-topbar {
+  position: fixed;
+  z-index: 30;
+  top: 0;
+  left: var(--content-x, 0px);
+  right: 0;
+  height: var(--topbar-h);
+  pointer-events: none;
+}
+.shell-topbar-edge {
+  position: absolute;
+  inset: 0 0 -28px 0;
+  opacity: 0;
+  background: linear-gradient(to bottom, color-mix(in srgb, var(--wp-base) 62%, transparent), transparent);
+  -webkit-backdrop-filter: blur(10px) saturate(160%);
+  backdrop-filter: blur(10px) saturate(160%);
+  -webkit-mask-image: linear-gradient(#000 52%, transparent);
+  mask-image: linear-gradient(#000 52%, transparent);
+  transition: opacity 220ms ease;
+}
+.shell-topbar[data-scrolled] .shell-topbar-edge {
+  opacity: 1;
+}
+:root[data-reduce-transparency] .shell-topbar-edge {
+  background: linear-gradient(to bottom, var(--glass-solid) 60%, transparent);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.shell-topbar-inner {
+  position: relative;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--topbar-pad-top, 0px) var(--gutter) 0;
+  max-width: calc(var(--content-max) + 2 * var(--gutter));
+  margin: 0 auto;
+}
+.shell-topbar-inner > * {
+  pointer-events: auto;
+}
+.shell-topbar-leading {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  min-width: 0;
+  flex: none;
+}
+.shell-topbar-title {
+  min-width: 0;
+  flex: 1 1 auto;
+  font-size: var(--fs-headline);
+  line-height: var(--lh-headline);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateY(6px);
+  transition:
+    opacity 200ms ease,
+    transform 360ms var(--spring-snappy);
+  pointer-events: none;
+}
+.shell-topbar[data-collapsed] .shell-topbar-title {
+  opacity: 1;
+  transform: none;
+}
+.shell-topbar-trailing {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex: none;
+  min-width: 0;
+}
+.shell-toolbar-slot {
+  display: contents;
+}
+.shell-back {
+  --glass-radius: var(--r-capsule);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: var(--toolbar-control-h);
+  padding: 0 14px 0 8px;
+  color: var(--accent);
+  font-size: var(--fs-body);
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: transform 360ms var(--spring-bouncy);
+}
+.shell-back:hover {
+  text-decoration: none;
+}
+.shell-back:active {
+  transform: scale(0.95);
+}
+.shell-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: calc(var(--toolbar-control-h) - 6px);
+  padding: 0 10px 0 9px;
+  border-radius: var(--r-capsule);
+  color: var(--label-2);
+  font-size: var(--fs-subhead);
+  transition: background-color 120ms ease;
+}
+.shell-search:hover {
+  background: var(--row-hover);
+}
+.shell-search-label {
+  min-width: 96px;
+  text-align: left;
+}
+@media (max-width: 1099.98px) {
+  .shell-search-label,
+  .shell-search .ui-kbd {
+    display: none;
+  }
+  .shell-search {
+    width: calc(var(--toolbar-control-h) - 6px);
+    padding: 0;
+    justify-content: center;
+    color: var(--label);
+  }
+}
+/* iPhone: the compact title sits centred in the space left between the leading and trailing items */
+@media (max-width: 767.98px) {
+  .shell-topbar-title {
+    text-align: center;
+    padding: 0 4px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .shell-topbar-title {
+    transition: opacity 150ms ease;
+  }
+}

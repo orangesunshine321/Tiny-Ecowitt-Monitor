@@ -1,0 +1,46 @@
+Welcome to Alpine!
+##pve1-dash:inventory v1
+##pve1-dash:section os-release
+NAME="Alpine Linux"
+ID=alpine
+VERSION_ID=3.22.1
+PRETTY_NAME="Alpine Linux v3.22"
+HOME_URL="https://alpinelinux.org/"
+BUG_REPORT_URL="https://gitlab.alpinelinux.org/alpine/aports/-/issues"
+##pve1-dash:section kernel
+6.14.11-2-pve
+##pve1-dash:section uptime
+2021757.43 32182961.20
+##pve1-dash:section loadavg
+0.31 0.27 0.22 2/498 31337
+##pve1-dash:section init
+openrc
+##pve1-dash:section services
+ bootmisc                                                          [  started  ]
+ crond                                                             [  started  ]
+ hostname                                                          [  started  ]
+ networking                                                        [  started  ]
+ sshd                                                              [  started  ]
+ syslog                                                            [  started  ]
+ tailscale                                       [  started 23 day(s) 09:12:44 (0) ]
+ nginx                                                             [  stopped  ]
+ local                                                             [  started  ]
+ chronyd                                                           [  crashed  ]
+ adguardhome                                                       [  started  ]
+##pve1-dash:section docker
+absent
+##pve1-dash:section ip
+1: lo    inet 127.0.0.1/8 scope host lo\       valid_lft forever preferred_lft forever
+2: eth0@if42    inet 10.10.20.40/24 brd 10.10.20.255 scope global eth0\       valid_lft forever preferred_lft forever
+3: tailscale0    inet 100.88.12.7/32 scope global tailscale0\       valid_lft forever preferred_lft forever
+3: tailscale0    inet6 fd7a:115c:a1e0::6a01:c07/128 scope global \       valid_lft forever preferred_lft forever
+##pve1-dash:section listen
+Active Internet connections (only servers)
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name    
+tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN      312/sshd
+tcp        0      0 0.0.0.0:3000            0.0.0.0:*               LISTEN      2044/AdGuardHome
+tcp        0      0 0.0.0.0:53              0.0.0.0:*               LISTEN      2044/AdGuardHome
+tcp        0      0 100.88.12.7:60123       0.0.0.0:*               LISTEN      402/tailscaled
+tcp        0      0 :::22                   :::*                    LISTEN      312/sshd
+tcp        0      0 :::53                   :::*                    LISTEN      2044/AdGuardHome
+##pve1-dash:end

@@ -1,0 +1,171 @@
+.ui-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  /* clip (not hidden) keeps rounded corners without creating a scroll container, so sticky table headers still work */
+  overflow: clip;
+  color: var(--label);
+}
+.ui-card[data-interactive] {
+  transition: transform 300ms var(--spring-snappy), box-shadow 200ms ease;
+}
+.ui-card[data-interactive]:hover {
+  box-shadow:
+    0 0 0 0.5px var(--card-hairline),
+    0 2px 4px rgb(0 0 0 / 0.05),
+    0 12px 28px -8px rgb(0 0 0 / 0.18);
+}
+.ui-card[data-interactive]:active {
+  transform: scale(0.985);
+}
+.ui-card-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--s3);
+  padding: var(--s4) var(--s5) 0;
+  min-width: 0;
+}
+.ui-card[data-padding='compact'] .ui-card-header {
+  padding: var(--s3) var(--s4) 0;
+}
+.ui-card-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  color: #fff;
+  background: var(--_icon-bg, var(--accent));
+  box-shadow: inset 0 0.5px 0 rgb(255 255 255 / 0.35);
+}
+.ui-card-titles {
+  /* the titles keep a readable width; a wide accessory wraps onto its own row instead of squeezing them */
+  flex: 1 1 180px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.ui-card-title {
+  font-size: var(--fs-headline);
+  line-height: var(--lh-headline);
+  letter-spacing: var(--tr-headline);
+  font-weight: 600;
+  color: var(--label);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.ui-card-title > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ui-card-subtitle {
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  color: var(--label-2);
+}
+.ui-card-accessory {
+  flex: none;
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-top: -2px;
+}
+.ui-card-body {
+  flex: 1;
+  min-width: 0;
+  padding: var(--s4) var(--s5) var(--s5);
+}
+.ui-card[data-padding='compact'] .ui-card-body {
+  padding: var(--s3) var(--s4) var(--s4);
+}
+.ui-card[data-padding='none'] .ui-card-body {
+  padding: var(--s3) 0 0;
+}
+.ui-card[data-padding='none']:not(:has(.ui-card-header)) .ui-card-body {
+  padding: 0;
+}
+.ui-card-footer {
+  padding: var(--s3) var(--s5);
+  border-top: 0.5px solid var(--separator);
+  font-size: var(--fs-footnote);
+  color: var(--label-2);
+}
+.ui-card-link {
+  color: inherit;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.ui-card-link:hover {
+  text-decoration: none;
+}
+/* the whole card is the hit target; inner controls are lifted above the stretched link */
+.ui-card-link::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+}
+.ui-card-link:focus-visible {
+  outline: none;
+}
+.ui-card:has(.ui-card-link:focus-visible) {
+  outline: 3px solid var(--focus-ring-color);
+  outline-offset: 1px;
+}
+.ui-card[data-interactive] :is(a, button, input, select, [tabindex]):not(.ui-card-link) {
+  position: relative;
+  z-index: 1;
+}
+.ui-card-chevron {
+  color: var(--label-3);
+  flex: none;
+}
+
+/* Responsive card grid; spans collapse when the grid is narrow. */
+.ui-cardgrid {
+  container-type: inline-size;
+  container-name: cardgrid;
+}
+.ui-cardgrid-inner {
+  display: grid;
+  gap: var(--_gap, var(--s4));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--_min, 300px)), 1fr));
+  align-items: start;
+}
+.ui-cardgrid[data-dense] .ui-cardgrid-inner {
+  grid-auto-flow: row dense;
+}
+.ui-cardgrid[data-stretch] .ui-cardgrid-inner {
+  align-items: stretch;
+}
+.ui-cardgrid-inner > [data-span='2'] {
+  grid-column: span 2;
+}
+.ui-cardgrid-inner > [data-span='3'] {
+  grid-column: span 3;
+}
+.ui-cardgrid-inner > [data-span='full'] {
+  grid-column: 1 / -1;
+}
+@container cardgrid (max-width: 700px) {
+  .ui-cardgrid-inner > [data-span='2'],
+  .ui-cardgrid-inner > [data-span='3'] {
+    grid-column: 1 / -1;
+  }
+}
+@container cardgrid (max-width: 1000px) {
+  .ui-cardgrid-inner > [data-span='3'] {
+    grid-column: 1 / -1;
+  }
+}

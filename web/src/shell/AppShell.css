@@ -1,0 +1,67 @@
+/*
+ * App shell layout (DESIGN §2):
+ *   Mac  ≥ 1100px  floating glass sidebar (248px, inset 10px) + content (max 1440px)
+ *   iPad 768–1099  76px glass icon rail (expands as an overlay)
+ *   iPhone < 768   floating glass tab bar; large title collapses into the top bar
+ */
+.shell {
+  --gutter: 28px;
+  --content-x: calc(max(var(--chrome-inset), var(--safe-left)) + var(--sidebar-w));
+  --topbar-h: 64px;
+  --toolbar-control-h: 38px;
+  --main-top: 13px;
+  --main-bottom: 48px;
+  --sticky-top: var(--topbar-h);
+  --pageheader-pad-right: calc(var(--toolbar-w, 0px) + var(--s4));
+  --pageheader-min-h: 41px;
+  position: relative;
+  min-height: 100dvh;
+}
+@media (min-width: 768px) and (max-width: 1099.98px) {
+  .shell {
+    --gutter: 22px;
+    --content-x: calc(max(var(--chrome-inset), var(--safe-left)) + var(--rail-w));
+  }
+}
+@media (max-width: 767.98px) {
+  .shell {
+    --gutter: 16px;
+    --content-x: 0px;
+    --topbar-pad-top: var(--safe-top);
+    --topbar-h: calc(var(--safe-top) + 56px);
+    --toolbar-control-h: 42px;
+    --main-top: calc(var(--topbar-h) + 2px);
+    --main-bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 34px);
+    --pageheader-pad-right: 0px;
+    --pageheader-min-h: 0px;
+  }
+}
+.shell-main {
+  position: relative;
+  padding-left: var(--content-x);
+  padding-right: var(--safe-right);
+  min-height: 100dvh;
+}
+.shell-main-inner {
+  max-width: calc(var(--content-max) + 2 * var(--gutter));
+  margin: 0 auto;
+  padding: var(--main-top) var(--gutter) var(--main-bottom);
+}
+.shell-main:focus {
+  outline: none;
+}
+.shell-skip {
+  position: fixed;
+  z-index: 200;
+  top: 8px;
+  left: 50%;
+  transform: translate(-50%, -200%);
+  padding: 8px 14px;
+  border-radius: var(--r-capsule);
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+.shell-skip:focus {
+  transform: translate(-50%, 0);
+}

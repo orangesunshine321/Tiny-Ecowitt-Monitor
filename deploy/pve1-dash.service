@@ -1,0 +1,77 @@
+# pve1-dash: read-only Proxmox VE dashboard. Installed as /etc/systemd/system/pve1-dash.service inside the dashboard
+# container by deploy/lxc-setup.sh (and refreshed by pve1-dash-update). Based on docs/research/server-stack.md §8.
+#
+# Local overrides go into a drop-in, never into this file (updates replace it):  systemctl edit pve1-dash
+# Check the sandbox score with:  systemd-analyze security pve1-dash.service
+
+[Unit]
+Description=pve1-dash - read-only Proxmox VE dashboard
+Documentation=https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pve1dash
+Group=pve1dash
+WorkingDirectory=/opt/pve1-dash
+Environment=NODE_ENV=production
+Environment=PVE1_DASH_CONFIG=/etc/pve1-dash/config.yaml
+# Optional KEY=value overrides, e.g. PVE1_DASH_PORT=8081 or NODE_OPTIONS=--enable-source-maps
+EnvironmentFile=-/etc/pve1-dash/env
+ExecStart=/usr/local/bin/node dist/server/index.js
+Restart=on-failure
+RestartSec=5s
+# The server stops its pollers and closes SSE streams within 10 s (server/index.ts).
+TimeoutStopSec=15s
+
+# State (VAPID keys, push devices, alert and health history) lives here; systemd creates it owned by pve1dash.
+StateDirectory=pve1-dash
+StateDirectoryMode=0750
+UMask=0077
+
+# ── Sandboxing ───────────────────────────────────────────────────────────────────────────────────────────────────
+# Chosen to work in an unprivileged Proxmox container with "nesting=1" (the installer enables it; without nesting
+# the mount-namespace options below fail with status=226/NAMESPACE, and lxc-setup.sh / pve1-dash-update then add the
+# drop-in pve1-dash.service.d/10-lxc-compat.conf that turns them off). Runtime behaviour in an unprivileged CT is
+# UNVERIFIED on real hardware (server-stack.md §8.1, §9).
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+# Mount namespace: the whole file system is read-only for the service except the state directory and the SSH
+# directory, where the dashboard appends guest host keys it learns on first use (inventory.knownHosts).
+ProtectSystem=strict
+ReadWritePaths=-/etc/pve1-dash/ssh
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+# seccomp / prctl based; these work inside unprivileged containers.
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+# A filtered syscall fails with EPERM instead of killing Node with SIGSYS.
+SystemCallErrorNumber=EPERM
+# AF_NETLINK: libuv enumerates network interfaces through netlink when listening on 0.0.0.0.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+#
+# Deliberately NOT set:
+#   MemoryDenyWriteExecute=yes   breaks the V8 JIT (Node would crash).
+#   PrivateDevices=, ProtectClock=, ProtectKernelLogs=
+#                                these rely on device-cgroup (BPF) rules and device nodes that an unprivileged
+#                                container may not be allowed to set up; they add little for a process without
+#                                capabilities.
+#   ProtectProc=invisible, ProcSubset=pid
+#                                remount /proc, which would hide the container's LXCFS view (memory, uptime).
+#   PrivateUsers=yes, ProtectHostname=yes
+#                                need extra user/UTS namespaces inside the container's own user namespace.
+#   DynamicUser=yes              the service needs a fixed user that owns its SSH key and state.
+
+[Install]
+WantedBy=multi-user.target

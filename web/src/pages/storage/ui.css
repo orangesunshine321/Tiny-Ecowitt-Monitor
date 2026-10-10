@@ -1,0 +1,508 @@
+/* Page-local kit shared by Storage, Backups, Tasks and Network (ui.tsx). Prefix: inf- */
+
+/* ───────────────────────────── page rhythm */
+.inf-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s7);
+  min-width: 0;
+}
+.inf-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  min-width: 0;
+}
+
+/* ───────────────────────────── section */
+.inf-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  min-width: 0;
+  scroll-margin-top: calc(var(--sticky-top, 0px) + var(--s3));
+}
+.inf-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--s2) var(--s4);
+  padding: 0 var(--s1);
+  min-width: 0;
+}
+.inf-section-titles {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.inf-section-title {
+  font-size: var(--fs-title3);
+  line-height: var(--lh-title3);
+  letter-spacing: var(--tr-title3);
+  font-weight: 700;
+  color: var(--label);
+}
+.inf-section-subtitle {
+  margin-top: 1px;
+  font-size: var(--fs-subhead);
+  line-height: var(--lh-subhead);
+  color: var(--label-2);
+}
+.inf-section-accessory {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2);
+  min-width: 0;
+}
+@media (max-width: 767.98px) {
+  .inf-section-accessory {
+    flex: 1 1 100%;
+  }
+  .inf-section-accessory > .inf-search {
+    flex: 1 1 180px;
+  }
+}
+
+/* ───────────────────────────── pill (neutral facts, never a status) */
+.inf-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--r-capsule);
+  font-size: var(--fs-footnote);
+  line-height: 1;
+  font-weight: 500;
+  color: var(--label-2);
+  background: var(--fill-3);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.inf-pill > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.inf-pill > svg {
+  flex: none;
+}
+.inf-pill[data-mono] {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  letter-spacing: 0;
+}
+.inf-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* ───────────────────────────── search field */
+.inf-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  width: 240px;
+  max-width: 100%;
+  height: 32px;
+  border-radius: 10px;
+  background: var(--fill-3);
+  color: var(--label-2);
+  transition: box-shadow 160ms ease;
+}
+.inf-search:focus-within {
+  box-shadow: 0 0 0 3px var(--focus-ring-color);
+}
+.inf-search-glyph {
+  position: absolute;
+  left: 9px;
+  pointer-events: none;
+}
+.inf-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0 30px 0 30px;
+  border: 0;
+  background: none;
+  font-size: var(--fs-callout);
+  color: var(--label);
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.inf-search input::placeholder {
+  color: var(--label-3);
+}
+.inf-search input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+.inf-search-clear {
+  position: absolute;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: var(--label-3);
+}
+.inf-search-clear:hover {
+  color: var(--label-2);
+}
+
+/* ───────────────────────────── select (pop-up button) */
+.inf-select {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  height: 32px;
+  border-radius: var(--r-capsule);
+  background: var(--fill-3);
+  color: var(--label);
+}
+.inf-select:focus-within {
+  box-shadow: 0 0 0 3px var(--focus-ring-color);
+}
+.inf-select select {
+  min-width: 0;
+  max-width: 100%;
+  height: 100%;
+  padding: 0 30px 0 13px;
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  font-size: var(--fs-callout);
+  font-weight: 500;
+  color: inherit;
+  text-overflow: ellipsis;
+  outline: none;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.inf-select-glyph {
+  position: absolute;
+  right: 11px;
+  color: var(--label-2);
+  pointer-events: none;
+}
+
+/* ───────────────────────────── filter bar */
+.inf-filterbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2) var(--s3);
+  min-width: 0;
+}
+@media (max-width: 767.98px) {
+  .inf-filterbar > .ui-seg {
+    flex: 1 1 100%;
+  }
+  .inf-filterbar > .inf-select,
+  .inf-filterbar > .inf-search {
+    flex: 1 1 160px;
+  }
+  .inf-filterbar > .inf-select select {
+    width: 100%;
+  }
+}
+
+/* ───────────────────────────── banner */
+.inf-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+  padding: var(--s4) var(--s5);
+  min-width: 0;
+}
+.inf-banner-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  color: #fff;
+  background: var(--_tone);
+  box-shadow: inset 0 0.5px 0 rgb(255 255 255 / 0.3);
+}
+.inf-banner-text {
+  flex: 1;
+  min-width: 0;
+  padding-top: 1px;
+}
+.inf-banner-title {
+  font-size: var(--fs-headline);
+  line-height: var(--lh-headline);
+  letter-spacing: var(--tr-headline);
+  font-weight: 600;
+}
+.inf-banner-body {
+  margin-top: 2px;
+  font-size: var(--fs-subhead);
+  line-height: var(--lh-subhead);
+  color: var(--label-2);
+  text-wrap: pretty;
+}
+.inf-banner-action {
+  flex: none;
+  align-self: center;
+}
+
+/* ───────────────────────────── stat tiles */
+.inf-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--s4) 0;
+  min-width: 0;
+}
+.inf-stat {
+  min-width: 0;
+  padding: 0 var(--s4);
+  border-left: 0.5px solid var(--separator);
+}
+.inf-stat:first-child {
+  border-left: 0;
+  padding-left: 0;
+}
+.inf-stat-label {
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  font-weight: 500;
+  color: var(--label-2);
+}
+.inf-stat-value {
+  margin-top: 2px;
+  font-family: var(--font-rounded);
+  font-size: var(--fs-title2);
+  line-height: var(--lh-title2);
+  letter-spacing: var(--tr-title2);
+  font-weight: 600;
+  color: var(--label);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inf-stat-value small {
+  margin-left: 3px;
+  font-size: var(--fs-subhead);
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--label-2);
+}
+.inf-stat-caption {
+  margin-top: 1px;
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  color: var(--label-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (max-width: 767.98px) {
+  .inf-stats {
+    grid-template-columns: 1fr 1fr;
+  }
+  .inf-stat {
+    border-left: 0;
+    padding: 0;
+  }
+  .inf-stat:nth-child(even) {
+    padding-left: var(--s3);
+    border-left: 0.5px solid var(--separator);
+  }
+}
+
+/* ───────────────────────────── tappable card (opens a sheet) */
+.inf-tapcard {
+  transition: transform 300ms var(--spring-snappy), box-shadow 200ms ease;
+}
+.inf-tapcard:hover {
+  box-shadow:
+    0 0 0 0.5px var(--card-hairline),
+    0 2px 4px rgb(0 0 0 / 0.05),
+    0 12px 28px -8px rgb(0 0 0 / 0.18);
+}
+.inf-tapcard:active:not(:has(:is(a, button, select, input):not(.inf-tapcard-btn):active)) {
+  transform: scale(0.985);
+}
+.inf-tapcard-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+  text-align: left;
+}
+.inf-tapcard-btn::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+}
+.inf-tapcard-btn:focus-visible {
+  outline: none;
+}
+.inf-tapcard:has(.inf-tapcard-btn:focus-visible) {
+  outline: 3px solid var(--focus-ring-color);
+  outline-offset: 1px;
+}
+.inf-tapcard-title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inf-tapcard-chevron {
+  flex: none;
+  color: var(--label-3);
+}
+.inf-tapcard :is(a, button, input, select, [tabindex]):not(.inf-tapcard-btn) {
+  position: relative;
+  z-index: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .inf-tapcard {
+    transition: none;
+  }
+  .inf-tapcard:active {
+    transform: none !important;
+  }
+}
+
+/* ───────────────────────────── facts (label/value list) */
+.inf-facts {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.inf-fact {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s4);
+  min-height: 34px;
+  padding: 7px 0;
+  border-top: 0.5px solid var(--hairline);
+  font-size: var(--fs-callout);
+  line-height: var(--lh-callout);
+}
+.inf-fact:first-child {
+  border-top: 0;
+}
+.inf-fact dt {
+  flex: none;
+  max-width: 45%;
+  color: var(--label-2);
+}
+.inf-fact dd {
+  margin: 0;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 4px 6px;
+  text-align: right;
+  color: var(--label);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.inf-fact dd[data-mono] {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  letter-spacing: 0;
+}
+.inf-fact dd[data-wrap] {
+  text-align: left;
+  justify-content: flex-start;
+}
+
+/* ───────────────────────────── table cell helpers */
+.inf-glyph {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: var(--_s, 28px);
+  height: var(--_s, 28px);
+  border-radius: calc(var(--_s, 28px) * 0.27);
+  color: var(--label-2);
+  background: var(--fill-3);
+}
+.inf-glyph > svg {
+  width: 55%;
+  height: 55%;
+}
+.inf-twoline {
+  display: inline-flex;
+  flex-direction: column;
+  min-width: 0;
+  max-width: 100%;
+  vertical-align: middle;
+}
+.inf-twoline-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inf-twoline-title[data-mono] {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 13px;
+  letter-spacing: 0;
+}
+.inf-twoline-sub {
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  color: var(--label-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inf-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.inf-mono {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  letter-spacing: 0;
+}
+.inf-muted {
+  color: var(--label-3);
+}
+.inf-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* responsive helpers for content that duplicates a hidden table column */
+@media (min-width: 768px) {
+  .inf-only-iphone {
+    display: none !important;
+  }
+}
+@media (max-width: 767.98px) {
+  .inf-hide-iphone {
+    display: none !important;
+  }
+}
+
+/* Cards with a status badge as accessory: let the titles shrink (and truncate) before the badge wraps to its own row. */
+.inf-card-tight .ui-card-titles {
+  flex-basis: 110px;
+}

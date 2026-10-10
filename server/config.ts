@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
+import { DEMO_SERVICES } from './demo/world.js';
 
 /**
  * Configuration lives in a YAML file (default /etc/pve1-dash/config.yaml, override with PVE1_DASH_CONFIG).
@@ -204,7 +205,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       ...raw,
       demo: true,
       proxmox: {
-        url: 'http://127.0.0.1:1',
+        url: 'http://127.0.0.1:8006',
         node: 'pve1',
         tokenId: 'pve1dash@pve!dashboard',
         tokenSecret: '00000000-0000-0000-0000-000000000000',
@@ -217,6 +218,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         guests: [{ vmid: 108, address: '10.10.20.60' }],
         ...((raw.inventory as object) ?? {}),
       },
+      services: { items: DEMO_SERVICES, ...((raw.services as object) ?? {}) },
     };
   }
   if (env.PVE1_DASH_PORT) {
