@@ -208,7 +208,24 @@ export interface DemoSimOptions {
   anchor?: number;
   /** clock (default Date.now); tests pass a fixed or stepping clock */
   now?: () => number;
+  /**
+   * Opt-in edge states (demo: PVE1_DASH_DEMO_EDGECASES=1), off by default so the demo looks the same as always:
+   *  - VM 105 "apps" is paused (QMP state) in minutes 10-17 of every hour: the QEMU process keeps its memory and
+   *    uptime, its vCPUs and guest agent stop, its services time out;
+   *  - the PBS storage is inactive (unreachable) in minutes 40-49 of every hour;
+   *  - an extra, disabled backup job exists; VM 105 has a pending (not yet applied) memory change.
+   */
+  edgeCases?: boolean;
 }
+
+/** Minutes of every hour the edge-case VM is paused / the PBS storage is inactive (edgeCases only). */
+export const EDGE_PAUSE_MINUTES: readonly [number, number] = [10, 18];
+export const EDGE_PBS_DOWN_MINUTES: readonly [number, number] = [40, 50];
+/** The VM paused in edge-case mode. */
+export const EDGE_PAUSED_VMID = 105;
+
+const minuteOfHour = (tMs: number) => Math.floor((((tMs / 60_000) % 60) + 60) % 60);
+const inMinutes = (tMs: number, [from, to]: readonly [number, number]) => minuteOfHour(tMs) >= from && minuteOfHour(tMs) < to;
 
 /** Age of the installation at the anchor (matches the node certificate's age in pveNode.ts). */
 export const INSTALLED_DAYS_AGO = 690;
@@ -227,6 +244,8 @@ export function inBackupWindow(tSec: number): boolean {
 
 export class DemoSim {
   readonly anchor: number;
+  /** see DemoSimOptions.edgeCases */
+  readonly edgeCases: boolean;
   readonly nodeBootMs: number;
   /** when pve1 was installed (its node certificate is that old too); RRD history starts here */
   readonly installedMs: number;
@@ -237,6 +256,7 @@ export class DemoSim {
   constructor(opts: DemoSimOptions = {}) {
     this.clock = opts.now ?? Date.now;
     this.anchor = opts.anchor ?? this.clock();
+    this.edgeCases = opts.edgeCases ?? false;
     this.nodeBootMs = this.anchor - Math.round(DEMO_NODE.uptimeDays * DAY_S * 1000);
     this.installedMs = this.anchor - INSTALLED_DAYS_AGO * DAY_S * 1000;
     this.nodeWave = makeWave('node', [
@@ -259,8 +279,20 @@ export class DemoSim {
     return this.models.get(vmid)?.g;
   }
 
+  /** the guest's process is up (a paused VM still counts: it holds its memory and keeps its uptime) */
   isRunning(g: DemoGuest): boolean {
     return g.status === 'running' && !g.template;
+  }
+
+  /** QMP run state of a VM / state of a container at tMs: running, stopped or (edge cases only) paused */
+  runState(g: DemoGuest, tMs: number): 'running' | 'stopped' | 'paused' {
+    if (!this.isRunning(g)) return 'stopped';
+    return this.edgeCases && g.vmid === EDGE_PAUSED_VMID && g.type === 'qemu' && inMinutes(tMs, EDGE_PAUSE_MINUTES) ? 'paused' : 'running';
+  }
+
+  /** whether a storage can be reached at tMs (edge cases: PBS is down for a few minutes every hour) */
+  storageActive(id: string, tMs: number): boolean {
+    return !(this.edgeCases && id === 'pbs' && inMinutes(tMs, EDGE_PBS_DOWN_MINUTES));
   }
 
   /** epoch ms of the guest's current boot, undefined when stopped */

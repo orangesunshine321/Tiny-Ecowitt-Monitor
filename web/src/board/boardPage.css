@@ -261,10 +261,19 @@
   gap: 2px;
 }
 .bd-page-dot {
+  position: relative;
   display: grid;
   place-items: center;
   width: 18px;
   height: 24px;
+}
+/* touch: a 44pt-tall hit area around the small dot (dots sit side by side, so it only grows vertically) */
+@media (pointer: coarse) {
+  .bd-page-dot::after {
+    content: '';
+    position: absolute;
+    inset: -10px 0;
+  }
 }
 .bd-page-dot::before {
   content: '';

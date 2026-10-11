@@ -13,7 +13,8 @@ Afterwards: [put it behind your HTTPS proxy](../deploy/reverse-proxy/README.md),
 
 **Requirements**
 
-- Proxmox VE **8.x or 9.x**, a single node (a cluster works too, the dashboard just looks at one node).
+- Proxmox VE **8.x or 9.x**, a single node (a cluster works too: each dashboard looks at one node, and you can install
+  one per node; each gets its own API token and key line).
 - Internet access for the container while installing (Debian packages, nodejs.org, GitHub, npm).
 - About 1 GiB of RAM for the build (the running dashboard needs much less) and 6 GiB of disk.
 - An HTTPS reverse proxy on your LAN for the app/push features (Nginx Proxy Manager, nginx, Caddy, Traefik...).
@@ -28,6 +29,18 @@ On the Proxmox host, as root (the shell from the web UI's node → **Shell** wor
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)"
 ```
 
+> **Before pve1-dash is merged into `main`:** `main` still holds the old *Tiny Ecowitt Monitor*, so the command above
+> finds no installer. Install from the pve1-dash branch instead, naming it in the URL (which installer runs) **and** in
+> `PVE1_DASH_REF` (which code it builds):
+>
+> ```bash
+> PVE1_DASH_REF=claude/homelab-dashboard-pve1-dizt16 bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/claude/homelab-dashboard-pve1-dizt16/deploy/install.sh)"
+> ```
+>
+> The same goes for every other command on this page that downloads from `.../main/...`: use
+> `.../claude/homelab-dashboard-pve1-dizt16/...` until the merge. After the merge, the plain commands work. The
+> installer checks right at the start that the ref holds pve1-dash and stops with this hint if it doesn't.
+
 It asks a few questions (each has a sensible default), shows a plan, and only then changes anything:
 
 | Question | Default | Notes |
@@ -35,12 +48,13 @@ It asks a few questions (each has a sensible default), shows a plan, and only th
 | Container ID | next free id | |
 | Hostname | `pve1-dash` | |
 | Disk storage / size | `local-lvm` (or `local-zfs`, or the first one) / 6 GiB | storages that allow container disks |
-| Template storage | `local` | where the Debian 13 template is downloaded |
-| Bridge / VLAN | `vmbr0` / none | |
-| IPv4 | `dhcp` | or a static `192.168.1.60/24` plus gateway |
+| Template storage | `local` | where the Debian 13 template is downloaded (Debian 12 if the host's `pve-container` is too old for 13) |
+| Bridge / VLAN | `vmbr0` / none | a bridge that doesn't exist on the host is refused unless you insist |
+| IPv4 | `dhcp` | or a static `192.168.1.60/24` plus gateway (offered only if the host's own gateway is in that network) |
 | Cores / memory / swap | 1 / 1024 MiB / 512 MiB | the build needs the 1 GiB |
 | Proxmox host IP | detected | the dashboard talks to `https://<ip>:8006` and SSH on `<ip>:22` |
 | Public HTTPS URL | none | e.g. `https://dash.home.lan`, can be added later |
+| Host name on the certificate | the ACME domain, if any | only asked when the host uses a custom/ACME certificate: verify it with the public CAs instead of pinning it (a pin breaks at every renewal) |
 | Email for Web Push | **required** | your real address; Apple rejects `localhost` and made-up domains |
 | Install lm-sensors | no | for CPU/board temperatures |
 
@@ -52,7 +66,23 @@ PVE1_DASH_VAPID_EMAIL=you@example.com PVE1_DASH_PUBLIC_URL=https://dash.home.lan
 ```
 
 Run it again any time: it finds the container by its `pve1-dash` tag and upgrades/repairs it in place, keeping your
-config, push devices and history. A log of the long steps goes to `/var/log/pve1-dash-install.log`.
+config, push devices and history. A log of the long steps goes to `/var/log/pve1-dash-install.log`. On a re-run:
+
+- **The source stays the same.** The branch or tag recorded in the container (`/etc/pve1-dash/install.env`) is kept,
+  as long as the repository has it. A repository other than the default is only used again when you confirm it (with
+  `--yes`: pass `PVE1_DASH_REPO=...`), because the host helper is checked against it. A commit id is not taken over
+  automatically; pass `PVE1_DASH_REF=<commit>` to stay on it.
+- **The token is checked, not just found.** If Proxmox rejects the container's secret, the installer replaces the token,
+  and it does that only at the end, once the new version runs: a run that fails half-way never leaves the dashboard
+  with a revoked secret.
+- **Network settings apply to the existing container.** `PVE1_DASH_IP`, `PVE1_DASH_GATEWAY`, `PVE1_DASH_BRIDGE` and
+  `PVE1_DASH_VLAN` given on a re-run change its `net0` (the MAC address stays) and restart it.
+- **A new version that doesn't come up is rolled back**, like `pve1-dash-update` does.
+- **The Proxmox address is kept up to date:** if the config points at an address the host no longer has, it is moved to
+  the one you confirm.
+
+**A second dashboard** (`PVE1_DASH_EXISTING=new`, or another node of a cluster) leaves the first one alone: it gets
+its own token, `pve1dash@pve!dashboard-ct<id>`, and its own line in the cluster-wide `authorized_keys`.
 
 ---
 
@@ -81,8 +111,10 @@ pct create 120 local:vztmpl/debian-13-standard_13.1-2_amd64.tar.zst \
 - `--unprivileged 1` matters: **PVE 8 creates privileged containers by default**.
 - `nesting=1` lets systemd sandbox the service inside the container.
 - No `--password`: root in the container has no password; you get a shell with `pct enter 120`.
-- No Debian 13 template on an older PVE 8? Update the host first (`apt update && apt full-upgrade`; Debian 13
-  containers need pve-container 5.3.1 or newer), or use `debian-12-standard`, which works the same for pve1-dash.
+- No Debian 13 template on an older PVE 8, or `pct create` says "unsupported debian version"? Debian 13.1+ templates
+  need pve-container 5.3.1 (PVE 8) or 6.0.10 (PVE 9). Update the host first (`apt update && apt full-upgrade`; without
+  a subscription, enable the `pve-no-subscription` repository in node → Updates → Repositories first), or use
+  `debian-12-standard`, which works the same for pve1-dash. The installer picks 12 by itself on such hosts.
 
 ### 2. A read-only API token
 
@@ -119,7 +151,7 @@ cat /etc/ssh/ssh_host_ed25519_key.pub
 Easiest: let the setup script do it. It is the same script the installer runs, and it is safe to repeat.
 
 ```bash
-# On the host: copy the script in and run it with your values
+# On the host: copy the script in and run it with your values (before the merge: .../claude/homelab-dashboard-pve1-dizt16/...)
 curl -fsSL -o /tmp/lxc-setup.sh https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/lxc-setup.sh
 pct push 120 /tmp/lxc-setup.sh /root/lxc-setup.sh
 pct enter 120
@@ -129,6 +161,7 @@ export P1D_TLS_FINGERPRINT='3F:9A:...'                     # from step 3
 export P1D_HOST_KEY='ssh-ed25519 AAAA...'                  # from step 3, WITHOUT the trailing "root@pve1"
 export P1D_TOKEN_SECRET='0b4c5d2e-...'                     # from step 2
 export P1D_VAPID_EMAIL=you@example.com P1D_PUBLIC_URL=https://dash.home.lan
+# export PVE1_DASH_REF=claude/homelab-dashboard-pve1-dizt16    # before the merge into main
 bash /root/lxc-setup.sh
 ```
 
@@ -151,6 +184,7 @@ for b in node npm npx corepack; do ln -sfn /opt/node/bin/$b /usr/local/bin/$b; d
 
 # Service user and the app (built from source, then dev dependencies removed)
 useradd --system --user-group --home-dir /var/lib/pve1-dash --no-create-home --shell /usr/sbin/nologin pve1dash
+# (before the merge into main: --branch claude/homelab-dashboard-pve1-dizt16)
 git clone --depth 1 --branch main https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git /opt/pve1-dash
 cd /opt/pve1-dash
 npm ci --include=dev --ignore-scripts && npm run build && npm prune --omit=dev --ignore-scripts
@@ -204,10 +238,18 @@ alerts:
 The dashboard reaches the host with one SSH key that can run exactly one read-only script
 ([HELPER_PROTOCOL.md](HELPER_PROTOCOL.md), [SECURITY.md](SECURITY.md#the-ssh-helper)).
 
+The helper runs as root on the host, so install the **repository's** copy, at the ref the container runs, and use the
+container's copy only to compare (the container is less trusted than the host):
+
 ```bash
-# On the host: install the helper from the container (or from the repo at the same version)
-pct pull 120 /opt/pve1-dash/deploy/helpers/pve1-dash-helper /usr/local/sbin/pve1-dash-helper
-chown root:root /usr/local/sbin/pve1-dash-helper && chmod 0755 /usr/local/sbin/pve1-dash-helper
+# On the host. REF = the branch or tag the container was installed from (main, or a tag; before the merge:
+# claude/homelab-dashboard-pve1-dizt16)
+REF=main
+curl -fsSL -o /tmp/pve1-dash-helper \
+  "https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/$REF/deploy/helpers/pve1-dash-helper"
+pct pull 120 /opt/pve1-dash/deploy/helpers/pve1-dash-helper /tmp/pve1-dash-helper.ct
+cmp /tmp/pve1-dash-helper /tmp/pve1-dash-helper.ct && echo same     # different? update the container, or check REF
+install -o root -g root -m 0755 /tmp/pve1-dash-helper /usr/local/sbin/pve1-dash-helper
 SSH_ORIGINAL_COMMAND=version /usr/local/sbin/pve1-dash-helper     # -> pve1-dash-helper 1
 
 # Authorize the dashboard key for that script only
@@ -306,38 +348,49 @@ pve1-dash-update --ref v1.2.0                    # inside the container: a speci
 ```
 
 It builds the new version next to the running one, swaps them, restarts, and rolls back automatically if the new
-version doesn't come up healthy. It also updates Node.js within the 24.x line. If it says the host helper changed, run
-on the host:
+version doesn't come up healthy (it checks `/healthz` on `listen.host`, or on 127.0.0.1 for `0.0.0.0`). It also
+updates Node.js within the 24.x line; a Node.js download or unpack that fails leaves the working Node.js alone. If it
+says the host helper changed, run on the host the command it prints, for example:
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)" -- --update-helper
 ```
 
-Re-running the full installer is also a fine way to update: it keeps your config and only updates the TLS pin if the
-Proxmox certificate changed.
+`--update-helper` compares the container's helper with the repository's copy at the branch or tag the container
+records (only if the repository really has that branch or tag; pull-request refs and commit ids are never taken from
+the container) before it installs it.
+
+Re-running the full installer is also a fine way to update: it keeps your config and source, only updates the TLS pin
+if the Proxmox certificate changed, and rolls back like `pve1-dash-update` if the new version doesn't come up.
 
 ## 🧹 Uninstalling
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/uninstall.sh)"
+# no questions: ... -- --yes     another container: ... -- --ctid 130
 ```
 
-Removes the authorized_keys line and the helper from the host, asks before removing the API user/token, and asks
-(default **no**) before destroying the container. lm-sensors stays installed.
+It removes one dashboard: its authorized_keys line (plus lines of pve1-dash containers that no longer exist), the
+helper (unless another pve1-dash container on this node uses it), after asking its API token (and the user
+`pve1dash@pve` when no other dashboard is left), and after asking (default **no**) the container. A container you keep
+is stopped and taken off autostart (asks, default yes), so it can't send false "unreachable" alerts. Other dashboards
+in the cluster keep working. `--yes` takes the defaults; `PVE1_DASH_DESTROY_CT=yes` also destroys the container.
+lm-sensors stays installed.
 
 ## 📁 Where things live
 
 | Where | What |
 |---|---|
 | Host: `/usr/local/sbin/pve1-dash-helper` | the read-only forced-command helper |
-| Host: `/root/.ssh/authorized_keys` (→ `/etc/pve/priv/authorized_keys`) | one `restrict,command=...` line ending in `pve1-dash@ct<id>` |
-| Host: Datacenter → Permissions | user `pve1dash@pve`, token `pve1dash@pve!dashboard`, role PVEAuditor on `/` |
+| Host: `/root/.ssh/authorized_keys` (→ `/etc/pve/priv/authorized_keys`) | one `restrict,command=...` line per dashboard, ending in `pve1-dash@ct<id>` |
+| Host: Datacenter → Permissions | user `pve1dash@pve`, token `pve1dash@pve!dashboard` (more dashboards: `...!dashboard-ct<id>`), role PVEAuditor on `/` |
+| Host: `/var/log/pve1-dash-install.log`, `/var/log/pve1-dash-helper.diff` | installer log; the last helper diff shown by the installer |
 | Container: `/opt/pve1-dash` | the app (`/opt/pve1-dash.prev` = the previous version after an update) |
 | Container: `/opt/node` → `/opt/node-v24.x.y-linux-<arch>` | Node.js, linked into `/usr/local/bin` |
 | Container: `/etc/pve1-dash/config.yaml` | configuration (root:pve1dash, 0640) |
 | Container: `/etc/pve1-dash/token` | API token secret (root:pve1dash, 0640) |
 | Container: `/etc/pve1-dash/ssh/` | dashboard key `id_ed25519` (pve1dash, 0600) and `known_hosts` |
-| Container: `/etc/pve1-dash/install.env` | the repo and ref used by `pve1-dash-update` |
+| Container: `/etc/pve1-dash/install.env` | the repo and ref used by `pve1-dash-update` and kept by installer re-runs |
 | Container: `/etc/pve1-dash/env` | optional environment overrides for the service (e.g. `PVE1_DASH_PORT=8081`) |
 | Container: `/var/lib/pve1-dash/` | VAPID keys + push devices (`push.json`), alert and uptime history |
 | Container: `/etc/systemd/system/pve1-dash.service` | the service; overrides go into `systemctl edit pve1-dash` |

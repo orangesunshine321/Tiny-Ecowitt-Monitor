@@ -178,13 +178,23 @@ export function getPushDevices(opts?: RequestOptions): Promise<PushDevice[]> {
   return request('GET', '/api/push/devices', undefined, opts);
 }
 
+/** GET /api/push/devices/:id — one device; throws ApiRequestError with status 404 once it was removed. */
+export function getPushDevice(id: string, opts?: RequestOptions): Promise<PushDevice> {
+  return request('GET', `/api/push/devices/${encodeURIComponent(id)}`, undefined, opts);
+}
+
 export interface PushSubscribeBody {
   subscription: PushSubscriptionJSON;
   name: string;
   prefs?: Partial<PushPrefs>;
+  /**
+   * This browser's previous device id: the server then updates that device in place (keeping id, name and prefs) and
+   * swaps in the new endpoint and keys. Unknown ids are ignored and a new device is created.
+   */
+  replacesId?: string;
 }
 
-/** POST /api/push/subscribe — upsert by endpoint (prefs kept unless given). */
+/** POST /api/push/subscribe — upsert by `replacesId`, then by endpoint (prefs kept unless given). */
 export function postPushSubscribe(body: PushSubscribeBody, opts?: RequestOptions): Promise<PushDevice> {
   return request('POST', '/api/push/subscribe', body, opts);
 }
@@ -220,6 +230,7 @@ export const api = {
   getZfsDetail,
   refreshInventory,
   getPushDevices,
+  getPushDevice,
   postPushSubscribe,
   postPushPrefs,
   postPushUnsubscribe,

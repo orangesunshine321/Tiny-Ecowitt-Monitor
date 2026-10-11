@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { ConfigSchema } from '../server/config.js';
 import { AlertEngine } from '../server/alerts/engine.js';
 import { fmtWhen } from '../server/alerts/format.js';
-import { GUEST_UNKNOWN_AFTER_MS, isWatched, usageLevel, type RuleData, type RulesConfig } from '../server/alerts/rules.js';
+import { GUEST_LOCK_GRACE_MS, GUEST_UNKNOWN_AFTER_MS, isWatched, usageLevel, type RuleData, type RulesConfig } from '../server/alerts/rules.js';
 import type {
   AlertEvent,
   BackupCoverage,
@@ -94,11 +94,11 @@ function data(over: Partial<RuleData> = {}): RuleData {
 }
 
 /** Engine wrapper: evaluate at a time with data; returns the active list and what happened. */
-function harness(cfg: RulesConfig = rules(), cooldownMs = 30 * MIN) {
+function harness(cfg: RulesConfig = rules(), cooldownMs = 30 * MIN, timeZone?: string) {
   let n = 0;
   const engine = new AlertEngine({ cooldownMs, newId: () => `id${++n}` });
   const run = (d: RuleData, now: number, ready: (k: SnapshotKey) => boolean = () => true) => {
-    const res = engine.evaluate({ now, rules: cfg, data: d, ready });
+    const res = engine.evaluate({ now, rules: cfg, data: d, ready, timeZone });
     return { ...res, active: engine.view().active };
   };
   return { engine, run };
@@ -214,6 +214,59 @@ describe('guestStopped', () => {
     const b = harness();
     b.engine.restore(saved);
     expect(b.run(data({ guests: [haos('stopped')] }), T0 + HOUR).active).toHaveLength(1);
+  });
+
+  it('a stop-mode backup (lock "backup") does not alert; the guest restarting afterwards is silent too', () => {
+    const { run } = harness();
+    const pihole = (status: Guest['status'], lock?: string) => guest(101, 'pihole', status, lock ? { lock } : {});
+    run(data({ guests: [pihole('running')] }), T0);
+    const during = run(data({ guests: [pihole('stopped', 'backup')] }), T0 + MIN);
+    expect(during.active).toEqual([]);
+    expect(during.notifications).toEqual([]);
+    expect(during.wakeAt).toBe(T0 + MIN + GUEST_LOCK_GRACE_MS);
+    expect(run(data({ guests: [pihole('stopped', 'backup')] }), T0 + 20 * MIN).active).toEqual([]);
+    const after = run(data({ guests: [pihole('running')] }), T0 + 25 * MIN);
+    expect(after.emitted).toEqual([]);
+    expect(after.notifications).toEqual([]);
+  });
+
+  it('a guest left stopped after its backup alerts once the lock is gone, or after the lock grace', () => {
+    const { run } = harness();
+    const pihole = (status: Guest['status'], lock?: string) => guest(101, 'pihole', status, lock ? { lock } : {});
+    run(data({ guests: [pihole('running')] }), T0);
+    run(data({ guests: [pihole('stopped', 'backup')] }), T0 + MIN);
+    // job ended, guest did not come back
+    const left = run(data({ guests: [pihole('stopped')] }), T0 + 30 * MIN);
+    expect(left.active).toEqual([
+      expect.objectContaining({ key: 'guest_stopped:101', body: `LXC pihole (101) was running and has been stopped since ${fmtWhen(T0 + MIN, T0 + 30 * MIN)}.` }),
+    ]);
+
+    // a stale lock (crashed job) hides a stopped guest for at most GUEST_LOCK_GRACE_MS
+    const b = harness();
+    b.run(data({ guests: [pihole('running')] }), T0);
+    expect(b.run(data({ guests: [pihole('stopped', 'backup')] }), T0 + MIN).active).toEqual([]);
+    expect(b.run(data({ guests: [pihole('stopped', 'backup')] }), T0 + MIN + GUEST_LOCK_GRACE_MS - 1).active).toEqual([]);
+    expect(b.run(data({ guests: [pihole('stopped', 'backup')] }), T0 + MIN + GUEST_LOCK_GRACE_MS).active).toHaveLength(1);
+
+    // other locks (e.g. "mounted" for maintenance) do not hold the alert back; neither does a lock on a running guest
+    const c = harness();
+    c.run(data({ guests: [pihole('running', 'backup')] }), T0);
+    expect(c.run(data({ guests: [pihole('stopped', 'mounted')] }), T0 + MIN).active).toHaveLength(1);
+  });
+
+  it('formats clock times in the configured time zone', () => {
+    const at = Date.UTC(2026, 9, 10, 12, 2); // 12:02 UTC = 21:02 in Tokyo, 14:02 in Berlin
+    const tokyo = harness(rules(), 30 * MIN, 'Asia/Tokyo');
+    tokyo.run(data({ guests: [haos('running')] }), at - HOUR);
+    expect(tokyo.run(data({ guests: [haos('stopped')] }), at).active[0]!.body).toBe('VM haos (100) was running and has been stopped since 21:02.');
+    const berlin = harness(rules(), 30 * MIN, 'Europe/Berlin');
+    berlin.run(data({ guests: [haos('running')] }), at - HOUR);
+    berlin.run(data({ guests: [haos('stopped')] }), at);
+    // next day in Berlin (00:30 local) but still 9/10 Oct in New York: the day check follows the zone too
+    const nextDay = berlin.run(data({ guests: [haos('stopped')], node: node({ lastUpdated: at }) }), Date.UTC(2026, 9, 10, 22, 30));
+    expect(nextDay.active[0]!.body).toBe('VM haos (100) was running and has been stopped since 10 Oct 14:02.');
+    expect(fmtWhen(at, Date.UTC(2026, 9, 10, 22, 30), 'Europe/Berlin')).toBe('10 Oct 14:02');
+    expect(fmtWhen(at, Date.UTC(2026, 9, 10, 22, 30), 'America/New_York')).toBe('08:02');
   });
 });
 

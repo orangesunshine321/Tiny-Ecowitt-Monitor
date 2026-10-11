@@ -161,6 +161,11 @@ export function createMockChecker(opts: MockCheckerOptions = {}): HealthChecker 
       return { result: waitMs < 3_000 ? { ok: false, message: `timeout after ${secs(t.timeoutMs)}` } : { ok: false, message: 'EHOSTUNREACH' }, waitMs };
     }
     if (ep.failure?.error) return { result: { ok: false, ms: 1, message: ep.failure.error }, waitMs: 1 };
+    // edge cases: a paused VM's vCPUs stop, so nothing answers on its address until it resumes
+    const guest = DEMO_GUESTS.find((g) => g.ip === at.host);
+    if (guest && sim.runState(guest, now) === 'paused') {
+      return { result: { ok: false, message: `timeout after ${secs(t.timeoutMs)}` }, waitMs: t.timeoutMs };
+    }
 
     const jitter = 0.75 + 0.5 * random();
     let ms: number;

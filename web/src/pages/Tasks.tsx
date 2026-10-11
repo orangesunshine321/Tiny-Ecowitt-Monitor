@@ -72,6 +72,7 @@ export default function TasksPage() {
       {
         key: 'task',
         header: 'Task',
+        shrink: true,
         sortValue: (t) => describeTask(t, lookup).title,
         cell: (t) => {
           const d = describeTask(t, lookup);
@@ -122,7 +123,7 @@ export default function TasksPage() {
         defaultDir: 'desc',
         cell: (t) => (
           <span className="t-label-2" title={formatFullDateTime(t.startTime)}>
-            <RelativeTime time={t.startTime} format="short" />
+            <RelativeTime time={t.startTime} />
           </span>
         ),
       },

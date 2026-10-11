@@ -226,6 +226,9 @@ const PRESETS = {
       { time: 5, plat: 4, platMode: 'vmid', ms: 4 },
       { time: 5, plat: 0, platMode: 'vmid', ms: 4 },
       { time: 5, plat: 0, platMode: 'vmid', ms: 0 },
+      // iPhone portrait: every row shows the same HH:MM (the last check), so TIME goes before DESTINATION has to shrink
+      // to 8 flaps ("PROXMOX" twice, "HOME ASS"); the clock in the header still shows the time
+      { time: 0, plat: 0, platMode: 'vmid', ms: 0 },
     ] as Variant[],
   },
   mini: {

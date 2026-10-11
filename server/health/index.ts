@@ -12,6 +12,7 @@ import type { Config } from '../config.js';
 import type { AppContext, HealthChecker, HealthCheckResult, HealthService, Logger } from '../context.js';
 import type { Guest, ServiceEntry, SnapshotKey } from '../../shared/types.js';
 import { debouncedWriter, readJson } from '../util/jsonstore.js';
+import { clampDelay } from '../util/timers.js';
 import { createDefaultChecker, type DefaultChecker } from './checker.js';
 import { buildServiceDefs, type ServiceDef } from './discovery.js';
 import {
@@ -34,7 +35,14 @@ export const STARTUP_GRACE_SEC = 120;
 const STATE_RETENTION_MS = 7 * 24 * 3600_000;
 const FIRST_ROUND_DELAY_MS = 1500;
 const REBUILD_DEBOUNCE_MS = 250;
+/** results outside a round (new entries, a guest came back) are published after this short debounce */
 const PUBLISH_DEBOUNCE_MS = 200;
+/**
+ * During a round, `services` is published at most this often and once more when the round ends. Every publish sends
+ * the whole section (with each service's history) to every open stream, so publishing per result made a large round
+ * cost megabytes per client.
+ */
+export const ROUND_PUBLISH_INTERVAL_MS = 5000;
 /** health.json is rewritten at most this often (and on stop); a crash loses at most this much history */
 const SAVE_DELAY_MS = 5 * 60_000;
 
@@ -96,6 +104,8 @@ class HealthServiceImpl implements HealthService {
   private roundTimer: NodeJS.Timeout | undefined;
   private rebuildTimer: NodeJS.Timeout | undefined;
   private publishTimer: NodeJS.Timeout | undefined;
+  private roundActive = false;
+  private lastPublish = 0;
 
   constructor(
     private readonly ctx: AppContext,
@@ -103,7 +113,9 @@ class HealthServiceImpl implements HealthService {
   ) {
     this.log = ctx.log.child('health');
     this.cfg = ctx.config.services;
-    this.writer = debouncedWriter(join(ctx.dataDir, 'health.json'), () => this.serialize(), SAVE_DELAY_MS);
+    this.writer = debouncedWriter(join(ctx.dataDir, 'health.json'), () => this.serialize(), SAVE_DELAY_MS, (err) =>
+      this.log.warn('could not save health state (will retry)', { err }),
+    );
   }
 
   start(): void {
@@ -203,7 +215,7 @@ class HealthServiceImpl implements HealthService {
   private scheduleRound(delayMs: number): void {
     if (!this.started) return;
     if (this.roundTimer) clearTimeout(this.roundTimer);
-    this.roundTimer = setTimeout(() => void this.runRound(), delayMs);
+    this.roundTimer = setTimeout(() => void this.runRound(), clampDelay(delayMs));
     this.roundTimer.unref?.();
   }
 
@@ -214,8 +226,14 @@ class HealthServiceImpl implements HealthService {
     try {
       const guests = this.guestsById();
       const due = this.defs.filter((d) => d.target && !this.pausedReason(d, guests));
-      await Promise.all(due.map((d) => this.checkOne(d)));
+      this.roundActive = true;
+      try {
+        await Promise.all(due.map((d) => this.checkOne(d)));
+      } finally {
+        this.roundActive = false;
+      }
       if (!this.started) return;
+      this.flushPublish();
       this.ctx.store.collectorOk('health', interval);
       this.writer.save();
     } catch (err) {
@@ -274,15 +292,27 @@ class HealthServiceImpl implements HealthService {
 
   private schedulePublish(): void {
     if (this.publishTimer || !this.started) return;
+    const delay = this.roundActive
+      ? Math.max(PUBLISH_DEBOUNCE_MS, this.lastPublish + ROUND_PUBLISH_INTERVAL_MS - Date.now())
+      : PUBLISH_DEBOUNCE_MS;
     this.publishTimer = setTimeout(() => {
       this.publishTimer = undefined;
       this.publish();
-    }, PUBLISH_DEBOUNCE_MS);
+    }, delay);
     this.publishTimer.unref?.();
+  }
+
+  /** Publish now if results are waiting (end of a round). */
+  private flushPublish(): void {
+    if (!this.publishTimer) return;
+    clearTimeout(this.publishTimer);
+    this.publishTimer = undefined;
+    this.publish();
   }
 
   private publish(): void {
     const now = Date.now();
+    this.lastPublish = now;
     this.ctx.store.set(
       'services',
       this.defs.map((def) => toEntry(def, this.states.get(def.base.id) ?? initialState(), now)),
@@ -294,7 +324,9 @@ class HealthServiceImpl implements HealthService {
   private load(): void {
     if (this.loaded) return;
     this.loaded = true;
-    const file = readJson<Partial<HealthFile> | null>(join(this.ctx.dataDir, 'health.json'), null);
+    const file = readJson<Partial<HealthFile> | null>(join(this.ctx.dataDir, 'health.json'), null, (err) =>
+      this.log.warn('health.json is unreadable or corrupt; starting without check history', { err }),
+    );
     if (!file || typeof file.services !== 'object' || file.services === null) return;
     for (const [id, raw] of Object.entries(file.services)) {
       const st = restoreState(raw);

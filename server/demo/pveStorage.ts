@@ -65,34 +65,49 @@ export function storageList(sim: DemoSim, t: number, q: URLSearchParams): Obj[] 
     if (!stats.length) throw paramError({ storage: 'No such storage.' });
   }
   if (wanted.length) stats = stats.filter((s) => s.content.some((c) => wanted.includes(c)));
-  return stats.map((s) => ({
-    storage: s.id,
-    type: s.type,
-    content: s.content.join(','),
-    enabled: 1,
-    active: 1,
-    shared: s.shared ? 1 : 0,
-    total: s.total,
-    used: s.used,
-    avail: s.avail,
-    used_fraction: s.used / s.total,
-  }));
+  return stats.map((s) => {
+    if (!sim.storageActive(s.id, t)) {
+      // activate_storage/status() failed (PBS unreachable): active 0, sizes 0 (pve-api-storage.md §1a)
+      return { storage: s.id, type: s.type, content: s.content.join(','), enabled: 1, active: 0, shared: s.shared ? 1 : 0, total: 0, used: 0, avail: 0 };
+    }
+    return {
+      storage: s.id,
+      type: s.type,
+      content: s.content.join(','),
+      enabled: 1,
+      active: 1,
+      shared: s.shared ? 1 : 0,
+      total: s.total,
+      used: s.used,
+      avail: s.avail,
+      used_fraction: s.used / s.total,
+    };
+  });
 }
 
 /** `/cluster/resources` storage entries (one per storage per node). */
 export function storageResources(sim: DemoSim, t: number): Obj[] {
-  return storageStats(sim, t).map((s) => ({
-    id: `storage/${NODE}/${s.id}`,
-    type: 'storage',
-    storage: s.id,
-    node: NODE,
-    plugintype: s.type,
-    status: 'available',
-    shared: s.shared ? 1 : 0,
-    content: s.content.join(','),
-    disk: s.used,
-    maxdisk: s.total,
-  }));
+  return storageStats(sim, t).map((s) => {
+    const active = sim.storageActive(s.id, t);
+    return {
+      id: `storage/${NODE}/${s.id}`,
+      type: 'storage',
+      storage: s.id,
+      node: NODE,
+      plugintype: s.type,
+      // pvestatd reports an unreachable storage as "unknown" (UNVERIFIED wording for PBS)
+      status: active ? 'available' : 'unknown',
+      shared: s.shared ? 1 : 0,
+      content: s.content.join(','),
+      disk: active ? s.used : 0,
+      maxdisk: active ? s.total : 0,
+    };
+  });
+}
+
+/** What PVE answers for a PBS datastore it cannot reach (edge cases). */
+function storageUnreachable(id: string): PveHttpError {
+  return new PveHttpError(500, `${id}: error fetching datastores - 500 Can't connect to 10.10.20.60:8007 (No route to host)`);
 }
 
 function findStorage(id: string) {
@@ -121,6 +136,7 @@ const MEDIA: Array<{ storage: string; content: 'iso' | 'vztmpl'; file: string; s
  */
 export function storageContent(sim: DemoSim, storageId: string, q: URLSearchParams): Obj[] {
   const s = findStorage(storageId);
+  if (!sim.storageActive(s.id, sim.now())) throw storageUnreachable(s.id);
   const content = enumParam(q, 'content', CONTENT_TYPES);
   intParam(q, 'vmid', { min: 100 });
   if (content && !s.content.includes(content)) return [];
@@ -205,6 +221,7 @@ function markGroup(group: Array<{ b: DemoBackup; mark?: string }>, keep: Partial
 /** GET /nodes/{node}/storage/{storage}/prunebackups — needs only Datastore.Audit, so it works for a read-only token. */
 export function pruneBackups(sim: DemoSim, storageId: string, q: URLSearchParams): Obj[] {
   const s = findStorage(storageId);
+  if (!sim.storageActive(s.id, sim.now())) throw storageUnreachable(s.id);
   const type = enumParam(q, 'type', ['qemu', 'lxc']);
   const vmid = intParam(q, 'vmid', { min: 100 });
   const raw = q.get('prune-backups');
@@ -593,10 +610,17 @@ export function taskStatus(sim: DemoSim, nowMs: number, node: string, upid: stri
 
 // ───────────────────────────────────────────────────────────── backup jobs
 
+/** Edge-case world only: a job the owner switched off (PVE still computes its next-run and counts it as covering). */
+export const EDGE_BACKUP_JOBS: Array<(typeof DEMO_BACKUP_JOBS)[number]> = [
+  { id: 'backup-sandbox-offsite', schedule: 'sat 04:00', storage: 'nas-backups', mode: 'stop', vmid: '110', enabled: 0, comment: 'Paused while the NAS is being migrated' },
+];
+
+const jobsOf = (edgeCases: boolean) => (edgeCases ? [...DEMO_BACKUP_JOBS, ...EDGE_BACKUP_JOBS] : DEMO_BACKUP_JOBS);
+
 /** GET /cluster/backup: jobs.cfg vzdump sections with `type` injected and `next-run` computed (even when disabled). */
-export function backupJobs(nowMs: number): Obj[] {
+export function backupJobs(nowMs: number, edgeCases = false): Obj[] {
   const nowS = Math.floor(nowMs / 1000);
-  return DEMO_BACKUP_JOBS.map((j) => {
+  return jobsOf(edgeCases).map((j) => {
     const job: Obj = {
       id: j.id,
       type: 'vzdump',
@@ -620,9 +644,10 @@ export function backupJobs(nowMs: number): Obj[] {
   });
 }
 
-/** GET /cluster/backup-info/not-backed-up */
-export function notBackedUp(): Obj[] {
-  return DEMO_GUESTS.filter((g) => !DEMO_BACKUP_JOBS.some((j) => jobSelects(j, g.vmid))).map((g) => ({ vmid: g.vmid, type: g.type, name: g.name }));
+/** GET /cluster/backup-info/not-backed-up (disabled jobs count as covering, pve-api-storage.md §10b) */
+export function notBackedUp(edgeCases = false): Obj[] {
+  const jobs = jobsOf(edgeCases);
+  return DEMO_GUESTS.filter((g) => !jobs.some((j) => jobSelects(j, g.vmid))).map((g) => ({ vmid: g.vmid, type: g.type, name: g.name }));
 }
 
 

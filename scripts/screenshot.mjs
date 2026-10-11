@@ -23,6 +23,8 @@
  *   --key <combo>               press keys before capturing, e.g. "Meta+k" (repeatable, comma-separated)
  *   --click <selector>          click an element before capturing (comma-separated for several)
  *   --hover <selector>          move the pointer over an element (its centre) before capturing, e.g. ".ui-chart-hit"
+ *   --rect <selector>           print the element's computed position and bounding box (after the clicks/keys), e.g.
+ *                               ".ui-sheet" to check where a sheet ended up (repeatable, comma-separated)
  *   --reduce-motion             emulate prefers-reduced-motion: reduce
  *   --reduce-transparency       set the in-app Reduce Transparency preference
  *   --contrast                  emulate prefers-contrast: more
@@ -62,13 +64,13 @@ const DEVICES = {
 
 function usage(msg) {
   if (msg) console.error(`error: ${msg}\n`);
-  console.error('usage: node scripts/screenshot.mjs <baseUrl> <paths> <outDir> [devices] [--dark|--light|--both] [--wait ms] [--sample] [--full] [--scroll px] [--key combo] [--click sel] [--hover sel] [--reduce-motion] [--reduce-transparency] [--contrast]');
+  console.error('usage: node scripts/screenshot.mjs <baseUrl> <paths> <outDir> [devices] [--dark|--light|--both] [--wait ms] [--sample] [--full] [--scroll px] [--key combo] [--click sel] [--hover sel] [--rect sel] [--reduce-motion] [--reduce-transparency] [--contrast]');
   process.exit(2);
 }
 
 function parseArgs(argv) {
   const pos = [];
-  const opt = { schemes: ['light'], wait: 1200, sample: false, full: false, scroll: 0, keys: [], clicks: [], hovers: [], reduceMotion: false, reduceTransparency: false, contrast: false };
+  const opt = { schemes: ['light'], wait: 1200, sample: false, full: false, scroll: 0, keys: [], clicks: [], hovers: [], rects: [], reduceMotion: false, reduceTransparency: false, contrast: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => {
@@ -86,6 +88,7 @@ function parseArgs(argv) {
     else if (a === '--key') opt.keys.push(...next().split(','));
     else if (a === '--click') opt.clicks.push(...next().split(','));
     else if (a === '--hover') opt.hovers.push(...next().split(','));
+    else if (a === '--rect') opt.rects.push(...next().split(','));
     else if (a === '--reduce-motion') opt.reduceMotion = true;
     else if (a === '--reduce-transparency') opt.reduceTransparency = true;
     else if (a === '--contrast') opt.contrast = true;
@@ -165,6 +168,33 @@ async function main() {
           for (const key of args.keys) {
             await page.keyboard.press(key);
             await page.waitForTimeout(500);
+          }
+          if (args.clicks.length || args.keys.length || args.hovers.length) {
+            // let the finite transitions the interaction started (sheet slide-in, popover fade) finish, up to 3 s;
+            // requesting frames keeps headless Chromium from stalling them
+            await page
+              .evaluate(async () => {
+                const frame = () => new Promise((r) => requestAnimationFrame(() => r(undefined)));
+                const busy = () => document.getAnimations().some((a) => a.playState === 'running' && a.effect?.getComputedTiming().iterations !== Infinity);
+                const until = performance.now() + 3000;
+                for (let i = 0; performance.now() < until; i++) {
+                  await frame();
+                  if (i > 3 && !busy()) break;
+                }
+              })
+              .catch(() => undefined);
+          }
+          for (const sel of args.rects) {
+            const info = await page
+              .evaluate((s) => {
+                const el = document.querySelector(s);
+                if (!el) return null;
+                const r = el.getBoundingClientRect();
+                const cs = getComputedStyle(el);
+                return { position: cs.position, x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height), viewport: `${innerWidth}x${innerHeight}` };
+              }, sel)
+              .catch(() => null);
+            console.log(`[${device}/${scheme}] ${p} ${sel}: ${info ? JSON.stringify(info) : 'not found'}`);
           }
           const file = join(args.out, `${device}-${scheme}-${slug(p)}.png`);
           // finite CSS transitions/animations are fast-forwarded to their end state (headless GL compositing can stall

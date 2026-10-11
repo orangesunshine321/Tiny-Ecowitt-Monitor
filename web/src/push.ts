@@ -7,19 +7,30 @@
  *    activation (5 s in WebKit). The VAPID key comes from the snapshot (`meta.vapidPublicKey`), already in memory, so
  *    nothing is fetched before the prompt.
  *  - Once permission is granted, re-subscribing needs no gesture: `resyncPushSubscription()` runs on app start and
- *    re-posts the subscription (the server upserts by endpoint) or recreates it if Safari dropped it.
+ *    whenever the app becomes visible again (shell/pushSelfHeal.ts). It first asks the server whether this device
+ *    still exists (GET /api/push/devices/:id): a device removed elsewhere (Settings on another device, or an endpoint
+ *    the push service expired) is NOT re-registered; only "Turn On Again" creates a new one. A known device re-posts
+ *    its subscription with `replacesId`, so the server updates it in place (same id, name and prefs).
+ *  - A subscription made with a different VAPID key (the server regenerated its keys) can never deliver: Apple answers
+ *    403 VapidPkHashMismatch. Both `subscribe()` and the resync compare the subscription's applicationServerKey with
+ *    `meta.vapidPublicKey` and replace a stale subscription (unsubscribe, then subscribe again; no gesture needed once
+ *    permission is granted). Chrome refuses subscribe() with another key while the old subscription exists.
  *
  * The device id returned by the server is stored in localStorage ("pve1-dash.push.device") with the device name.
  */
 import type { PushDevice, PushPrefs } from '../../shared/types';
-import { postPushPrefs, postPushSubscribe, postPushTest, postPushUnsubscribe } from './api';
+import { ApiRequestError, getPushDevice, postPushPrefs, postPushSubscribe, postPushTest, postPushUnsubscribe } from './api';
 import { useAppStore } from './store';
 
 const DEVICE_KEY = 'pve1-dash.push.device';
+/** dispatched on window whenever the stored device changes (Settings listens) */
+export const DEVICE_EVENT = 'pve1-dash:push-device';
 
 export interface StoredDevice {
   id: string;
   name: string;
+  /** set when the server no longer knows this device (removed elsewhere or expired); cleared by subscribe() */
+  lost?: boolean;
 }
 
 export type PushPermission = NotificationPermission | 'unsupported';
@@ -79,7 +90,10 @@ export function getStoredDevice(): StoredDevice | null {
     const raw = localStorage.getItem(DEVICE_KEY);
     if (!raw) return null;
     const v = JSON.parse(raw) as Partial<StoredDevice>;
-    return typeof v.id === 'string' && v.id ? { id: v.id, name: typeof v.name === 'string' ? v.name : '' } : null;
+    if (typeof v.id !== 'string' || !v.id) return null;
+    const d: StoredDevice = { id: v.id, name: typeof v.name === 'string' ? v.name : '' };
+    if (v.lost === true) d.lost = true;
+    return d;
   } catch {
     return null;
   }
@@ -97,6 +111,11 @@ function storeDevice(d: StoredDevice | null): void {
   } catch {
     /* storage unavailable */
   }
+  try {
+    window.dispatchEvent(new Event(DEVICE_EVENT));
+  } catch {
+    /* no window (tests) */
+  }
 }
 
 /** base64url → bytes, for `applicationServerKey`. */
@@ -109,6 +128,47 @@ export function urlBase64ToUint8Array(base64url: string): Uint8Array<ArrayBuffer
   return out;
 }
 
+/**
+ * Was this subscription made with the server's current VAPID public key? `options` is the subscription's
+ * PushSubscriptionOptions. When the browser does not expose it at all we cannot tell and assume yes (no churn); a
+ * subscription without an applicationServerKey (legacy sender id) never matches.
+ */
+export function subscriptionKeyMatches(
+  options: { applicationServerKey?: ArrayBuffer | null } | null | undefined,
+  serverKey: string,
+): boolean {
+  if (!options || !('applicationServerKey' in options)) return true;
+  const raw = options.applicationServerKey;
+  if (!raw) return false;
+  let want: Uint8Array;
+  try {
+    want = urlBase64ToUint8Array(serverKey);
+  } catch {
+    return true; // a malformed server key fails subscribe() anyway; keep what works
+  }
+  const have = new Uint8Array(raw);
+  if (have.length !== want.length) return false;
+  for (let i = 0; i < have.length; i++) if (have[i] !== want[i]) return false;
+  return true;
+}
+
+/**
+ * The browser's push subscription for `serverKey`: the existing one when it was made with that key, otherwise a new one
+ * (a subscription bound to an old key is dropped first: Chrome refuses a second key, and pushes to it fail with 403).
+ */
+async function subscriptionFor(reg: ServiceWorkerRegistration, serverKey: string): Promise<PushSubscription> {
+  const existing = await reg.pushManager.getSubscription();
+  if (existing && subscriptionKeyMatches(existing.options, serverKey)) return existing;
+  if (existing) {
+    try {
+      await existing.unsubscribe();
+    } catch {
+      /* subscribe() below reports a real failure */
+    }
+  }
+  return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(serverKey) });
+}
+
 function vapidKey(): string {
   const key = useAppStore.getState().snapshot?.meta.vapidPublicKey;
   if (!useAppStore.getState().snapshot?.meta.pushEnabled || !key) {
@@ -117,10 +177,26 @@ function vapidKey(): string {
   return key;
 }
 
+/**
+ * The active service worker registration. Waits (up to `timeoutMs`) for registerServiceWorker(), which only registers
+ * after the window's load event, instead of giving up when the app has only just started. null on timeout.
+ */
+export async function readyRegistration(timeoutMs = 10_000): Promise<ServiceWorkerRegistration | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), timeoutMs);
+  });
+  try {
+    return await Promise.race([navigator.serviceWorker.ready, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function registration(): Promise<ServiceWorkerRegistration> {
-  const reg = await navigator.serviceWorker.getRegistration();
+  const reg = await readyRegistration();
   if (!reg) throw new Error('The service worker is not installed yet. Reload the page and try again.');
-  return navigator.serviceWorker.ready;
+  return reg;
 }
 
 /**
@@ -138,9 +214,15 @@ export async function subscribe(name: string, prefs?: Partial<PushPrefs>): Promi
     throw new Error(permission === 'denied' ? 'Notifications are blocked for this site. Allow them in the system settings.' : 'Notification permission was not granted.');
   }
   const reg = await registration();
-  const existing = await reg.pushManager.getSubscription();
-  const sub = existing ?? (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(key) }));
-  const device = await postPushSubscribe({ subscription: sub.toJSON(), name: name.trim() || defaultDeviceName(), prefs });
+  const sub = await subscriptionFor(reg, key);
+  // replacesId: a device the server still knows is updated in place; a removed one is ignored and a new one created
+  const previous = getStoredDevice();
+  const device = await postPushSubscribe({
+    subscription: sub.toJSON(),
+    name: name.trim() || defaultDeviceName(),
+    prefs,
+    ...(previous ? { replacesId: previous.id } : {}),
+  });
   storeDevice({ id: device.id, name: device.name });
   return device;
 }
@@ -178,25 +260,42 @@ export async function updatePrefs(prefs: Partial<PushPrefs>, name?: string, id: 
 }
 
 /**
- * Self-heal on app start (no gesture needed once granted): re-post the current subscription so the server keeps it
- * fresh, or recreate it when Safari silently dropped it. Never throws.
+ * What the self-heal did: `skipped` (nothing to do: no device here, no permission, push off), `ok` (subscription
+ * re-posted, the device updated in place), `removed` (the server no longer knows this device: it was removed from
+ * another device's list or its endpoint expired; it is NOT re-registered and is marked lost), or `error`.
  */
-export async function resyncPushSubscription(): Promise<void> {
+export type ResyncResult = 'skipped' | 'ok' | 'removed' | 'error';
+
+/**
+ * Self-heal (no gesture needed once granted), on app start and when the app becomes visible again: if the server still
+ * knows this device, re-post its subscription (replacing one bound to an old VAPID key, or recreating one the browser
+ * dropped) so the server updates the device in place. Never re-creates a device the server removed. Never throws.
+ */
+export async function resyncPushSubscription(): Promise<ResyncResult> {
   try {
     const stored = getStoredDevice();
-    if (!stored || !isPushSupported() || Notification.permission !== 'granted') return;
+    if (!stored || !isPushSupported() || Notification.permission !== 'granted') return 'skipped';
     const meta = useAppStore.getState().snapshot?.meta;
-    if (!meta?.pushEnabled || !meta.vapidPublicKey) return;
-    const reg = await navigator.serviceWorker.getRegistration();
-    if (!reg) return;
-    await navigator.serviceWorker.ready;
-    const sub =
-      (await reg.pushManager.getSubscription()) ??
-      (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(meta.vapidPublicKey) }));
-    const device = await postPushSubscribe({ subscription: sub.toJSON(), name: stored.name || defaultDeviceName() });
+    if (!meta?.pushEnabled || !meta.vapidPublicKey) return 'skipped';
+    const reg = await readyRegistration();
+    if (!reg) return 'skipped';
+    let known: PushDevice;
+    try {
+      known = await getPushDevice(stored.id);
+    } catch (err) {
+      if (err instanceof ApiRequestError && (err.status === 404 || err.status === 410)) {
+        if (stored.lost) return 'skipped'; // already reported
+        storeDevice({ ...stored, lost: true });
+        return 'removed';
+      }
+      return 'error';
+    }
+    const sub = await subscriptionFor(reg, meta.vapidPublicKey);
+    const device = await postPushSubscribe({ subscription: sub.toJSON(), name: known.name || stored.name || defaultDeviceName(), replacesId: stored.id });
     storeDevice({ id: device.id, name: device.name });
+    return 'ok';
   } catch {
-    /* best effort; Settings shows the real state */
+    return 'error'; // best effort; Settings shows the real state
   }
 }
 

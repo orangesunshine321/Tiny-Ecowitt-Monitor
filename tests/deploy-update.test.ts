@@ -4,7 +4,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, writeFileSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FIXTURES, makeSandbox, ROOT, type Sandbox } from './fixtures/deploy/sandbox.js';
@@ -137,5 +137,109 @@ describe('script entry', () => {
     const r = spawnSync('bash', [join(ROOT, SCRIPT), '--nope'], { encoding: 'utf8' });
     expect(r.status).toBe(1);
     expect(r.stderr).toContain('unknown option');
+  });
+});
+
+describe('install_node: a failed Node.js update never breaks the working one', () => {
+  const ARCH = process.arch === 'arm64' ? 'arm64' : 'x64';
+  const OLD = 'v24.0.0';
+  const NEW = 'v24.1.0';
+
+  /** /opt and /usr/local/bin inside the sandbox, with a working Node.js "v24.0.0" (a script printing its version). */
+  function setup() {
+    const root = join(sb.dir, 'opt');
+    const bin = join(sb.dir, 'bin-links');
+    mkdirSync(join(root, `node-${OLD}-linux-${ARCH}`, 'bin'), { recursive: true });
+    mkdirSync(bin);
+    const oldNode = join(root, `node-${OLD}-linux-${ARCH}`, 'bin', 'node');
+    writeFileSync(oldNode, `#!/bin/sh\necho ${OLD}\n`);
+    chmodSync(oldNode, 0o755);
+    symlinkSync(join(root, `node-${OLD}-linux-${ARCH}`), join(root, 'node'));
+    symlinkSync(join(root, 'node', 'bin', 'node'), join(bin, 'node'));
+    return { root, bin };
+  }
+
+  /** A nodejs.org-like dist directory with SHASUMS256.txt; MANGLE can damage the tarball (its checksum still matches). */
+  function dist(printed: string, mangle?: (buf: Buffer) => Buffer) {
+    const name = `node-${NEW}-linux-${ARCH}`;
+    const stage = join(sb.dir, 'stage', name, 'bin');
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, 'node'), `#!/bin/sh\necho ${printed}\n`);
+    chmodSync(join(stage, 'node'), 0o755);
+    // some bulk so a truncated archive fails half-way through
+    writeFileSync(join(stage, 'big'), Buffer.alloc(256 * 1024, 7));
+    const dir = join(sb.dir, 'dist', 'latest-v24.x');
+    mkdirSync(dir, { recursive: true });
+    const tarball = join(dir, `${name}.tar.xz`);
+    const t = spawnSync('tar', ['-cJf', tarball, '-C', join(sb.dir, 'stage'), name], { encoding: 'utf8' });
+    expect(t.status, t.stderr).toBe(0);
+    let buf: Buffer = readFileSync(tarball);
+    if (mangle) buf = mangle(buf);
+    writeFileSync(tarball, buf);
+    writeFileSync(join(dir, 'SHASUMS256.txt'), `${createHash('sha256').update(buf).digest('hex')}  ${name}.tar.xz\n`);
+    return `file://${join(sb.dir, 'dist')}`;
+  }
+
+  const env = (root: string, bin: string, distUrl: string) => ({ PVE1_DASH_NODE_ROOT: root, PVE1_DASH_BIN_DIR: bin, PVE1_DASH_NODE_DIST: distUrl });
+  const version = (bin: string) => spawnSync(join(bin, 'node'), ['--version'], { encoding: 'utf8' }).stdout.trim();
+
+  it('switches to the new version and only then removes the old one', () => {
+    const { root, bin } = setup();
+    const r = sb.bash(SCRIPT, 'install_node', { env: env(root, bin, dist(NEW)) });
+    expect(r.status, r.stderr).toBe(0);
+    expect(version(bin)).toBe(NEW);
+    expect(readlinkSync(join(root, 'node'))).toBe(join(root, `node-${NEW}-linux-${ARCH}`));
+    expect(existsSync(join(root, `node-${OLD}-linux-${ARCH}`))).toBe(false);
+  });
+
+  it('keeps the working Node.js when unpacking fails half-way (disk full), and the update goes on', () => {
+    const { root, bin } = setup();
+    const url = dist(NEW, (buf) => buf.subarray(0, Math.floor(buf.length / 2)));
+    const direct = sb.bash(SCRIPT, 'rc=0; (install_node) || rc=$?; echo "rc=$rc"', { env: env(root, bin, url) });
+    expect(direct.stdout).toContain('rc=1');
+    expect(direct.stderr).toContain('could not unpack');
+    expect(direct.stdout + direct.stderr).not.toContain('installed');
+    expect(version(bin)).toBe(OLD);
+    expect(readlinkSync(join(root, 'node'))).toBe(join(root, `node-${OLD}-linux-${ARCH}`));
+    expect(existsSync(join(root, `node-${NEW}-linux-${ARCH}`))).toBe(false);
+    expect(existsSync(join(root, `node-${NEW}-linux-${ARCH}.tmp`))).toBe(false);
+    const wrapped = sb.bash(SCRIPT, 'try_update_node; echo "rc=$?"', { env: env(root, bin, url) });
+    expect(wrapped.stdout).toContain('rc=0');
+    expect(wrapped.stderr).toContain(`keeping ${OLD}`);
+    expect(version(bin)).toBe(OLD);
+  });
+
+  it('keeps the working Node.js when the new one does not run', () => {
+    const { root, bin } = setup();
+    const r = sb.bash(SCRIPT, 'rc=0; (install_node) || rc=$?; echo "rc=$rc"', { env: env(root, bin, dist('Segmentation fault')) });
+    expect(r.stdout).toContain('rc=1');
+    expect(r.stderr).toContain('does not run');
+    expect(version(bin)).toBe(OLD);
+    expect(existsSync(join(root, `node-${OLD}-linux-${ARCH}`))).toBe(true);
+  });
+});
+
+describe('health check address', () => {
+  it('probes loopback for a wildcard listen address and the address itself otherwise', () => {
+    const url = (host: string, port = '8080') => sb.call(SCRIPT, 'health_url', [host, port]).stdout;
+    expect(url('0.0.0.0')).toBe('http://127.0.0.1:8080/healthz\n');
+    expect(url('::')).toBe('http://127.0.0.1:8080/healthz\n');
+    expect(url('')).toBe('http://127.0.0.1:8080/healthz\n');
+    expect(url('192.168.1.60', '8081')).toBe('http://192.168.1.60:8081/healthz\n');
+    expect(url('fd00::60')).toBe('http://[fd00::60]:8080/healthz\n');
+  });
+
+  it('reads listen.host and listen.port from the config with the release\'s yaml package', () => {
+    const cfg = sb.put('config.yaml', 'listen:\n  host: 192.168.1.60   # LAN only\n  port: 8081\n');
+    expect(sb.call(SCRIPT, 'config_listen', [cfg, ROOT]).stdout).toBe('192.168.1.60 8081\n');
+    const none = sb.put('none.yaml', 'title: pve1\n');
+    expect(sb.call(SCRIPT, 'config_listen', [none, ROOT]).stdout).toBe(' \n');
+    expect(sb.call(SCRIPT, 'config_listen', [cfg, join(sb.dir, 'no-app')]).stdout).toBe('');
+  });
+
+  it('falls back to 0.0.0.0:8080 without a config', () => {
+    const r = sb.call(SCRIPT, 'listen_endpoint');
+    expect(r.status, r.stderr).toBe(0);
+    if (!existsSync('/etc/pve1-dash/config.yaml')) expect(r.stdout).toBe('0.0.0.0 8080\n');
   });
 });

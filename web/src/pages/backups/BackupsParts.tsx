@@ -86,13 +86,13 @@ export function SummaryCard({ summary, staleDays, next, newest, archives, totalS
       <StatRow className="bk-summary-stats">
         <Stat
           label="Next run"
-          value={next ? <RelativeTime time={next.time} format="short" /> : 'None'}
+          value={next ? <RelativeTime time={next.time} /> : 'None'}
           caption={next ? `${next.job.comment || next.job.id} · ${formatDateTime(next.time)}` : 'No enabled job is scheduled'}
           title={next ? formatFullDateTime(next.time) : undefined}
         />
         <Stat
           label="Latest backup"
-          value={newest ? <RelativeTime time={newest.ctime} format="short" /> : 'None'}
+          value={newest ? <RelativeTime time={newest.ctime} /> : 'None'}
           caption={newest ? `${typeNoun(newest.guestType)} ${newest.vmid} · ${newest.storage}` : undefined}
         />
         <Stat

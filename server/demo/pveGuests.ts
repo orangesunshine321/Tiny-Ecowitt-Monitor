@@ -3,7 +3,7 @@
  * and guest RRD data. Field names, types and presence follow docs/research/pve-api-guests.md.
  */
 import type { DemoGuest } from './world.js';
-import { MiB, between, hashInt, round, type DemoSim } from './sim.js';
+import { EDGE_PAUSED_VMID, MiB, between, hashInt, round, type DemoSim } from './sim.js';
 import { usesOvmf } from './history.js';
 import { guestInterfaces, guestOs, LAN_GATEWAY, LAN_PREFIX } from './guestFacts.js';
 import {
@@ -67,8 +67,13 @@ function description(g: DemoGuest): string | undefined {
   return g.description ? `${g.description}\n` : undefined;
 }
 
-export function qemuConfig(g: DemoGuest, anchorMs: number): Obj {
+/**
+ * GET /nodes/{node}/qemu/{vmid}/config. `pending`: merge the pending (not yet applied) changes, which PVE does unless
+ * `current=1` is passed (pve-api-guests.md §3). Only the edge-case world has a pending change (VM 105: memory).
+ */
+export function qemuConfig(g: DemoGuest, anchorMs: number, opts: { pending?: boolean } = {}): Obj {
   const vmid = g.vmid;
+  const pendingMemory = opts.pending && vmid === EDGE_PAUSED_VMID ? String(g.memoryMiB + 4096) : undefined;
   const disk = g.template ? `${g.storage}:base-${vmid}-disk-0` : `${g.storage}:vm-${vmid}-disk-1`;
   const tag = g.vlan ? `,tag=${g.vlan}` : '';
   const cfg: Obj = {
@@ -83,7 +88,7 @@ export function qemuConfig(g: DemoGuest, anchorMs: number): Obj {
     ide2: g.template ? `${g.storage}:vm-${vmid}-cloudinit,media=cdrom` : g.ostype.startsWith('win') ? 'none,media=cdrom' : undefined,
     ipconfig0: g.template ? 'ip=dhcp' : undefined,
     machine: g.ostype.startsWith('win') ? 'pc-q35-9.2+pve1' : usesOvmf(g) ? 'q35' : undefined,
-    memory: String(g.memoryMiB),
+    memory: pendingMemory ?? String(g.memoryMiB),
     meta: `creation-qemu=${g.template ? '9.0.2' : '9.2.0'},ctime=${Math.floor(anchorMs / 1000) - 86_400 * (420 - (vmid % 100) * 9)}`,
     name: g.name,
     net0: `virtio=${g.mac},bridge=vmbr0,firewall=1${tag}`,
@@ -184,7 +189,10 @@ function pressureFields(sim: DemoSim, g: DemoGuest, t: number, asString: boolean
  * `current` adds the keys only status/current returns (ha, agent, clipboard).
  */
 export function qemuStatus(sim: DemoSim, g: DemoGuest, t: number, opts: { full: boolean; current: boolean }): Obj {
+  // `status` is the process state (a paused VM is "running"); only `qmpstatus` (full) has the QMP run state
   const running = sim.isRunning(g);
+  const runState = sim.runState(g, t);
+  const active = runState === 'running';
   const maxmem = sim.guestMaxMem(g);
   const counters = sim.guestCounters(g, t);
   const balloon = balloonMiB(g);
@@ -195,7 +203,7 @@ export function qemuStatus(sim: DemoSim, g: DemoGuest, t: number, opts: { full: 
     pid: running ? guestPid(g, sim) : undefined,
     uptime: sim.guestUptime(g, t),
     cpus: g.cores,
-    cpu: running ? round(sim.guestCpu(g, t), 6) : 0,
+    cpu: active ? round(sim.guestCpu(g, t), 6) : 0,
     maxmem,
     mem: sim.guestMem(g, t),
     memhost: sim.guestMemHost(g, t),
@@ -211,7 +219,7 @@ export function qemuStatus(sim: DemoSim, g: DemoGuest, t: number, opts: { full: 
   };
   if (running) Object.assign(o, pressureFields(sim, g, t, false));
   if (opts.full) {
-    o.qmpstatus = running ? 'running' : 'stopped';
+    o.qmpstatus = runState;
     if (running) {
       const mem = sim.guestMem(g, t);
       const freemem = maxmem - mem;
@@ -331,7 +339,8 @@ export function lxcStatus(sim: DemoSim, g: DemoGuest, t: number, opts: { current
 
 /** `/cluster/resources` entry for a guest (values from the last ~10 s pvestatd broadcast). */
 export function guestResource(sim: DemoSim, g: DemoGuest, t: number): Obj {
-  const running = sim.isRunning(g);
+  // qemu: the QMP run state (pvestatd stores qmpstatus || status, pve-api-guests.md §7)
+  const runState = sim.runState(g, t);
   const counters = sim.guestCounters(g, t);
   return strip({
     id: `${g.type}/${g.vmid}`,
@@ -339,11 +348,11 @@ export function guestResource(sim: DemoSim, g: DemoGuest, t: number): Obj {
     vmid: g.vmid,
     node: NODE,
     name: g.name,
-    status: running ? 'running' : 'stopped',
+    status: runState,
     template: g.template ? 1 : 0,
     uptime: sim.guestUptime(g, t),
     maxcpu: g.cores,
-    cpu: running ? round(sim.guestCpu(g, t), 6) : 0,
+    cpu: runState === 'running' ? round(sim.guestCpu(g, t), 6) : 0,
     maxmem: sim.guestMaxMem(g),
     mem: sim.guestMem(g, t),
     // PVE 9: present on both types, always 0 for LXC (pvestatd writes U for containers)
@@ -387,10 +396,11 @@ export function lxcInterfaces(sim: DemoSim, g: DemoGuest): unknown {
  * no `agent` key → "No QEMU guest agent configured"; stopped → "VM <vmid> is not running";
  * `agent: 0` (no agent channel) → guest-ping fails → "QEMU guest agent is not running".
  */
-function assertAgent(sim: DemoSim, g: DemoGuest): void {
+function assertAgent(sim: DemoSim, g: DemoGuest, t: number): void {
   if (agentConfig(g) === undefined) throw new PveHttpError(500, 'No QEMU guest agent configured');
   if (!sim.isRunning(g)) throw new PveHttpError(500, `VM ${g.vmid} is not running`);
-  if (!agentEnabled(g)) throw new PveHttpError(500, 'QEMU guest agent is not running');
+  // a paused VM's agent cannot answer guest-ping either
+  if (!agentEnabled(g) || sim.runState(g, t) !== 'running') throw new PveHttpError(500, 'QEMU guest agent is not running');
 }
 
 const AGENT_GET = ['get-fsinfo', 'get-host-name', 'get-memory-block-info', 'get-memory-blocks', 'get-osinfo', 'get-time', 'get-timezone', 'get-users', 'get-vcpus', 'info', 'network-get-interfaces'];
@@ -398,7 +408,7 @@ const AGENT_GET = ['get-fsinfo', 'get-host-name', 'get-memory-block-info', 'get-
 /** GET /nodes/{node}/qemu/{vmid}/agent/{command} → { result } */
 export function agentCommand(sim: DemoSim, g: DemoGuest, command: string, t: number): unknown {
   if (!AGENT_GET.includes(command)) throw new PveHttpError(501, `Method 'GET /nodes/${NODE}/qemu/${g.vmid}/agent/${command}' not implemented`);
-  assertAgent(sim, g);
+  assertAgent(sim, g, t);
   switch (command) {
     case 'network-get-interfaces':
       return { result: agentInterfaces(sim, g, t) };
@@ -485,10 +495,12 @@ export function guestRrd(sim: DemoSim, g: DemoGuest, timeframe: Timeframe, cf: '
     cf,
     (tMs) => {
       if (!sim.guestUpAt(g, tMs) || rrdDropout(tMs, g.vmid)) return null;
-      const r = sim.guestRates(g, tMs);
+      // edge cases: while paused the process keeps its memory, but no CPU or I/O happens
+      const paused = sim.runState(g, tMs) === 'paused';
+      const r = paused ? { netIn: 0, netOut: 0, diskRead: 0, diskWrite: 0 } : sim.guestRates(g, tMs);
       const p = sim.guestPressure(g, tMs);
       const row: RrdRow = {
-        cpu: sim.guestCpu(g, tMs),
+        cpu: paused ? 0 : sim.guestCpu(g, tMs),
         mem: sim.guestMem(g, tMs),
         netin: r.netIn,
         netout: r.netOut,

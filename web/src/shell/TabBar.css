@@ -56,10 +56,13 @@
   position: relative;
   display: inline-flex;
 }
+/* the bubble starts just inside the glyph's trailing edge and sits above it (as on iOS), so it never covers the third
+   dot of the More ellipsis or most of the Services grid */
 .shell-tab .shell-badge[data-variant='dot'] {
   display: block;
-  top: -4px;
-  right: -10px;
+  top: -7px;
+  right: auto;
+  left: calc(100% - 4px);
 }
 .shell-more-node {
   display: flex;

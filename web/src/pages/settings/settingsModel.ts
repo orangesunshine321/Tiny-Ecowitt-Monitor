@@ -25,6 +25,8 @@ export interface PushStateInput {
   permission: NotificationPermission | 'unsupported';
   /** device id stored in this browser */
   storedId: string | null;
+  /** the app's self-heal found that the server no longer knows the stored device */
+  storedLost?: boolean;
   /** the server's device list, undefined while loading or when it failed */
   devices: readonly PushDevice[] | undefined;
 }
@@ -35,7 +37,7 @@ export function pushUiState(i: PushStateInput): PushUiState {
   if (!i.supported || i.permission === 'unsupported') return 'unsupported';
   if (i.permission === 'denied') return 'denied';
   if (!i.storedId || i.permission !== 'granted') return 'off';
-  if (i.devices && !i.devices.some((d) => d.id === i.storedId)) return 'lost';
+  if (i.devices ? !i.devices.some((d) => d.id === i.storedId) : i.storedLost) return 'lost';
   return 'on';
 }
 

@@ -1,16 +1,23 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConfigSchema } from '../server/config.js';
 import type { AppContext, HealthCheckResult, HealthCheckTarget, Logger } from '../server/context.js';
-import { createHealthService } from '../server/health/index.js';
+import { createHealthService, ROUND_PUBLISH_INTERVAL_MS } from '../server/health/index.js';
 import { Store } from '../server/state.js';
 import type { Guest, GuestInventory, ServiceEntry } from '../shared/types.js';
 
 const silent: Logger = { debug() {}, info() {}, warn() {}, error() {}, child: () => silent };
 
-function makeCtx(dataDir: string): AppContext {
+const DEFAULT_ITEMS = [
+  { name: 'Proxmox VE', url: 'https://10.10.20.10:8006' },
+  { name: 'Home Assistant', url: 'http://10.10.20.20:8123', vmid: 100 },
+  { name: 'Unbound', check: 'tcp://10.10.20.2:5335' },
+  { name: 'Docs', url: 'https://docs.example.com', check: 'none' },
+];
+
+function makeCtx(dataDir: string, items: unknown[] = DEFAULT_ITEMS, log: Logger = silent): AppContext {
   const config = ConfigSchema.parse({
     proxmox: { url: 'https://10.10.20.10:8006', tokenId: 'dash@pve!ro', tokenSecret: 'x' },
     dataDir,
@@ -18,12 +25,7 @@ function makeCtx(dataDir: string): AppContext {
       checkInterval: 30,
       afterFailures: 2,
       slowMs: 1000,
-      items: [
-        { name: 'Proxmox VE', url: 'https://10.10.20.10:8006' },
-        { name: 'Home Assistant', url: 'http://10.10.20.20:8123', vmid: 100 },
-        { name: 'Unbound', check: 'tcp://10.10.20.2:5335' },
-        { name: 'Docs', url: 'https://docs.example.com', check: 'none' },
-      ],
+      items,
     },
   });
   const store = new Store(
@@ -39,7 +41,7 @@ function makeCtx(dataDir: string): AppContext {
     },
     'pve1',
   );
-  return { config, store, log: silent, dataDir, appVersion: 'test' };
+  return { config, store, log, dataDir, appVersion: 'test' };
 }
 
 function guest(vmid: number, name: string, ip: string, extra: Partial<Guest> = {}): Guest {
@@ -142,7 +144,7 @@ describe('HealthService', () => {
     expect(s.get('proxmox-ve')).toMatchObject({ status: 'up', latencyMs: 40, uptime24h: 1 });
     expect(s.get('home-assistant')).toMatchObject({ status: 'slow', guestName: 'haos' });
     expect(s.get('unbound')).toMatchObject({ status: 'unknown', message: 'ECONNREFUSED', uptime24h: 0 });
-    expect(s.get('docker-102-jellyfin')).toMatchObject({ status: 'up', source: 'docker', group: 'Media', vmid: 102 });
+    expect(s.get('docker-102-jellyfin')).toMatchObject({ status: 'up', source: 'docker', group: 'docker-media', vmid: 102 });
     expect(ctx.store.collectorStatus().find((c) => c.name === 'health')?.intervalSec).toBe(30);
 
     // second round: unbound reaches afterFailures → down
@@ -242,5 +244,69 @@ describe('HealthService', () => {
     await vi.advanceTimersByTimeAsync(3000);
     expect(byId(ctx2.store).get('unbound')).toMatchObject({ status: 'down', lastChange: downSince });
     svc2.stop();
+  });
+
+  it('publishes the services section a bounded number of times per round, not once per result', async () => {
+    // 60 services with 20-200 ms latency: a round takes a couple of seconds with 8 checks in flight
+    const items = Array.from({ length: 60 }, (_, i) => ({ name: `svc ${i}`, url: `http://10.10.21.${i + 1}:8080` }));
+    const ctx = makeCtx(dataDir, items);
+    const latency = (i: number) => 20 + ((i * 37) % 180);
+    const checker = (t: HealthCheckTarget) =>
+      new Promise<HealthCheckResult>((resolve) => {
+        const i = Number(/10\.10\.21\.(\d+)/.exec(t.target)![1]) - 1;
+        setTimeout(() => resolve({ ok: true, ms: latency(i) }), latency(i));
+      });
+    let patches = 0;
+    ctx.store.on('patch', (key) => {
+      if (key === 'services') patches++;
+    });
+    const svc = createHealthService(ctx, { checker });
+    svc.start();
+    patches = 0; // the initial "unknown" list
+    await vi.advanceTimersByTimeAsync(2500 + 20_000);
+    const s = byId(ctx.store);
+    expect([...s.values()].every((e) => e.status === 'up')).toBe(true);
+    // the round lasts well under ROUND_PUBLISH_INTERVAL_MS: one publish at its end (a 200 ms debounce gave ~10)
+    expect(patches).toBeLessThanOrEqual(2);
+    expect(ROUND_PUBLISH_INTERVAL_MS).toBeGreaterThanOrEqual(2000);
+    svc.stop();
+  });
+
+  it('a slow round still publishes progress every few seconds', async () => {
+    const items = Array.from({ length: 16 }, (_, i) => ({ name: `svc ${i}`, url: `http://10.10.21.${i + 1}:8080` }));
+    const ctx = makeCtx(dataDir, items);
+    // each check takes 3 s: two waves of 8, about 6 s for the round
+    const checker = () => new Promise<HealthCheckResult>((resolve) => setTimeout(() => resolve({ ok: true, ms: 3000 }), 3000));
+    const times: number[] = [];
+    ctx.store.on('patch', (key) => {
+      if (key === 'services') times.push(Date.now());
+    });
+    const svc = createHealthService(ctx, { checker });
+    svc.start();
+    times.length = 0;
+    await vi.advanceTimersByTimeAsync(2500 + 7000);
+    expect(times.length).toBeGreaterThanOrEqual(2); // mid-round progress + end of round
+    expect(times.length).toBeLessThanOrEqual(3);
+    for (let i = 1; i < times.length; i++) expect(times[i]! - times[i - 1]!).toBeGreaterThanOrEqual(200);
+    svc.stop();
+  });
+
+  it('a failing health.json write is logged and retried, never thrown from the timer', async () => {
+    const blocker = join(dataDir, 'not-a-dir');
+    writeFileSync(blocker, 'x');
+    const warnings: string[] = [];
+    const log: Logger = { debug() {}, info() {}, warn: (m) => warnings.push(m), error: (m) => warnings.push(m), child: () => log };
+    const ctx = makeCtx(join(blocker, 'data'), DEFAULT_ITEMS, log); // mkdir under a regular file fails (ENOTDIR)
+    const { fn } = fakeChecker({ 'https://10.10.20.10:8006/': { ok: true, ms: 40 } });
+    const svc = createHealthService(ctx, { checker: fn });
+    svc.start();
+    // first round schedules the 5-minute save; the timer write fails, is logged, and is retried 5 minutes later
+    await vi.advanceTimersByTimeAsync(3000 + 5 * 60_000 + 1000);
+    expect(warnings.filter((w) => w.includes('could not save health state'))).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(warnings.filter((w) => w.includes('could not save health state')).length).toBeGreaterThanOrEqual(2);
+    expect(byId(ctx.store).get('proxmox-ve')!.status).toBe('up'); // still running
+    svc.stop(); // the final flush fails too, and is caught
+    expect(warnings.some((w) => w.includes('could not save health state'))).toBe(true);
   });
 });

@@ -382,7 +382,7 @@ a.svc-tile:hover .svc-tile-out {
   min-height: 16px;
   font-size: var(--fs-caption);
   line-height: 16px;
-  color: var(--label-3);
+  color: var(--label-2);
   font-variant-numeric: tabular-nums;
 }
 .svc-strip-readout {

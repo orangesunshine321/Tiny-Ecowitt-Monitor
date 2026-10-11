@@ -57,6 +57,8 @@ export interface CollectorDeps {
   nodeState: NodeState;
   guestState: GuestState;
   log: Logger;
+  /** clock for the SMART cadence and the backups startup grace (tests); default Date.now */
+  now?: () => number;
 }
 
 /** After a 403 from the guest-agent endpoints (PVE 8 requires VM.Monitor, which we deliberately do not request). */
@@ -66,6 +68,19 @@ const AGENT_VM_BACKOFF_MS = 5 * 60_000;
 /** After /lxc/{vmid}/interfaces is missing (PVE < 8.1). */
 const LXC_IFACES_BACKOFF_MS = 60 * 60_000;
 const DETAILS_CONCURRENCY = 4;
+/**
+ * disks/list runs `smartctl -H` on every disk unless `skipsmart=1`, which wakes spun-down HDDs (smartctl's default
+ * ignores the power mode). The disk inventory is polled with skipsmart=1; health and wear are re-read from a full
+ * listing only this often (or at polling.disks, if that is longer), and at once when an unknown disk shows up.
+ */
+export const SMART_REFRESH_MS = 6 * 3600_000;
+/**
+ * For this long after the first backups poll, a listing that misses an enabled backup storage we have never listed
+ * (PBS still booting after a host restart, NFS share not mounted yet) is not published: publishing it would show every
+ * guest backed up only there as "never backed up" and raise false stale alerts. After that, partial data is published
+ * with a warning.
+ */
+export const BACKUP_STARTUP_GRACE_MS = 15 * 60_000;
 
 export function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -88,8 +103,14 @@ function summarize(problems: string[], max = 4): string {
   return problems.length > max ? `${shown}; +${problems.length - max} more` : shown;
 }
 
+/** Identity of a disks/list row across listings (devpath can move after a reboot; serial may be "unknown"). */
+function diskKey(r: Record<string, unknown>): string {
+  return `${str(r.devpath) ?? ''}|${str(r.serial) ?? ''}`;
+}
+
 export function createCollectors(d: CollectorDeps): CollectorSpec[] {
   const { ctx, client, hostHelper, nodeState, guestState, log } = d;
+  const clock = d.now ?? Date.now;
   const { store } = ctx;
   const node = ctx.config.proxmox.node;
   const polling = ctx.config.polling;
@@ -101,9 +122,13 @@ export function createCollectors(d: CollectorDeps): CollectorSpec[] {
   const agentSkipUntil = new Map<number, number>();
   let lxcIfacesUnsupportedUntil = 0;
   let zfsMissingLogged = false;
-  // Last good per-storage backup listings, kept when one storage fails transiently (e.g. PBS unreachable).
+  // Last good per-storage backup listings, kept when one storage fails transiently or is inactive (e.g. PBS
+  // unreachable). Entries live as long as the storage is still configured for backups on this node.
   let lastItemsByStorage = new Map<string, { items: BackupItem[]; via: 'ssh' | 'prunebackups' }>();
   let lastNotBackedUp: Set<number> | undefined;
+  let backupsFirstRunAt: number | undefined;
+  // Health/wear of the last full (SMART) disks/list, keyed by diskKey().
+  let smart: { at: number; byKey: Map<string, { health: unknown; wearout: unknown }> } | undefined;
 
   /** vm entries on this node: from the latest status poll, or fetched when the status poll has not succeeded yet. */
   async function currentVms(signal: AbortSignal): Promise<Record<string, unknown>[]> {
@@ -175,7 +200,9 @@ export function createCollectors(d: CollectorDeps): CollectorSpec[] {
       const det: GuestDetails = { ...prev.get(vmid) };
 
       try {
-        const raw = await client.get(pvePath`/nodes/${node}/${type}/${vmid}/config`, undefined, { signal });
+        // current=1: the applied config. By default PVE merges pending (not yet applied) changes, which would e.g.
+        // report a guest agent or serial port that only exists after the next restart (pve-api-guests.md §3).
+        const raw = await client.get(pvePath`/nodes/${node}/${type}/${vmid}/config`, { current: 1 }, { signal });
         const parsed = type === 'qemu' ? mapQemuConfig(raw) : mapLxcConfig(raw);
         det.config = parsed.config;
         det.configName = parsed.name;
@@ -289,9 +316,35 @@ export function createCollectors(d: CollectorDeps): CollectorSpec[] {
     }
   }
 
-  async function disks(signal: AbortSignal): Promise<void> {
-    // Runs smartctl per disk on the node (PVE 9: up to 10 s each), so allow a longer timeout.
-    store.set('disks', mapDisks(await client.get(pvePath`/nodes/${node}/disks/list`, undefined, { signal, timeoutMs: slow(60_000) })));
+  async function disks(signal: AbortSignal): Promise<PollOutcome | void> {
+    const path = pvePath`/nodes/${node}/disks/list`;
+    const now = clock();
+    /** skipsmart rows with health/wear from the last SMART listing (UNKNOWN / N/A for disks it did not have) */
+    const withKnownSmart = (rows: Record<string, unknown>[]) => rows.map((r) => ({ ...r, ...smart?.byKey.get(diskKey(r)) }));
+    const smartDue = !smart || now - smart.at >= Math.max(SMART_REFRESH_MS, polling.disks * 1000);
+    if (!smartDue) {
+      // Inventory only: no smartctl, so spun-down disks stay asleep. Health and wear come from the last SMART listing.
+      const rows = records(await client.get(path, { skipsmart: 1 }, { signal }));
+      if (rows.every((r) => smart!.byKey.has(diskKey(r)))) {
+        store.set('disks', mapDisks(withKnownSmart(rows)));
+        return;
+      }
+      // a new or replaced disk: read its health now rather than showing it as unknown for hours
+    }
+    let raw: unknown;
+    try {
+      // Runs smartctl per disk on the node (PVE 9: up to 10 s each; PVE 8 has no limit), so allow a longer timeout.
+      raw = await client.get(path, undefined, { signal, timeoutMs: slow(60_000) });
+    } catch (err) {
+      if (signal.aborted) throw err;
+      // smartctl hanging on one dying disk must not blank the whole disk list: fall back to the inventory without
+      // SMART (and the last known health); the full listing is retried on the next poll.
+      const rows = records(await client.get(path, { skipsmart: 1 }, { signal }));
+      store.set('disks', mapDisks(withKnownSmart(rows)));
+      return { warning: `SMART health not refreshed (${errMessage(err)}); showing the last known values` };
+    }
+    smart = { at: now, byKey: new Map(records(raw).map((r) => [diskKey(r), { health: r.health, wearout: r.wearout }])) };
+    store.set('disks', mapDisks(raw));
   }
 
   async function tasks(signal: AbortSignal): Promise<void> {
@@ -326,24 +379,41 @@ export function createCollectors(d: CollectorDeps): CollectorSpec[] {
   }
 
   async function backups(signal: AbortSignal): Promise<PollOutcome | void> {
+    backupsFirstRunAt ??= clock();
     const storages = records(await client.get(pvePath`/nodes/${node}/storage`, { content: 'backup' }, { signal })).filter(
-      (s) => str(s.storage) && bool(s.active) !== false && bool(s.enabled) !== false,
+      (s) => str(s.storage) && bool(s.enabled) !== false,
     );
     const problems: string[] = [];
     const byStorage = new Map<string, { items: BackupItem[]; via: 'ssh' | 'prunebackups' }>();
+    /** storages with neither a fresh nor a previous listing */
+    const unknown: string[] = [];
+    const keepPrevious = (id: string) => {
+      const previous = lastItemsByStorage.get(id);
+      if (previous) byStorage.set(id, previous); // keep showing the last good listing
+      else unknown.push(id);
+    };
     for (const s of storages) {
       const id = str(s.storage)!;
+      if (bool(s.active) === false) {
+        // PVE reports active=0 when activating the storage or its status() failed: PBS or the NFS server is not
+        // reachable (pve-api-storage.md §1a). Listing it would only fail or hang; its backups have not gone away.
+        problems.push(`${id}: storage is inactive (unreachable?)`);
+        keepPrevious(id);
+        continue;
+      }
       try {
         byStorage.set(id, await listBackupsOf(id, signal));
       } catch (err) {
         if (signal.aborted) throw err;
         problems.push(`${id}: ${errMessage(err)}`);
-        const previous = lastItemsByStorage.get(id);
-        if (previous) byStorage.set(id, previous); // keep showing the last good listing
+        keepPrevious(id);
       }
     }
-    if (storages.length > 0 && problems.length === storages.length && byStorage.size === 0) {
+    if (storages.length > 0 && byStorage.size === 0) {
       throw new Error(`backup listing failed: ${summarize(problems)}`);
+    }
+    if (unknown.length && clock() - backupsFirstRunAt < BACKUP_STARTUP_GRACE_MS) {
+      throw new Error(`backup listing incomplete, not published yet: ${summarize(problems)}`);
     }
     lastItemsByStorage = byStorage;
 
@@ -369,7 +439,7 @@ export function createCollectors(d: CollectorDeps): CollectorSpec[] {
       items,
       notBackedUp: lastNotBackedUp,
       staleDays: ctx.config.alerts.rules.backupStale.days,
-      now: Date.now(),
+      now: clock(),
     });
     store.update('backups', (b) => {
       const next = { ...b, items, coverage };

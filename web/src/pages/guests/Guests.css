@@ -110,13 +110,22 @@
   margin-left: auto;
   gap: 10px;
   font-size: var(--fs-subhead);
-  color: var(--label-2);
+  color: var(--label-2-wp);
 }
 .gx-tagbar {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   margin-bottom: var(--s4);
+}
+/* Medium widths (iPad landscape beside the sidebar, iPad portrait): search, both segmented controls and the Templates
+   switch need ~930px in one row; below that the switch wrapped alone onto a nearly empty row. Give the search field
+   its own full-width row instead, with the controls and the switch together on the next. */
+@container gx (min-width: 640.02px) and (max-width: 929.98px) {
+  .gx-filters-search {
+    flex-basis: 100%;
+    max-width: none;
+  }
 }
 .gx-resultbar {
   display: flex;
@@ -262,13 +271,19 @@
   font-size: var(--fs-footnote);
   line-height: var(--lh-footnote);
 }
+/* Stopped guests show their allocation instead of live meters. In a grid row next to running cards (which are taller)
+   the tiles grow to fill the card and centre their values, instead of leaving an empty band above the footer. */
 .gx-card-alloc {
+  flex: 1 0 auto;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   margin: 0;
 }
 .gx-card-alloc > div {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
   padding: 8px 10px;
   border-radius: 12px;
   background: var(--card-inset);

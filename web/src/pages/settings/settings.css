@@ -325,7 +325,7 @@
 .set-every {
   margin-left: 4px;
   font-size: var(--fs-footnote);
-  color: var(--label-3);
+  color: var(--label-2);
 }
 /* rows with a leading icon keep the iOS inset hairline (it starts after the icon) */
 .set-wrap .ui-list-body > .set-item:has(.set-inline-icon) + .ui-row[data-has-icon]::before {

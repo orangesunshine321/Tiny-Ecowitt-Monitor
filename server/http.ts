@@ -9,6 +9,8 @@
  */
 import { existsSync } from 'node:fs';
 import type { ServerResponse } from 'node:http';
+import { isIP } from 'node:net';
+import { hostname as osHostname } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fastifyStatic from '@fastify/static';
@@ -25,6 +27,7 @@ import type {
   StreamEvent,
   Timeframe,
 } from '../shared/types.js';
+import type { Config } from './config.js';
 import type { AlertService, AppContext, InventoryService, Logger, ProxmoxService, RrdTarget } from './context.js';
 import { renderGuestSetupScript } from './inventory/guestSetup.js';
 import type { Store } from './state.js';
@@ -43,6 +46,12 @@ const SSE_PING_MS = 15_000;
 const SSE_MAX_CLIENTS = 200;
 /** A client whose socket buffer stays full this long is disconnected (it reconnects and gets a fresh snapshot). */
 const SSE_MAX_STALL_MS = 60_000;
+/**
+ * A stream counts as backed up once this much is waiting to be sent. Deliberately far above the socket highWaterMark
+ * (16-64 KiB): one large patch exceeds that even on a healthy connection, and write() then returns false although the
+ * client keeps up.
+ */
+export const SSE_MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 
 const RRD_TTL_HOUR_MS = 30_000;
 const RRD_TTL_OTHER_MS = 5 * 60_000;
@@ -245,7 +254,10 @@ const SubscribeBody = z.object({
   }),
   name: DeviceName.optional(),
   prefs: PrefsPatch.optional(),
+  /** the device id this browser had before (subscription renewed): update that device in place */
+  replacesId: DeviceId.optional(),
 });
+const DeviceParams = z.object({ id: DeviceId });
 const PrefsBody = z.object({ id: DeviceId, prefs: PrefsPatch.optional(), name: DeviceName.optional() });
 const UnsubscribeBody = z
   .object({ id: DeviceId.optional(), endpoint: z.string().min(1).max(2048).optional() })
@@ -295,6 +307,63 @@ function shellError(lines: string[]): string {
     'exit 1',
     '',
   ].join('\n');
+}
+
+// ─────────────────────────────────────────────────────────────── Host allow-list (DNS rebinding)
+
+/** Name suffixes nobody can register in public DNS, so a web page cannot rebind one of them to this server. */
+const PRIVATE_SUFFIXES = ['.lan', '.local', '.home.arpa', '.internal', '.localdomain', '.localhost', '.intranet', '.home', '.corp'];
+
+/** Lower-case host name of a Host header value ("Dash.Lan:8080" → "dash.lan", "[::1]:80" → "::1"); undefined if malformed. */
+export function hostName(hostHeader: string): string | undefined {
+  const h = hostHeader.trim();
+  if (!h || /[\s/@?#\\]/.test(h)) return undefined;
+  try {
+    const name = new URL(`http://${h}`).hostname.toLowerCase();
+    return name.replace(/^\[(.*)\]$/, '$1').replace(/\.$/, '') || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Which Host headers the server answers. There is no login, so a page on any web site could otherwise read the whole
+ * API through DNS rebinding (its own name re-pointed at this server's LAN address). Accepted: IP literals, localhost,
+ * single-label and private-suffix names (.lan, .local, .home.arpa, .internal, ...), the host of publicUrl and
+ * listen.host, this machine's hostname, and config.allowedHosts (exact names, or "*.example.com" / ".example.com"
+ * for subdomains).
+ */
+export function createHostCheck(config: Pick<Config, 'publicUrl' | 'allowedHosts' | 'listen'>, systemHostname = osHostname()): (hostHeader: string | undefined) => boolean {
+  const exact = new Set<string>();
+  const suffixes: string[] = [];
+  const addName = (raw: string | undefined) => {
+    if (!raw) return;
+    const t = raw.trim().toLowerCase();
+    if (t.startsWith('*.') || (t.startsWith('.') && t.length > 1)) {
+      suffixes.push(t.startsWith('*') ? t.slice(1) : t);
+      return;
+    }
+    const name = hostName(t);
+    if (name) exact.add(name);
+  };
+  if (config.publicUrl) {
+    try {
+      addName(new URL(config.publicUrl).host);
+    } catch {
+      /* the schema validated it */
+    }
+  }
+  for (const h of config.allowedHosts ?? []) addName(h);
+  addName(config.listen?.host);
+  addName(systemHostname);
+
+  return (hostHeader) => {
+    if (hostHeader === undefined || hostHeader === '') return true; // HTTP/1.0 tools; browsers always send Host
+    const name = hostName(hostHeader);
+    if (!name) return false;
+    if (isIP(name) || name === 'localhost' || !name.includes('.') || exact.has(name)) return true;
+    return PRIVATE_SUFFIXES.some((s) => name.endsWith(s)) || suffixes.some((s) => name.endsWith(s));
+  };
 }
 
 const PLACEHOLDER_HTML = `<!doctype html>
@@ -529,8 +598,11 @@ class SseHub {
       if (state) c.missed = true;
       return;
     }
-    if (!res.write(data)) {
+    // Judge by what is actually queued, not by write()'s return value (see SSE_MAX_BUFFERED_BYTES). Above the cap the
+    // last write returned false, so 'drain' is pending; a client that never drains is dropped by tick().
+    if (res.writableLength > SSE_MAX_BUFFERED_BYTES) {
       c.stalledSince = Date.now();
+      if (state) c.missed = true;
       res.once('drain', () => {
         c.stalledSince = undefined;
         if (c.missed && this.clients.has(c)) {
@@ -538,7 +610,9 @@ class SseHub {
           this.sendSnapshot(c);
         }
       });
+      return;
     }
+    res.write(data);
   }
 }
 
@@ -582,8 +656,33 @@ export async function createHttpServer(
   });
 
   const hub = new SseHub(store, log, options.ssePingMs ?? SSE_PING_MS);
-  app.addHook('preClose', async () => hub.endAll());
+  /** answers of POST /api/inventory/refresh still waiting for fresh data; released at shutdown */
+  const refreshWaits = new Set<() => void>();
+  app.addHook('preClose', async () => {
+    hub.endAll();
+    // close() waits for in-flight requests: don't let a refresh wait (up to 30 s) outlast the shutdown deadline
+    for (const release of refreshWaits) release();
+    refreshWaits.clear();
+  });
   app.addHook('onClose', async () => hub.dispose());
+
+  // DNS-rebinding protection: refuse requests addressed to a host name this dashboard does not use.
+  const hostAllowed = createHostCheck(config);
+  const warnedHosts = new Set<string>();
+  app.addHook('onRequest', async (request, reply) => {
+    const host = request.headers.host;
+    if (hostAllowed(host) || pathOf(request.url) === '/healthz') return;
+    const shown = shellSafe(String(host)).slice(0, 100);
+    if (warnedHosts.size < 50 && !warnedHosts.has(shown)) {
+      warnedHosts.add(shown);
+      log.warn(`refused a request for host "${shown}"; if that is how you reach the dashboard, add it to allowedHosts (or set publicUrl) in config.yaml`);
+    }
+    reply
+      .code(421)
+      .type('application/json; charset=utf-8')
+      .send({ error: 'Unknown host', detail: `This dashboard does not answer to "${shown}". Add it to allowedHosts (or set publicUrl) in config.yaml.` } satisfies ApiError);
+    return reply;
+  });
 
   app.addHook('onSend', async (request, reply, payload) => {
     for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
@@ -707,10 +806,13 @@ export async function createHttpServer(
     const run = Promise.resolve().then(() => deps.inventory.refresh(vmid));
     run.catch(() => undefined); // still handled below when it settles in time; otherwise the service logs it
     let timer: NodeJS.Timeout | undefined;
+    let release: (() => void) | undefined;
     const waited = new Promise<void>((resolve) => {
+      release = resolve;
       timer = setTimeout(resolve, INVENTORY_REFRESH_WAIT_MS);
       timer.unref?.();
     });
+    refreshWaits.add(release!);
     try {
       await Promise.race([run, waited]);
     } catch (err) {
@@ -721,6 +823,7 @@ export async function createHttpServer(
       throw err;
     } finally {
       clearTimeout(timer);
+      refreshWaits.delete(release!);
     }
     return { ok: true };
   });
@@ -731,13 +834,39 @@ export async function createHttpServer(
 
   app.get('/api/push/devices', async () => push.devices());
 
+  app.get('/api/push/devices/:id', async (request) => {
+    const { id } = parse(DeviceParams, request.params, 'device id');
+    const device = push.device(id);
+    if (!device) throw new HttpError(404, 'unknown device', 'it was removed (or its subscription expired)');
+    return device;
+  });
+
+  /** scheme://host the page runs on: the browser's Origin header, else what the request says (behind the proxy). */
+  const requestOrigin = (request: FastifyRequest): string | undefined => {
+    const fromHeader = typeof request.headers.origin === 'string' ? request.headers.origin : undefined;
+    for (const candidate of [fromHeader, `${request.protocol}://${request.host}`]) {
+      if (!candidate || candidate === 'null') continue;
+      try {
+        const u = new URL(candidate);
+        if ((u.protocol === 'https:' || u.protocol === 'http:') && hostAllowed(u.host)) return u.origin;
+      } catch {
+        /* try the next one */
+      }
+    }
+    return undefined;
+  };
+
   app.post('/api/push/subscribe', async (request) => {
     const body = parse(SubscribeBody, request.body, 'body');
-    return push.subscribe({
+    const input: Parameters<typeof push.subscribe>[0] = {
       subscription: body.subscription,
       name: body.name ?? deviceNameFromUserAgent(request.headers['user-agent']),
       prefs: compactPrefs(body.prefs),
-    });
+    };
+    if (body.replacesId !== undefined) input.replacesId = body.replacesId;
+    const origin = requestOrigin(request);
+    if (origin) input.origin = origin;
+    return push.subscribe(input);
   });
 
   app.post('/api/push/prefs', async (request) => {
@@ -769,7 +898,9 @@ export async function createHttpServer(
         'Run the pve1-dash installer on the dashboard LXC (it creates the key), then fetch this script again.',
       ]);
     }
-    const publicUrl = config.publicUrl ?? `${request.protocol}://${request.host}`;
+    // X-Forwarded-Host is only believed when it names a host this dashboard answers to
+    const host = hostAllowed(request.host) ? request.host : (request.headers.host ?? 'localhost');
+    const publicUrl = config.publicUrl ?? `${request.protocol}://${host}`;
     try {
       const script = renderGuestSetupScript({ publicKey, publicUrl });
       reply.type('text/x-shellscript; charset=utf-8');

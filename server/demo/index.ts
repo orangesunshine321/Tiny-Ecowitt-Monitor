@@ -15,7 +15,10 @@ export { createMockRunner, type MockRunnerOptions } from './mockRunner.js';
 export { createMockChecker, type MockCheckerOptions } from './mockChecker.js';
 
 export async function startDemo(log: Logger): Promise<{ proxmoxUrl: string; runner: CommandRunner; checker: HealthChecker; stop(): Promise<void> }> {
-  const sim = new DemoSim();
+  // PVE1_DASH_DEMO_EDGECASES=1: opt-in rare states (a paused VM, PBS unreachable, a disabled job; see DemoSimOptions)
+  const edgeCases = process.env.PVE1_DASH_DEMO_EDGECASES === '1';
+  const sim = new DemoSim({ edgeCases });
+  if (edgeCases) log.info('demo mode: edge cases enabled (VM 105 paused at :10-:17, PBS unreachable at :40-:49 every hour)');
   const pve = await startMockProxmox({ sim, log: log.child('mock-pve') });
   const runner = createMockRunner({ sim, log: log.child('mock-ssh') });
   const checker = createMockChecker({ sim });

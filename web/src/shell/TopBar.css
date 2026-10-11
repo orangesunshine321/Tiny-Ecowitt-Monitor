@@ -133,11 +133,19 @@
     color: var(--label);
   }
 }
-/* iPhone: the compact title sits centred in the space left between the leading and trailing items */
+/* iPhone: the compact title is centred on the bar (as iOS inline titles are), whatever the leading and trailing items
+   are, so it doesn't jump between pages; it stays clear of the wider of the two and ends in an ellipsis. */
 @media (max-width: 767.98px) {
   .shell-topbar-title {
+    position: absolute;
+    left: 50%;
+    top: calc(var(--topbar-pad-top, 0px) + (var(--topbar-h) - var(--topbar-pad-top, 0px)) / 2);
+    max-width: calc(100% - 2 * (max(var(--toolbar-w, 0px), var(--leading-w, 0px)) + var(--gutter) + var(--s2)));
     text-align: center;
-    padding: 0 4px;
+    transform: translate(-50%, calc(-50% + 6px));
+  }
+  .shell-topbar[data-collapsed] .shell-topbar-title {
+    transform: translate(-50%, -50%);
   }
 }
 @media (prefers-reduced-motion: reduce) {

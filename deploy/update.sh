@@ -38,11 +38,19 @@ die() {
 
 # ───────────────────────────────────────────────────────────────────────── Node.js
 
+# Where Node.js versions and the node/npm links go. The variables exist for tests (tests/deploy-update.test.ts).
+readonly NODE_ROOT=${PVE1_DASH_NODE_ROOT:-/opt}
+readonly BIN_DIR=${PVE1_DASH_BIN_DIR:-/usr/local/bin}
+
 # Node.js <major> LTS from the official tarball, verified against SHASUMS256.txt, unpacked to
 # /opt/node-v<version>-linux-<arch>, with /opt/node pointing at it and node/npm/npx/corepack linked into
 # /usr/local/bin. Does nothing when that version is already active.
+#
+# Every step checks its own result: try_update_node runs this where errexit is off (a failed step there would
+# otherwise go unnoticed). The working version is only touched once the new one is unpacked and runs, and older
+# versions are only deleted after the switch is verified.
 install_node() {
-  local major=${1:-$NODE_MAJOR} dist arch sums line sha file version dest tmp current=''
+  local major=${1:-$NODE_MAJOR} dist arch sums line sha file version dest tmp current='' got prev old
   dist="${PVE1_DASH_NODE_DIST:-https://nodejs.org/dist}/latest-v${major}.x"
   case $(uname -m) in
     x86_64 | amd64) arch=x64 ;;
@@ -55,14 +63,14 @@ install_node() {
   file=${line##* }
   version=${file#node-}
   version=${version%%-linux-*}
-  if [[ -x /opt/node/bin/node ]]; then current=$(/opt/node/bin/node --version 2>/dev/null) || current=''; fi
+  if [[ -x $NODE_ROOT/node/bin/node ]]; then current=$("$NODE_ROOT/node/bin/node" --version 2>/dev/null) || current=''; fi
   if [[ $current == "$version" ]]; then
     ok "Node.js $version is current"
-    link_node_bins
+    link_node_bins || die "could not link node/npm into $BIN_DIR"
     return 0
   fi
   say "installing Node.js $version ($arch) ..."
-  tmp=$(mktemp -d)
+  tmp=$(mktemp -d) || die 'cannot create a temporary directory'
   if ! curl -fsSL --retry 3 --max-time 600 -o "$tmp/$file" "$dist/$file"; then
     rm -rf "$tmp"
     die "cannot download $dist/$file"
@@ -71,29 +79,55 @@ install_node() {
     rm -rf "$tmp"
     die "checksum mismatch for $file (expected $sha from SHASUMS256.txt)"
   fi
-  dest=/opt/${file%.tar.xz}
-  rm -rf "$dest.tmp"
-  mkdir -p "$dest.tmp"
-  tar -xJf "$tmp/$file" -C "$dest.tmp" --strip-components=1 --no-same-owner
-  rm -rf "$tmp" "$dest"
-  mv "$dest.tmp" "$dest"
-  # /opt/node is a symlink to the active version; a real directory there (manual install) is replaced.
-  if [[ -d /opt/node && ! -L /opt/node ]]; then rm -rf /opt/node; fi
-  ln -sfn "$dest" /opt/node
-  link_node_bins
-  # Remove older versions installed by this script.
-  local old
-  for old in /opt/node-v*-linux-*; do
-    if [[ -d $old && $old != "$dest" ]]; then rm -rf "$old"; fi
+  dest=$NODE_ROOT/${file%.tar.xz}
+  if ! { rm -rf "$dest.tmp" && mkdir -p "$dest.tmp"; }; then
+    rm -rf "$tmp"
+    die "cannot create $dest.tmp"
+  fi
+  if ! tar -xJf "$tmp/$file" -C "$dest.tmp" --strip-components=1 --no-same-owner; then
+    rm -rf "$tmp" "$dest.tmp"
+    die "could not unpack $file (disk full?); Node.js was not changed"
+  fi
+  rm -rf "$tmp"
+  got=$("$dest.tmp/bin/node" --version 2>/dev/null) || got=''
+  if [[ $got != "$version" ]]; then
+    rm -rf "$dest.tmp"
+    die "the unpacked Node.js $version does not run (it printed \"$got\"); Node.js was not changed"
+  fi
+  # Switch. /opt/node is a symlink to the active version; a real directory there (manual install) is replaced.
+  prev=$(readlink "$NODE_ROOT/node" 2>/dev/null) || prev=''
+  if ! { rm -rf "$dest" && mv "$dest.tmp" "$dest"; }; then
+    rm -rf "$dest.tmp"
+    die "cannot move the new Node.js to $dest"
+  fi
+  if [[ -d $NODE_ROOT/node && ! -L $NODE_ROOT/node ]]; then rm -rf "$NODE_ROOT/node" || die "cannot replace the directory $NODE_ROOT/node"; fi
+  # A new link renamed over the old one: /opt/node is never missing.
+  if ! { ln -sfn "$dest" "$NODE_ROOT/node.new" && mv -Tf "$NODE_ROOT/node.new" "$NODE_ROOT/node"; }; then
+    die "could not point $NODE_ROOT/node at $dest"
+  fi
+  got=''
+  if link_node_bins; then got=$("$BIN_DIR/node" --version 2>/dev/null) || got=''; fi
+  if [[ $got != "$version" ]]; then
+    if [[ -n $prev && -d $prev ]]; then
+      ln -sfn "$prev" "$NODE_ROOT/node.new" && mv -Tf "$NODE_ROOT/node.new" "$NODE_ROOT/node" && link_node_bins || :
+    fi
+    die "$BIN_DIR/node does not run Node.js $version after the switch (it printed \"$got\")${prev:+; switched back to $prev}"
+  fi
+  # Only now remove older versions installed by this script.
+  for old in "$NODE_ROOT"/node-v*-linux-*; do
+    if [[ -d $old && $old != "$dest" ]]; then rm -rf "$old" || warn "could not remove $old"; fi
   done
-  ok "Node.js $(/usr/local/bin/node --version) installed"
+  ok "Node.js $version installed"
 }
 
-# Keep Node.js current within its major line; a nodejs.org hiccup must not block an app update when Node exists.
+# Keep Node.js current within its major line; a nodejs.org hiccup (or a full disk) must not block an app update when
+# a working Node.js exists.
 try_update_node() {
-  if (install_node); then return 0; fi
-  [[ -x /usr/local/bin/node ]] || die 'Node.js is not installed and could not be downloaded'
-  warn "could not check nodejs.org for a newer Node.js; keeping $(/usr/local/bin/node --version)"
+  local rc=0
+  (install_node) || rc=$?
+  if ((rc == 0)); then return 0; fi
+  [[ -x $BIN_DIR/node ]] || die 'Node.js is not installed and could not be installed'
+  warn "could not install a newer Node.js; keeping $("$BIN_DIR/node" --version 2>/dev/null || echo 'the current one')"
 }
 
 # The "<sha256>  node-v<major>.<minor>.<patch>-linux-<arch>.tar.xz" line from SHASUMS256.txt text.
@@ -105,7 +139,7 @@ node_tarball_line() {
 link_node_bins() {
   local b
   for b in node npm npx corepack; do
-    if [[ -e /opt/node/bin/$b ]]; then ln -sfn "/opt/node/bin/$b" "/usr/local/bin/$b"; fi
+    if [[ -e $NODE_ROOT/node/bin/$b ]]; then ln -sfn "$NODE_ROOT/node/bin/$b" "$BIN_DIR/$b" || return 1; fi
   done
 }
 
@@ -166,24 +200,44 @@ install_system_files() {
 
 # ───────────────────────────────────────────────────────────────────────── service
 
-# listen.port from the config (default 8080). PVE1_DASH_PORT in /etc/pve1-dash/env overrides it, like the server.
-listen_port() {
-  local port=''
+# "<host> <port>" from listen.host / listen.port in config FILE (defaults 0.0.0.0 and 8080), read with the yaml
+# package of the release in APPDIR. Prints nothing when it cannot be read.
+config_listen() {
+  local file=$1 appdir=$2
+  [[ -f $file && -d $appdir/node_modules/yaml ]] || return 0
+  (cd "$appdir" && node -e '
+    const y = require("yaml"), fs = require("fs");
+    const c = y.parse(fs.readFileSync(process.argv[1], "utf8")) || {};
+    const l = (c && typeof c.listen === "object" && c.listen) || {};
+    process.stdout.write(String(l.host || "") + " " + String(l.port || "") + "\n");' "$file" 2>/dev/null) || :
+}
+
+# "<host> <port>" the server listens on. PVE1_DASH_PORT in /etc/pve1-dash/env overrides the port, like the server.
+listen_endpoint() {
+  local host='' port='' cport=''
   if [[ -f $CONF_DIR/env ]]; then port=$(sed -n 's/^PVE1_DASH_PORT=//p' "$CONF_DIR/env" | tr -d "\"' " | tail -n 1); fi
-  if [[ -z $port && -f $CONF_DIR/config.yaml && -d $APP_DIR/node_modules/yaml ]]; then
-    port=$(cd "$APP_DIR" && node -e '
-      const y = require("yaml"), fs = require("fs");
-      const c = y.parse(fs.readFileSync(process.argv[1], "utf8")) || {};
-      process.stdout.write(String((c.listen && c.listen.port) || ""));' "$CONF_DIR/config.yaml" 2>/dev/null) || port=''
-  fi
+  read -r host cport <<<"$(config_listen "$CONF_DIR/config.yaml" "$APP_DIR")" || :
+  port=${port:-$cport}
+  [[ $host =~ ^[A-Za-z0-9.:_-]{1,253}$ ]] || host=0.0.0.0
   [[ $port =~ ^[0-9]{1,5}$ ]] || port=8080
-  printf '%s\n' "$port"
+  printf '%s %s\n' "$host" "$port"
+}
+
+# The /healthz URL for a listen address: a wildcard address is probed on loopback, a specific one (e.g. the
+# container's LAN address) on that address.
+health_url() {
+  local host=$1 port=$2
+  case $host in
+    '' | 0.0.0.0 | '::' | '[::]') host=127.0.0.1 ;;
+  esac
+  if [[ $host == *:* && $host != \[* ]]; then host="[$host]"; fi
+  printf 'http://%s:%s/healthz\n' "$host" "$port"
 }
 
 wait_healthy() {
-  local port=$1 deadline=$((SECONDS + ${2:-60}))
+  local url=$1 deadline=$((SECONDS + ${2:-60}))
   while ((SECONDS < deadline)); do
-    if curl -fsS --max-time 3 "http://127.0.0.1:$port/healthz" 2>/dev/null | grep -q '"ok":true'; then return 0; fi
+    if curl -fsS --max-time 3 "$url" 2>/dev/null | grep -q '"ok":true'; then return 0; fi
     if [[ $(systemctl show -p ActiveState --value "$SERVICE" 2>/dev/null) == failed ]]; then return 1; fi
     sleep 2
   done
@@ -212,13 +266,14 @@ EOF
 
 # (Re)start the service and wait for /healthz; falls back to the compat drop-in on 226/NAMESPACE.
 start_service() {
-  local port
-  port=$(listen_port)
+  local host port url
+  read -r host port <<<"$(listen_endpoint)"
+  url=$(health_url "$host" "$port")
   systemctl enable "$SERVICE" >/dev/null 2>&1 || :
   systemctl reset-failed "$SERVICE" >/dev/null 2>&1 || :
   systemctl restart "$SERVICE" || :
-  if wait_healthy "$port" 60; then
-    ok "service running, http://127.0.0.1:$port/healthz answers"
+  if wait_healthy "$url" 60; then
+    ok "service running, $url answers"
     return 0
   fi
   if [[ $(systemctl show -p ExecMainStatus --value "$SERVICE" 2>/dev/null) == 226 && ! -f $COMPAT_DROPIN ]]; then
@@ -226,12 +281,12 @@ start_service() {
     write_compat_dropin
     systemctl reset-failed "$SERVICE" >/dev/null 2>&1 || :
     systemctl restart "$SERVICE" || :
-    if wait_healthy "$port" 60; then
+    if wait_healthy "$url" 60; then
       ok "service running without the namespace sandbox ($COMPAT_DROPIN)"
       return 0
     fi
   fi
-  warn "the service is not healthy. Last log lines:"
+  warn "the service is not healthy ($url does not answer). Last log lines:"
   journalctl -u "$SERVICE" -n 25 --no-pager >&2 2>/dev/null || :
   return 1
 }

@@ -248,7 +248,9 @@ describe('backups', () => {
       { id: 'backup-pool', type: 'vzdump', schedule: 'sat 01:00', pool: 'prod' },
     ]);
     expect(jobs[0]).toEqual({ id: 'backup-5f2c1a3e-7d1b', enabled: true, selection: 'All guests except 999, 998 (node pve1)', schedule: '02:00', storage: 'pbs-main', mode: 'snapshot', nextRun: 1759802400000, comment: 'nightly to PBS' });
-    expect(jobs[1]).toMatchObject({ enabled: false, selection: '100, 101', nextRun: 1760242500000 });
+    // PVE computes next-run for disabled jobs too, but they never run: no "next run" for them
+    expect(jobs[1]).toMatchObject({ enabled: false, selection: '100, 101', schedule: 'sun 04:15' });
+    expect(jobs[1]!.nextRun).toBeUndefined();
     expect(jobs[2]).toMatchObject({ enabled: true, selection: 'Pool: prod' });
     expect(describeSelection({})).toBe('No guests');
   });

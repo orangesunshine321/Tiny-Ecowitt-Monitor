@@ -31,7 +31,7 @@
   margin-top: 2px;
   font-size: var(--fs-subhead);
   line-height: var(--lh-subhead);
-  color: var(--label-2);
+  color: var(--label-2-wp);
 }
 .ui-pageheader-toolbar {
   display: flex;

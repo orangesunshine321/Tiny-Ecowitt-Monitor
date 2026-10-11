@@ -13,7 +13,9 @@
 title: pve1
 
 # Where the dashboard listens. Keep it on the LAN and put your HTTPS reverse proxy in front
-# (deploy/reverse-proxy/README.md). PVE1_DASH_PORT in the environment overrides the port.
+# (deploy/reverse-proxy/README.md). PVE1_DASH_PORT in the environment overrides the port. host may be the
+# container's own LAN address; pve1-dash-update and the installer then check /healthz on that address (on 127.0.0.1
+# for 0.0.0.0 or ::). Avoid 127.0.0.1 here: the proxy could not reach the dashboard.
 listen:
   host: 0.0.0.0
   port: 8080
@@ -21,6 +23,16 @@ listen:
 # Example. Public HTTPS URL of the dashboard behind your reverse proxy. Needed for notification links (Web Push
 # requires absolute URLs) and for the guest setup command. No default.
 publicUrl: https://dash.home.lan
+
+# Extra host names (as typed in the browser, without port) the dashboard answers to. Requests for other names are
+# refused (HTTP 421), which blocks DNS-rebinding attacks from web pages. Always allowed: IP addresses, localhost,
+# single-label names, .lan/.local/.home.arpa/.internal names and the host of publicUrl. Add your proxy's site name
+# here if it is not publicUrl's host, e.g. ["dash.example.com"].
+allowedHosts: []
+
+# IANA time zone for times in the dashboard and in notifications, e.g. "Europe/Berlin". Default: the TZ environment
+# variable, else the container's system zone (a container created without one is usually UTC, so set yours).
+# timezone: Europe/Berlin
 
 # Where state is kept: VAPID keys and push devices (push.json), alert history (alerts.json) and service uptime
 # history (health.json). The systemd unit creates /var/lib/pve1-dash for the service user.

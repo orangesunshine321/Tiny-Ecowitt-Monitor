@@ -18,6 +18,8 @@ import { createFailureLog } from './hostHelper.js';
 import { cleanMessage, failedInventory, inventoryFromSshResult } from './parse.js';
 
 const PER_VMID_REFRESH_MS = 10_000;
+/** single-guest refreshes running at once (each one is an SSH session to the host helper or a guest) */
+export const MAX_VMID_REFRESH_CONCURRENCY = 2;
 const FULL_REFRESH_MS = 30_000;
 const DIRECT_SSH_CONCURRENCY = 4;
 const DIRECT_SSH_TIMEOUT_MS = 60_000;
@@ -100,6 +102,20 @@ export function createInventoryService(
   let lastFullSweep = 0;
   const lastVmidRefresh = new Map<number, number>();
   const vmidInflight = new Map<number, Promise<void>>();
+  // Global cap on single-guest refreshes: the per-vmid limits alone would allow one SSH session per guest at once.
+  let vmidActive = 0;
+  const vmidWaiting: Array<() => void> = [];
+  async function withRefreshSlot<T>(fn: () => Promise<T>): Promise<T> {
+    if (vmidActive >= MAX_VMID_REFRESH_CONCURRENCY) await new Promise<void>((resolve) => vmidWaiting.push(resolve));
+    else vmidActive++;
+    try {
+      return await fn();
+    } finally {
+      const next = vmidWaiting.shift();
+      if (next) next(); // hand the slot over
+      else vmidActive--;
+    }
+  }
 
   function knownVmids(): Set<number> | null {
     const guests = store.get('guests');
@@ -251,18 +267,25 @@ export function createInventoryService(
         return runSweep();
       }
       if (!Number.isInteger(vmid) || vmid <= 0) return;
-      // Only guests that exist (or are configured for direct SSH): unknown vmids would just cost helper runs.
+      // Only guests that exist (or are configured for direct SSH): unknown vmids would just cost helper runs. While
+      // the guest list is unknown (Proxmox unreachable since startup) only the direct-SSH guests are accepted, so
+      // arbitrary vmids from an unauthenticated client cannot start helper runs or grow the rate-limit map.
+      const isDirect = direct.some((g) => g.vmid === vmid);
       const known = knownVmids();
-      if (known && !known.has(vmid) && !direct.some((g) => g.vmid === vmid)) return;
+      if (!isDirect && (!known || !known.has(vmid))) {
+        log.debug('inventory refresh ignored (unknown guest)', { vmid });
+        return;
+      }
       if (sweepInflight) return sweepInflight; // the running sweep covers this guest
       const pending = vmidInflight.get(vmid);
       if (pending) return pending;
-      if (now - (lastVmidRefresh.get(vmid) ?? 0) < PER_VMID_REFRESH_MS) {
+      for (const [id, at] of lastVmidRefresh) if (now - at >= PER_VMID_REFRESH_MS) lastVmidRefresh.delete(id);
+      if (lastVmidRefresh.has(vmid)) {
         log.debug('inventory refresh skipped (rate limited)', { vmid });
         return;
       }
       lastVmidRefresh.set(vmid, now);
-      const p = refreshOne(vmid)
+      const p = withRefreshSlot(() => refreshOne(vmid))
         .catch((e) => log.warn('inventory refresh failed', { vmid, error: (e as Error).message }))
         .finally(() => vmidInflight.delete(vmid));
       vmidInflight.set(vmid, p);

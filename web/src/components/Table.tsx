@@ -20,6 +20,11 @@ export interface TableColumn<T> {
   wrap?: boolean;
   /** hide on narrow layouts */
   hideBelow?: 'iphone' | 'ipad';
+  /**
+   * On iPhone this column gives up width first: it takes whatever the other columns leave and its text truncates with
+   * an ellipsis, instead of the whole table growing wider than the card (which hid the trailing status column).
+   */
+  shrink?: boolean;
   /** first sort direction when clicked (default: asc for text, desc for numbers) */
   defaultDir?: 'asc' | 'desc';
 }
@@ -64,6 +69,15 @@ export function Table<T>({ columns, rows, rowKey, initialSort, onRowClick, rowHr
   const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' } | null>(initialSort ?? null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [scrollX, setScrollX] = useState(false);
+  // which edges have more content beyond them (drives the fade that shows the table scrolls sideways)
+  const [more, setMore] = useState<{ start: boolean; end: boolean }>({ start: false, end: false });
+  const updateEdges = () => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const start = el.scrollLeft > 1;
+    const end = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+    setMore((m) => (m.start === start && m.end === end ? m : { start, end }));
+  };
 
   // Horizontal overflow needs a scroll container, which would break page-level sticky headers; only add it when needed.
   useLayoutEffect(() => {
@@ -72,6 +86,7 @@ export function Table<T>({ columns, rows, rowKey, initialSort, onRowClick, rowHr
     const check = () => {
       const table = el.firstElementChild as HTMLElement | null;
       if (table) setScrollX(table.scrollWidth > el.clientWidth + 1);
+      updateEdges();
     };
     check();
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(check) : null;
@@ -122,6 +137,9 @@ export function Table<T>({ columns, rows, rowKey, initialSort, onRowClick, rowHr
       ref={wrapRef}
       className={`ui-table-wrap ${className ?? ''}`}
       data-scroll-x={scrollX || undefined}
+      data-more-start={(scrollX && more.start) || undefined}
+      data-more-end={(scrollX && more.end) || undefined}
+      onScroll={scrollX ? updateEdges : undefined}
       data-max-height={maxHeight !== undefined || undefined}
       style={wrapStyle}
       tabIndex={scrollX || maxHeight !== undefined ? 0 : undefined}
@@ -140,6 +158,7 @@ export function Table<T>({ columns, rows, rowKey, initialSort, onRowClick, rowHr
                   scope="col"
                   data-align={c.align}
                   data-hide-below={c.hideBelow}
+                  data-shrink={c.shrink || undefined}
                   style={c.width ? { width: c.width } : undefined}
                   aria-sort={active ? (sort!.dir === 'asc' ? 'ascending' : 'descending') : undefined}
                 >
@@ -179,6 +198,7 @@ export function Table<T>({ columns, rows, rowKey, initialSort, onRowClick, rowHr
                     data-hide-below={c.hideBelow}
                     data-wrap={c.wrap || undefined}
                     data-truncate={c.truncate ? true : undefined}
+                    data-shrink={c.shrink || undefined}
                     style={c.truncate ? ({ '--_max': `${c.truncate}px` } as CSSProperties) : undefined}
                   >
                     {c.cell(row)}

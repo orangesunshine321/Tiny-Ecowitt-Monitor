@@ -49,6 +49,7 @@ const push: PushService = {
   enabled: false,
   publicKey: () => undefined,
   devices: () => [],
+  device: () => undefined,
   subscribe: unused,
   updatePrefs: unused,
   unsubscribe: unused,
@@ -250,6 +251,27 @@ describe('GET /api/stream', () => {
     // ... but the snapshot sent after 'drain' carries the latest state.
     expect(snap.data.network[0]!.iface).toBe('vmbr63');
   }, 20_000);
+
+  it('a healthy client gets large patches and the patch right after them, without a resent snapshot', async () => {
+    const ctx = makeCtx();
+    const port = await start(ctx);
+    const { reader } = await openStream(port);
+    await reader.next((m) => m.event === 'snapshot');
+
+    // one ~200 KB patch (above the 64 KiB socket highWaterMark) followed in the same tick by a small one, as when an
+    // inventory update re-publishes guests synchronously
+    const big = 'x'.repeat(200 * 1024);
+    for (let round = 0; round < 3; round++) {
+      ctx.store.set('network', [{ iface: `vmbr${round}`, type: 'bridge', active: true, autostart: true, comments: big }]);
+      ctx.store.set('tasks', [{ upid: `UPID:pve1:00000001:00000001:00000001:vzdump::root@pam:`, node: 'pve1', type: 'vzdump', user: 'root@pam', startTime: round, severity: 'ok' }]);
+    }
+    const seen: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      const m = await reader.next((x) => x.event === 'patch' || x.event === 'snapshot', 5000);
+      seen.push(m.event === 'snapshot' ? 'snapshot' : (JSON.parse(m.data!) as { key: string }).key);
+    }
+    expect(seen).toEqual(['network', 'tasks', 'network', 'tasks', 'network', 'tasks']);
+  });
 
   it('ends open streams on close() so shutdown does not hang', async () => {
     const ctx = makeCtx();

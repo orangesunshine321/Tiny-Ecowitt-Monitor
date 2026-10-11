@@ -5,6 +5,7 @@ import { GlassPanel } from '../components/GlassPanel';
 import { OsIcon } from '../components/OsIcon';
 import { Portal, isTopLayer, pushLayer, setAppInert } from '../components/Portal';
 import { useFocusTrap } from '../hooks/useFocusTrap';
+import { useBreakpoint } from '../hooks/useMediaQuery';
 import { useHotkey } from '../hooks/useHotkey';
 import { useScrollLock } from '../hooks/useScrollLock';
 import { navigate } from '../router';
@@ -36,6 +37,7 @@ export function Spotlight() {
 }
 
 function SpotlightPanel() {
+  const bp = useBreakpoint();
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const panel = useRef<HTMLDivElement>(null);
@@ -122,7 +124,7 @@ function SpotlightPanel() {
               ref={input}
               className="spotlight-input"
               type="search"
-              placeholder="Search guests, services, containers, pages"
+              placeholder={bp === 'iphone' ? 'Search' : 'Search guests, services, containers, pages'}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={onKey}

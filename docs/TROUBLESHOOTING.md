@@ -9,7 +9,9 @@ Jump to: [first checks](#-first-checks) · [token 401/403](#-token-401403) ·
 [SSH host key changed](#-ssh-host-key-changed) · [helper denied / no apps](#-helper-denied-or-apps--services-stay-empty) ·
 [guest agent](#-guest-agent-vm-shows-no-ip-or-no-apps) · [push on iPhone](#-push-notifications-dont-arrive-on-iphone) ·
 [live updates through the proxy](#-live-updates-stop-or-never-start-sse-through-the-proxy) ·
-[temperatures](#-temperatures-are-missing) · [installer](#-installer-problems) ·
+[421 unknown host](#-unknown-host-http-421) · [alert times off by hours](#-times-in-alerts-are-off-by-some-hours) ·
+[temperatures](#-temperatures-are-missing) · [disk health / sleeping HDDs](#-disk-health-updates-slowly-or-hdds-dont-stay-spun-down) ·
+[paused on an I/O error](#-a-vm-is-paused-on-an-io-error) · [installer](#-installer-problems) ·
 [not verified on real hardware](#-things-that-could-not-be-tested-on-real-proxmox)
 
 ---
@@ -52,8 +54,10 @@ log, and the dashboard stays empty or shows "offline".
 pveum user token list pve1dash@pve
 ```
 
-You should see a row `dashboard`. If the user or token is missing, re-run the installer; it creates them again and
-answers "yes" to rotating when it must.
+You should see a row `dashboard` (a second dashboard in the cluster has its own, `dashboard-ct<id>`; the container's
+`proxmox.tokenId` names the one it uses). If the user or token is missing, re-run the installer; it creates them
+again. A re-run also tests the container's secret against the API and offers (with `--yes`: does) a new token when
+Proxmox rejects it.
 
 **Step 2.** Is the secret in the container the current one? **(CT)**
 
@@ -63,16 +67,21 @@ grep -n tokenId /etc/pve1-dash/config.yaml   # tokenId: "pve1dash@pve!dashboard"
 ```
 
 A token secret is shown only once when it is created. If you're not sure the file matches, rotate it: run the
-installer again with `PVE1_DASH_ROTATE_TOKEN=yes` (it removes the old token, makes a new one, and writes the new secret
-into the container).
+installer again with `PVE1_DASH_ROTATE_TOKEN=yes`. It replaces the token at the very end, after the new version runs:
+it removes the old token, makes a new one, writes the new secret into the container and restarts the service, so a
+run that fails earlier leaves the old secret working.
 
 **Step 3.** Test the token directly **(host)**:
 
 ```bash
 read -rs SECRET; echo                                  # paste the secret, press Enter
-curl -sk -H "Authorization: PVEAPIToken=pve1dash@pve!dashboard=$SECRET" \
+curl -sk -H 'Authorization: PVEAPIToken=pve1dash@pve!dashboard='"$SECRET" \
   https://127.0.0.1:8006/api2/json/nodes/$(hostname -s)/status | head -c 200; echo
 ```
+
+(The token id is in single quotes on purpose: in an interactive shell, `!dashboard` inside double quotes is bash
+history expansion and fails with "event not found". Use `dashboard-ct<id>` instead of `dashboard` for a second
+dashboard.)
 
 `{"data":{...` means it works. `401` again means the secret is wrong.
 
@@ -125,7 +134,8 @@ nano /etc/pve1-dash/config.yaml        # proxmox → tls → fingerprint: "3F:9A
 systemctl restart pve1-dash
 ```
 
-(Re-running the installer does steps 1-2 for you.)
+(Re-running the installer does steps 1-2 for you. It keeps the branch or tag the container was installed from, so it
+doesn't switch your code; and it warns when the host serves a custom/ACME certificate, which renews often.)
 
 **Step 3, if this keeps happening** (ACME certificates renew often): stop pinning a single certificate.
 
@@ -158,7 +168,8 @@ ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
 Compare it with the `SHA256:...` in the log message. Same? Continue. Different? Something else answered on that IP;
 stop and find out what.
 
-**Step 2a.** For the **Proxmox host**: re-run the installer (it re-pins the host key), or by hand **(host)**:
+**Step 2a.** For the **Proxmox host**: re-run the installer (it re-pins the host key and keeps the installed branch or
+tag), or by hand **(host)**:
 
 ```bash
 echo "192.168.1.10 $(cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub)"     # copy this line
@@ -207,8 +218,10 @@ grep -n 'pve1-dash' /root/.ssh/authorized_keys
 sshd -T | grep -i permitrootlogin            # yes, prohibit-password or forced-commands-only
 ```
 
-You should see one line `restrict,command="/usr/local/sbin/pve1-dash-helper" ssh-ed25519 AAAA... pve1-dash@ct<id>`.
-Missing, duplicated or without `restrict,command=`? Refresh it **(host)**:
+You should see one line `restrict,command="/usr/local/sbin/pve1-dash-helper" ssh-ed25519 AAAA... pve1-dash@ct<id>`
+per dashboard (options you added in front, like `from="..."`, are kept by the installer). Missing, duplicated or
+without `restrict,command=`? Refresh it **(host)** (before the merge into `main`, use
+`.../claude/homelab-dashboard-pve1-dizt16/deploy/install.sh` as the URL):
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)" -- --update-helper
@@ -298,8 +311,18 @@ journalctl -u pve1-dash -n 50 --no-pager | grep -i push
 | `BadJwtToken` / `check alerts.vapidSubject` | set `alerts.vapidSubject: "mailto:you@your-real-domain"` (not `localhost`, not a `.lan`/`.local` address), restart, then **disable and enable** push on each device |
 | `vapidSubject is the placeholder` | same fix |
 | `410` / `404`, device removed | the subscription expired or was revoked; enable push on the device again |
+| `made with other VAPID keys` / `VapidPkHashMismatch`, device removed | the server's keys changed (reinstall, new data directory, corrupt `push.json`); the device's subscription can never work again. Open the app on the device and turn notifications on again |
+| `push.json ... cannot be read`, `Web Push disabled` | the file exists but the service user can't read it (often after copying it back as root). It is left untouched: `chown pve1dash:pve1dash /var/lib/pve1-dash/push.json && chmod 600 /var/lib/pve1-dash/push.json`, then `systemctl restart pve1-dash` |
+| `push.json is not valid JSON; kept it as push.json.corrupt-...` | the file was damaged (e.g. a crash); new keys were generated and every device must turn notifications on again. The old file is kept for inspection |
+| `publicUrl is not set and a device has no recorded origin` | notifications still arrive (classic format via the service worker), but set `publicUrl` so iOS 18.4+ can show them without waking the app |
+| `resolves to a private address; device removed` | the subscription did not point at a public push service; enable push on the device again |
+| `too many devices (max 50)` | devices not refreshed for 30 days are replaced automatically; otherwise remove old ones under Settings → Notifications |
 | `Web Push disabled: ...` | read the message; usually the subject |
 | nothing at all | the push never left: is the device listed under Settings → Notifications → devices? |
+
+Temporary push service errors (429, 5xx, timeouts) are retried twice (after 5 s and 30 s, or the service's
+`Retry-After`) before they show up as the device's last error. A device that is never opened is never removed for age
+alone, so it keeps getting alerts; delete devices you no longer use (or that show as duplicates) in the devices list.
 
 **Step 6.** Can the container reach Apple? **(CT)**
 
@@ -355,6 +378,46 @@ Turn on HTTP/2 in the proxy (NPM: SSL tab → HTTP/2 Support).
 Assets off**; elsewhere remove caching for this host. Then reload the page twice (or remove and re-add the Home
 Screen app).
 
+**Step 6.** The stream uses a lot of mobile data. Each change resends the whole section it belongs to (for example
+all guests with their last 120 CPU/memory samples on every 5 s status poll, or all services with their check history);
+there are no deltas. The `services` section is sent at most every 5 s while a check round runs, plus once at its end.
+With many guests, a raised `polling.status` (e.g. `15`) reduces the traffic proportionally. Close the app (swipe it
+away) rather than leaving it open in the background on cellular.
+
+---
+
+## 🚪 "Unknown host" (HTTP 421)
+
+**You see:** `{"error":"Unknown host", ...}` instead of the dashboard, and the log says
+`refused a request for host "..."`.
+
+The server only answers host names that can't be used for a DNS-rebinding attack (see
+[SECURITY.md](SECURITY.md#lan-only-no-login)): IP addresses, `localhost`, single-label names, `.lan`/`.local`/
+`.home.arpa`/`.internal` names, the host of `publicUrl`, and the names in `allowedHosts`. Add the name you use, e.g.
+for a public domain on your proxy or a Tailscale name:
+
+```yaml
+publicUrl: https://dash.example.com          # usually enough when the proxy passes the Host header on
+allowedHosts: ["dash.example.com", "*.tail1234.ts.net"]
+```
+
+Then `systemctl restart pve1-dash`.
+
+---
+
+## 🕐 Times in alerts are off by some hours
+
+Alert texts and notifications contain clock times ("stopped since 14:02"). They are written in the zone set by
+`timezone` in config.yaml (an IANA name such as `Europe/Berlin`), defaulting to the `TZ` environment variable and then
+the container's system zone. A container created without a time zone is usually **UTC**, so set it:
+
+```yaml
+timezone: Europe/Berlin
+```
+
+The startup log line `listening on ...` shows the zone in use. Times shown by the web app itself always use the
+browser's zone.
+
 ---
 
 ## 🔥 Temperatures are missing
@@ -397,14 +460,36 @@ Some hardware (many VMs-in-VMs, some mini PCs) simply exposes no sensors; then t
 read `/var/log/pveam.log`. **Step 2:** if you already have a Debian 13 or 12 template downloaded, the installer uses
 it.
 
-**"unsupported debian version"** during `pct create` — the host's pve-container is too old for Debian 13 templates
-(PVE 8 needs pve-container 5.3.1+). **Step 1:** update the host (`apt update && apt full-upgrade`). **Step 2:** or run
-the installer with `PVE1_DASH_DEBIAN=12`.
+**"unsupported debian version"** during `pct create` — the host's pve-container is too old for current Debian 13
+templates (13.1+ need pve-container 5.3.1 on PVE 8, 6.0.10 on PVE 9). The installer checks the version up front and
+uses Debian 12 by itself (it says so in the plan), and if `pct create` still fails this way it retries once with
+Debian 12. You only see this error when you asked for `PVE1_DASH_DEBIAN=13`. **Step 1:** update the host: without a
+subscription, first enable the `pve-no-subscription` repository (node → Updates → Repositories; the enterprise one
+answers 401 without a subscription), then `apt update && apt full-upgrade`. **Step 2:** or run the installer with
+`PVE1_DASH_DEBIAN=12`, which works the same for pve1-dash.
 
 **"got no IPv4 address or DNS within 3 minutes"** — **Step 1:** `pct exec <ctid> -- ip -4 addr show eth0` **(host)**.
-No address: DHCP on that bridge/VLAN isn't answering; re-run with a static `PVE1_DASH_IP=192.168.1.60/24
-PVE1_DASH_GATEWAY=192.168.1.1`. **Step 2:** address but no DNS: `pct exec <ctid> -- cat /etc/resolv.conf`; the
-container inherits the host's DNS settings.
+No address: DHCP on that bridge/VLAN isn't answering. Re-run the installer with a static address,
+`PVE1_DASH_IP=192.168.1.60/24 PVE1_DASH_GATEWAY=192.168.1.1` (and `PVE1_DASH_BRIDGE=...` / `PVE1_DASH_VLAN=...` if those
+were wrong): on a re-run they are applied to the existing container (its `net0` changes, the MAC address stays, and it
+restarts). By hand: `pct set <ctid> --net0 name=eth0,bridge=vmbr0,ip=192.168.1.60/24,gw=192.168.1.1` (keep the
+`hwaddr=` from `pct config <ctid>`), then re-run. With a VLAN, the gateway is the router of that VLAN, not the host's.
+**Step 2:** address but no DNS: `pct exec <ctid> -- cat /etc/resolv.conf`; the container inherits the host's DNS
+settings.
+
+**"container ... was created but does not start"** — `pct create` can report success even though the container
+then fails to start; the installer checks and shows the start error. A missing bridge is the usual cause. Fix it and
+re-run with `PVE1_DASH_BRIDGE=<existing bridge>` (applied to the existing container), or remove the container
+(`pct destroy <ctid>`) and start over.
+
+**"... is not pve1-dash" / "could not download package.json" / "is not a branch or tag"** at the start — the ref
+doesn't hold pve1-dash. Until pve1-dash is merged into `main`, `main` still has the old Tiny Ecowitt app: install with
+`PVE1_DASH_REF=claude/homelab-dashboard-pve1-dizt16` and the installer URL of that branch (README.md). For a single
+commit, give its full 40-character id.
+
+**"container ... was installed from <repository>"** on a re-run — the container records a repository other than the
+default (e.g. your fork). Answer yes to keep it, or with `--yes` pass `PVE1_DASH_REPO=<that repository>` (or the
+default one to switch). It asks because that repository also decides which host helper may run as root.
 
 **npm build killed / "JavaScript heap out of memory"** — give the container 1024 MiB or more (container → Resources →
 Memory), then run the installer again.
@@ -425,12 +510,67 @@ SystemCallFilter=
 issue with the log lines so the filter can be adjusted.
 
 **"the container's helper differs from the copy in the repo"** — the container runs a different version than the ref
-the installer compares with. **Step 1:** update the container (`pct exec <ctid> -- pve1-dash-update`). **Step 2:** run
-`--update-helper` again. If you deliberately run another ref, pass it: `PVE1_DASH_REF=<ref>`.
+the installer compares with (it compares with the commit the ref points to now). **Step 1:** update the container
+(`pct exec <ctid> -- pve1-dash-update`). **Step 2:** run `--update-helper` again. If you deliberately run another ref,
+pass it: `PVE1_DASH_REF=<ref>`. The installer shows the first 60 lines of the diff, with bytes outside printable ASCII
+as `\xNN`, and keeps the whole diff in `/var/log/pve1-dash-helper.diff`: read it before you answer yes, since the
+helper runs as root on the host.
+
+**Re-running the installer upgraded the code and the new version doesn't start** — like `pve1-dash-update`, the setup
+restores the previous version (the failed build stays in `/opt/pve1-dash.failed`) and keeps the recorded source. To stay
+on a known-good version, re-run with `PVE1_DASH_REF=<tag>`.
+
+**The update or installer says the service is not healthy, but it runs** — the health check uses `listen.host` and
+`listen.port` from `/etc/pve1-dash/config.yaml` (127.0.0.1 for `0.0.0.0`) and `PVE1_DASH_PORT` from
+`/etc/pve1-dash/env`. If you bound `listen.host` to an address the container doesn't have, fix it there.
 
 **An update failed** — `pve1-dash-update` restores the previous version automatically when the new one doesn't come up;
 the failed build stays in `/opt/pve1-dash.failed` for a look. Run it again later, or pin a known-good tag with
-`--ref`.
+`--ref`. A failed Node.js update (download, checksum, unpack, e.g. a full disk) never touches the working Node.js; the
+update says "keeping v24.x.y" and goes on.
+
+**`uninstall.sh --yes` changed nothing** (older versions) — they stopped at "Continue?". Current versions go ahead with
+`--yes`; `PVE1_DASH_CONFIRM=no` still stops them. The uninstaller removes one dashboard (`--ctid N` picks which) and
+leaves other pve1-dash dashboards in the cluster working.
+
+---
+
+## 💽 Disk health updates slowly, or HDDs don't stay spun down
+
+The dashboard lists the disks every `polling.disks` seconds (default 600) with `skipsmart=1`, so Proxmox doesn't run
+`smartctl` for that listing. Health (`PASSED` / `FAILED!`) and SSD wear come from a full listing that runs
+`smartctl -H` on every disk. That full listing runs once every 6 hours (or every `polling.disks`, if you set that
+longer), and right away when a new or replaced disk shows up.
+
+- **A SMART failure can take up to 6 hours to show up and alert.** For a live reading, open the disk in the dashboard:
+  that asks Proxmox for this one disk's SMART data.
+- **Spun-down HDDs wake up for each full listing**, so 4 times a day by default. `smartctl` doesn't skip sleeping disks
+  (Proxmox doesn't pass `-n standby`). To wake them less often, raise `polling.disks` (`86400` means once a day; the
+  disk list itself then refreshes once a day too).
+- Even with `skipsmart=1`, Proxmox's disk listing runs `lsblk` and LVM/ZFS queries. Whether these touch a sleeping
+  disk depends on your LVM device filter (not verified). `smartd` and other tools on the host can also wake disks.
+
+---
+
+## 🛑 A VM is "paused on an I/O error"
+
+The alert and the guest status **I/O error** mean the VM's QEMU process is halted in an error state. The dashboard
+currently shows three QEMU states this way:
+
+- `io-error`: a disk write failed (storage full, NFS/iSCSI target gone).
+- `guest-panicked`: the guest kernel panicked. This only happens with a pvpanic device and the "pause" panic action.
+- `internal-error`: KVM/QEMU itself failed (an emulation error, or a problem with nested virtualization).
+
+**Step 1.** Find out which one it is **(host)**:
+
+```bash
+qm status <vmid> --verbose | grep qmpstatus      # qmpstatus: io-error | guest-panicked | internal-error
+```
+
+**Step 2.** For `io-error`, check the storage (`pvesm status`). For the other two, read the VM's log lines
+(`journalctl -b | grep -i 'qemu\|kvm'`). Then `qm resume <vmid>` once the cause is fixed, or stop and start the VM.
+
+Memory and uptime of a paused, suspended or halted VM are still shown: its QEMU process keeps holding the RAM.
 
 ---
 
@@ -441,9 +581,14 @@ in-container setup and update ran end to end in an isolated environment (with ap
 details come from reading Proxmox's source and couldn't be run on a real host, so if one of them misbehaves, this list
 is the first place to look:
 
-- `pct push` / `pct pull` (installing the setup script and fetching the helper) and `pct start` / `pct stop` /
-  `pct destroy` (uninstaller) are used in their basic forms only; they are standard but weren't covered by the
-  research notes.
+- `pct push` / `pct pull` (installing the setup script and fetching the helper), `pct start` / `pct stop` /
+  `pct destroy` / `pct set --onboot 0` (uninstaller) and `pct set --net0` (network change on a re-run) are used in
+  their basic forms only; they are standard but weren't covered by the research notes.
+- `/root/.ssh/authorized_keys` is rewritten by renaming a complete copy over `/etc/pve/priv/authorized_keys`, inside
+  pmxcfs. Should pmxcfs refuse the rename, the scripts rewrite the file in place and read it back; the backup is in
+  `/root/.ssh/authorized_keys.pve1-dash.bak` either way.
+- The format of ACME entries in `/etc/pve/nodes/<node>/config` (`acmedomain0: ...`), used only to propose a host name;
+  the certificate itself is verified before the name is used.
 - `pveum user token remove` vs `pveum user token delete`, and `pveum user delete`: the scripts try both spellings.
 - `pveam download` may exit 0 on failure, so the installer checks `pveam list` afterwards.
 - Whether the PVE 8 template index lists `debian-13-standard`; the installer falls back to Debian 12.
@@ -453,3 +598,8 @@ is the first place to look:
   on a real-looking address to be safe.
 - HTTP Basic auth at the proxy in combination with the iOS Home Screen app.
 - How long iOS keeps the live stream open in the background (the app reconnects when it comes back to the front).
+- The host helper enters containers with `pct exec --keep-env 0`, so they don't inherit root's host environment. The
+  research notes don't confirm the `PATH` that `lxc-attach --clear-env` sets. The inspection script sets its own
+  `PATH` and is started as `/bin/sh` by absolute path, so this shouldn't matter.
+- The host helper lists VMs with `pvesh get /nodes/<node>/qemu --full 1` to read their QEMU state (`qmpstatus`), so
+  paused VMs are skipped. Like `qm list`, this asks each running VM over QMP.

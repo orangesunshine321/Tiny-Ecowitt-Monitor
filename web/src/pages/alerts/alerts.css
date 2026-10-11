@@ -73,7 +73,8 @@
   overflow-wrap: anywhere;
 }
 .al-row-meta {
-  color: var(--label-3);
+  /* kind and age carry state: secondary label, not tertiary (tertiary is for placeholders and disabled content) */
+  color: var(--label-2);
 }
 
 /* ───────────────────────────── history timeline */
@@ -222,7 +223,7 @@ a.al-tl-row:focus-visible {
 .al-tl-kind {
   font-size: var(--fs-caption);
   line-height: var(--lh-caption);
-  color: var(--label-3);
+  color: var(--label-2);
 }
 .al-tl-chevron {
   align-self: center;

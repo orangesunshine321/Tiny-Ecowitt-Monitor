@@ -4,7 +4,7 @@ import { Meter, OsIcon, Sparkline, StatusBadge, toneOf } from '../../components'
 import { formatByteRate, formatBytes, formatBytesOf, formatDuration, formatPercent, plural } from '../../format';
 import { Link } from '../../router';
 import { TagList, TypeBadge } from './GuestBits';
-import { fraction, primaryIp, typeName } from './guestUtil';
+import { fraction, primaryIp, shortOsName, typeName } from './guestUtil';
 
 export interface GuestCardProps {
   guest: Guest;
@@ -32,7 +32,11 @@ export const GuestCard = memo(function GuestCard({ guest: g, inventory }: GuestC
           <span className="gx-card-sub">
             <TypeBadge type={g.type} />
             <span className="t-num">{g.vmid}</span>
-            {os && <span className="gx-card-os-name">{os}</span>}
+            {os && (
+              <span className="gx-card-os-name" title={os}>
+                {shortOsName(os)}
+              </span>
+            )}
           </span>
         </div>
         <StatusBadge {...status} size="small" />

@@ -1,5 +1,7 @@
 import { generateKeyPairSync } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -14,7 +16,7 @@ import type {
   PushService,
   RrdTarget,
 } from '../server/context.js';
-import { CONTENT_SECURITY_POLICY, createHttpServer, deviceNameFromUserAgent, mapError, UPID_RE } from '../server/http.js';
+import { CONTENT_SECURITY_POLICY, createHostCheck, createHttpServer, deviceNameFromUserAgent, hostName, mapError, UPID_RE } from '../server/http.js';
 import { Store } from '../server/state.js';
 import type { Guest, PhysicalDisk, PushDevice, PushPrefs, Timeframe, ZfsPool } from '../shared/types.js';
 
@@ -22,11 +24,12 @@ import type { Guest, PhysicalDisk, PushDevice, PushPrefs, Timeframe, ZfsPool } f
 
 const silent: Logger = { debug() {}, info() {}, warn() {}, error() {}, child: () => silent };
 
-function makeCtx(dataDir: string): AppContext {
+function makeCtx(dataDir: string, over: Record<string, unknown> = {}): AppContext {
   const config = ConfigSchema.parse({
     publicUrl: 'https://dash.home.lan',
     proxmox: { url: 'https://10.10.20.10:8006', tokenId: 'pve1dash@pve!dashboard', tokenSecret: 'secret' },
     inventory: { enabled: true, host: { address: '10.10.20.10' }, privateKey: '/etc/pve1-dash/ssh/id_ed25519' },
+    ...over,
   });
   const store = new Store(
     {
@@ -78,10 +81,13 @@ class FakeInventory implements InventoryService {
   refreshCalls: Array<number | undefined> = [];
   key: string | undefined;
   refreshError: unknown;
+  /** when set, refresh() waits for this promise (a slow sweep) */
+  refreshBlock: Promise<void> | undefined;
   start(): void {}
   stop(): void {}
   async refresh(vmid?: number): Promise<void> {
     this.refreshCalls.push(vmid);
+    if (this.refreshBlock) await this.refreshBlock;
     if (this.refreshError) throw this.refreshError;
   }
   publicKey(): string | undefined {
@@ -95,24 +101,28 @@ class FakePush implements PushService {
   readonly enabled = true;
   calls: Array<{ method: string; args: unknown[] }> = [];
   error: unknown;
-  private device(id: string, name: string, prefs: Partial<PushPrefs> = {}): PushDevice {
+  private makeDevice(id: string, name: string, prefs: Partial<PushPrefs> = {}): PushDevice {
     return { id, name, endpointHost: 'web.push.apple.com', createdAt: 1, prefs: { ...PREFS, ...prefs } };
   }
   publicKey() {
     return 'BPublicKey';
   }
   devices() {
-    return [this.device('d1', 'iPhone')];
+    return [this.makeDevice('d1', 'iPhone')];
+  }
+  device(id: string) {
+    this.calls.push({ method: 'device', args: [id] });
+    return id === 'd1' ? this.makeDevice('d1', 'iPhone') : undefined;
   }
   async subscribe(input: Parameters<PushService['subscribe']>[0]) {
     this.calls.push({ method: 'subscribe', args: [input] });
     if (this.error) throw this.error;
-    return this.device('d2', input.name, input.prefs);
+    return this.makeDevice(input.replacesId ?? 'd2', input.name, input.prefs);
   }
   async updatePrefs(id: string, prefs: Partial<PushPrefs>, name?: string) {
     this.calls.push({ method: 'updatePrefs', args: [id, prefs, name] });
     if (this.error) throw this.error;
-    return this.device(id, name ?? 'iPhone', prefs);
+    return this.makeDevice(id, name ?? 'iPhone', prefs);
   }
   async unsubscribe(by: { id?: string; endpoint?: string }) {
     this.calls.push({ method: 'unsubscribe', args: [by] });
@@ -201,8 +211,8 @@ interface Harness {
   push: FakePush;
 }
 
-async function harness(opts: { webRoot?: string } = {}): Promise<Harness> {
-  const ctx = makeCtx(join(tmp, 'data'));
+async function harness(opts: { webRoot?: string; config?: Record<string, unknown> } = {}): Promise<Harness> {
+  const ctx = makeCtx(join(tmp, 'data'), opts.config);
   const proxmox = new FakeProxmox();
   const inventory = new FakeInventory();
   const push = new FakePush();
@@ -493,6 +503,91 @@ describe('inventory refresh', () => {
     const res = await h.app.inject({ method: 'POST', url: '/api/inventory/refresh', ...json({ pad: 'x'.repeat(100_000) }) });
     expect(res.statusCode).toBe(413);
   });
+
+  it('a refresh still waiting for data does not hold up shutdown', async () => {
+    const own = await harness();
+    own.inventory.refreshBlock = new Promise<void>(() => {}); // a sweep that takes "forever"
+    await own.app.listen({ host: '127.0.0.1', port: 0 });
+    const port = (own.app.server.address() as AddressInfo).port;
+    const answer = new Promise<{ status?: number; body: string }>((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/api/inventory/refresh', headers: { 'content-type': 'application/json' } }, (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (c: string) => (body += c));
+        res.on('end', () => resolve({ status: res.statusCode, body }));
+      });
+      req.on('error', reject);
+      req.end('{"vmid":101}');
+    });
+    for (let i = 0; i < 50 && !own.inventory.refreshCalls.length; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(own.inventory.refreshCalls).toEqual([101]);
+    const t0 = Date.now();
+    await own.app.close(); // used to wait the full 30 s (systemd stop then hit the 10 s force-exit)
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(await answer).toEqual({ status: 200, body: '{"ok":true}' });
+  });
+});
+
+describe('Host header allow-list (DNS rebinding)', () => {
+  it('refuses unknown host names with 421 and serves IPs, localhost, LAN names and publicUrl', async () => {
+    for (const host of ['attacker.example', 'rebind.attacker.example:8080', 'dash.home.lan.evil.com']) {
+      const res = await h.app.inject({ url: '/api/snapshot', headers: { host } });
+      expect(res.statusCode, host).toBe(421);
+      expect(res.json().error).toBe('Unknown host');
+      expect(res.body).not.toContain('"guests"');
+    }
+    for (const host of ['10.10.20.50:8080', '[fd00::50]:8080', 'localhost:8080', 'dash.home.lan', 'DASH.HOME.LAN.', 'pve1-dash', 'pve1-dash.local', 'x.home.arpa']) {
+      expect((await h.app.inject({ url: '/api/snapshot', headers: { host } })).statusCode, host).toBe(200);
+    }
+    // the stream, static files and POSTs are covered too; /healthz stays open for monitors
+    expect((await h.app.inject({ url: '/', headers: { host: 'attacker.example' } })).statusCode).toBe(421);
+    expect((await h.app.inject({ method: 'POST', url: '/api/push/test', headers: { host: 'attacker.example', 'content-type': 'application/json' }, payload: '{"id":"d1"}' })).statusCode).toBe(421);
+    expect(h.push.calls).toHaveLength(0);
+    expect((await h.app.inject({ url: '/healthz', headers: { host: 'attacker.example' } })).statusCode).toBe(200);
+  });
+
+  it('allowedHosts adds names (exact or *.suffix)', async () => {
+    const own = await harness({ config: { allowedHosts: ['dash.example.com', '*.tail1234.ts.net'] } });
+    try {
+      for (const host of ['dash.example.com', 'pve1-dash.tail1234.ts.net:443']) {
+        expect((await own.app.inject({ url: '/api/snapshot', headers: { host } })).statusCode, host).toBe(200);
+      }
+      expect((await own.app.inject({ url: '/api/snapshot', headers: { host: 'other.example.com' } })).statusCode).toBe(421);
+    } finally {
+      await own.app.close();
+    }
+  });
+
+  it('host check helpers', () => {
+    const check = createHostCheck({ publicUrl: 'https://dash.example.net:8443/sub', allowedHosts: ['.corp.example'], listen: { host: '0.0.0.0', port: 8080 } }, 'pve1-dash.example.org');
+    expect(check(undefined)).toBe(true);
+    expect(check('dash.example.net')).toBe(true);
+    expect(check('pve1-dash.example.org:8080')).toBe(true);
+    expect(check('a.corp.example')).toBe(true);
+    expect(check('corp.example.evil')).toBe(false);
+    expect(check('x@evil.example')).toBe(false);
+    expect(check('evil.example/x')).toBe(false);
+    expect(hostName('[::1]:80')).toBe('::1');
+    expect(hostName('Dash.Lan.:8080')).toBe('dash.lan');
+  });
+
+  it('guest.sh ignores a spoofed X-Forwarded-Host when publicUrl is unset', async () => {
+    const own = await harness({ config: { publicUrl: undefined } });
+    try {
+      own.inventory.key = ed25519PublicKeyLine();
+      const spoofed = await own.app.inject({ url: '/setup/guest.sh', headers: { host: '10.10.20.50:8080', 'x-forwarded-host': 'evil.example.com' } });
+      expect(spoofed.statusCode).toBe(200);
+      expect(spoofed.body).not.toContain('evil.example.com');
+      expect(spoofed.body).toContain('10.10.20.50:8080/setup/guest.sh');
+      const proxied = await own.app.inject({
+        url: '/setup/guest.sh',
+        headers: { host: '10.10.20.50:8080', 'x-forwarded-host': 'pve1-dash.home.lan', 'x-forwarded-proto': 'https' },
+      });
+      expect(proxied.body).toContain("'https://pve1-dash.home.lan/setup/guest.sh'");
+    } finally {
+      await own.app.close();
+    }
+  });
 });
 
 describe('push endpoints', () => {
@@ -519,8 +614,43 @@ describe('push endpoints', () => {
     expect(res.json().name).toBe('iPhone');
     expect(h.push.calls[0]).toEqual({
       method: 'subscribe',
-      args: [{ subscription, name: 'iPhone', prefs: { minSeverity: 'critical', kinds: ['service_down'] } }],
+      // no Origin header (not a browser): the origin comes from the request itself
+      args: [{ subscription, name: 'iPhone', prefs: { minSeverity: 'critical', kinds: ['service_down'] }, origin: 'http://localhost' }],
     });
+  });
+
+  it('passes replacesId and the browser origin through', async () => {
+    const res = await h.app.inject({
+      method: 'POST',
+      url: '/api/push/subscribe',
+      headers: { 'content-type': 'application/json', origin: 'https://dash.home.lan', 'x-forwarded-proto': 'https', host: '10.10.20.50:8080' },
+      payload: JSON.stringify({ subscription, name: 'iPad', replacesId: 'd1' }),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().id).toBe('d1');
+    expect(h.push.calls[0]!.args[0]).toEqual({ subscription, name: 'iPad', prefs: undefined, replacesId: 'd1', origin: 'https://dash.home.lan' });
+
+    // an Origin this dashboard does not answer to is ignored (falls back to the request's own scheme://host)
+    await h.app.inject({
+      method: 'POST',
+      url: '/api/push/subscribe',
+      headers: { 'content-type': 'application/json', origin: 'https://evil.example.com', 'x-forwarded-proto': 'https', host: '10.10.20.50:8080' },
+      payload: JSON.stringify({ subscription, name: 'iPad' }),
+    });
+    expect((h.push.calls[1]!.args[0] as { origin?: string }).origin).toBe('https://10.10.20.50:8080');
+
+    const bad = await h.app.inject({ method: 'POST', url: '/api/push/subscribe', ...json({ subscription, name: 'x', replacesId: 'x'.repeat(200) }) });
+    expect(bad.statusCode).toBe(400);
+  });
+
+  it('GET /api/push/devices/:id returns the device or 404 when it was removed', async () => {
+    const ok = await h.app.inject('/api/push/devices/d1');
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json()).toMatchObject({ id: 'd1', name: 'iPhone' });
+    const gone = await h.app.inject('/api/push/devices/d9');
+    expect(gone.statusCode).toBe(404);
+    expect(gone.json().error).toBe('unknown device');
+    expect(gone.headers['cache-control']).toBe('no-store');
   });
 
   it('rejects invalid subscribe bodies', async () => {

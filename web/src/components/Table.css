@@ -8,6 +8,19 @@
   overscroll-behavior-x: contain;
   -webkit-overflow-scrolling: touch;
 }
+/* sideways-scrolling tables fade out at the edge that has more columns beyond it (the only hint they scroll) */
+.ui-table-wrap[data-more-end] {
+  -webkit-mask-image: linear-gradient(to left, transparent, #000 32px);
+  mask-image: linear-gradient(to left, transparent, #000 32px);
+}
+.ui-table-wrap[data-more-start] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 32px);
+  mask-image: linear-gradient(to right, transparent, #000 32px);
+}
+.ui-table-wrap[data-more-start][data-more-end] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 32px, #000 calc(100% - 32px), transparent);
+}
 .ui-table-wrap[data-max-height] {
   overflow: auto;
 }
@@ -60,6 +73,7 @@
   backdrop-filter: none;
 }
 .ui-table-sort {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 3px;
@@ -68,6 +82,14 @@
   border-radius: 6px;
   font: inherit;
   color: inherit;
+}
+/* touch: a 44pt-tall hit area around the 22px header label (HIG minimum), without changing its look */
+@media (pointer: coarse) {
+  .ui-table-sort::after {
+    content: '';
+    position: absolute;
+    inset: -11px -4px;
+  }
 }
 .ui-table-sort:hover {
   color: var(--label);
@@ -129,11 +151,19 @@
 .ui-table-empty {
   padding: var(--s7) var(--s4);
   text-align: center;
-  color: var(--label-3);
+  color: var(--label-2);
 }
 @media (max-width: 767.98px) {
   .ui-table [data-hide-below='iphone'] {
     display: none;
+  }
+  /* the shrink column takes the width the others leave; its nowrap text ends in an ellipsis instead of widening the
+     table (max-width: 0 removes its content from the automatic table layout's minimum width) */
+  .ui-table [data-shrink] {
+    width: 100%;
+    max-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 }
 @media (max-width: 1099.98px) {

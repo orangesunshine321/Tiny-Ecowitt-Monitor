@@ -5,11 +5,13 @@ import { EmptyState } from '../components/EmptyState';
 import { PageSkeleton } from '../components/Skeleton';
 import { applyScroll, useRoute } from '../router';
 import { reconnectNow, useConnection, useHasSnapshot } from '../store';
+import { ErrorBoundary } from './ErrorBoundary';
 import { NotFound } from './NotFound';
 
 /**
  * Renders the matched page (lazy, inside Suspense with a page skeleton). Pages only render once the first snapshot
- * arrived; until then a skeleton or a "can't reach the server" state shows.
+ * arrived; until then a skeleton or a "can't reach the server" state shows. An error boundary keeps a failing page (or
+ * a page chunk deleted by a server update) from blanking the whole app; it resets with the route key.
  */
 export function RouteView() {
   const route = useRoute();
@@ -26,9 +28,11 @@ export function RouteView() {
   const Page = route.route.component;
   return (
     <div className="route-view" key={route.key} data-enter={route.animateEnter || undefined}>
-      <Suspense fallback={<PageSkeleton />}>
-        <Page />
-      </Suspense>
+      <ErrorBoundary scope="page">
+        <Suspense fallback={<PageSkeleton />}>
+          <Page />
+        </Suspense>
+      </ErrorBoundary>
     </div>
   );
 }

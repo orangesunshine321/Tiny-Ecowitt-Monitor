@@ -18,11 +18,14 @@ log(`${tool} ${JSON.stringify(args)} ssh_cmd=${process.env.SSH_ORIGINAL_COMMAND 
 
 const findGuest = (kind, vmid) => (scenario[kind] ?? []).find((g) => String(g.vmid) === String(vmid));
 
-/** Run the inner script for real with /bin/sh, like lxc-attach / qemu-ga would. */
-function runInner(script) {
-  const r = spawnSync('/bin/sh', ['-c', script], { encoding: 'utf8', timeout: 20_000 });
+/** Run the inner script for real with /bin/sh, like lxc-attach / qemu-ga would (optionally with a given environment). */
+function runInner(script, env) {
+  const r = spawnSync('/bin/sh', ['-c', script], { encoding: 'utf8', timeout: 20_000, ...(env ? { env } : {}) });
   return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', code: r.status ?? 1 };
 }
+
+/** QMP run state of a VM: scenario `qmpstatus` (e.g. "paused") or its process state. */
+const qmpStatus = (g) => g.qmpstatus ?? g.status;
 
 /** qm's $print_agent_result: to_json(pretty, canonical) → 3-space indent, " : " separators, sorted keys. */
 function qmJson(obj) {
@@ -68,13 +71,22 @@ function main() {
           err(`hostname lookup '${m[1]}' failed - unknown node\n`);
           return 255;
         }
-        const list = (scenario[m[2]] ?? []).map(({ vmid, status, name, template }) => ({
-          vmid,
-          name,
-          status,
+        // `full` exists for qemu only; it adds qmpstatus (the QMP run state). `status` is the process state, so a
+        // paused VM is "running" there (pve-api-guests.md §1, §2.1).
+        const fullIdx = rest.indexOf('--full');
+        const full = m[2] === 'qemu' && fullIdx >= 0 && rest[fullIdx + 1] === '1';
+        if (m[2] === 'lxc' && fullIdx >= 0) {
+          err("400 Parameter verification failed.\nfull: property is not defined in schema and the schema does not allow additional properties\n");
+          return 255;
+        }
+        const list = (scenario[m[2]] ?? []).map((g) => ({
+          vmid: g.vmid,
+          name: g.name,
+          status: g.status,
+          ...(full ? { qmpstatus: qmpStatus(g) } : {}),
           ...(m[2] === 'lxc' ? { type: 'lxc' } : {}),
-          ...(template ? { template: 1 } : {}),
-          uptime: status === 'running' ? 1234 : 0,
+          ...(g.template ? { template: 1 } : {}),
+          uptime: g.status === 'running' ? 1234 : 0,
         }));
         out(JSON.stringify(list) + '\n');
       } else if ((m = /^\/nodes\/[^/]+\/storage\/([^/]+)\/content$/.exec(path))) {
@@ -105,21 +117,36 @@ function main() {
         for (const g of rows) out(f(String(g.vmid), g.status, g.lock ?? '', g.name));
         break;
       }
-      if (args[0] !== 'exec' || args[2] !== '--' || args[3] !== '/bin/sh' || args[4] !== '-c' || args.length !== 6) {
+      // pct exec <vmid> [--keep-env 0|1] -- /bin/sh -c <script>
+      let keepEnv = true; // the default on PVE 8 and 9 (pve-perms-cli.md §5.2)
+      let rest = args.slice(2);
+      if (rest[0] === '--keep-env') {
+        if (rest[1] !== '0' && rest[1] !== '1') return 2;
+        keepEnv = rest[1] === '1';
+        rest = rest.slice(2);
+      }
+      if (args[0] !== 'exec' || rest[0] !== '--' || rest[1] !== '/bin/sh' || rest[2] !== '-c' || rest.length !== 4) {
         err(`unexpected pct call ${JSON.stringify(args)}\n`);
         return 2;
       }
+      const script = rest[3];
       const g = findGuest('lxc', args[1]);
       if (!g || g.status !== 'running') {
         err(`container '${args[1]}' not running!\n`);
         return 255;
       }
+      // lxc-attach --keep-env passes the caller's environment (pct strips SSL_CERT_FILE/DIR); --clear-env leaves only
+      // container=lxc. The variable names the guest would see are logged for the tests.
+      const guestEnv = keepEnv
+        ? Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== 'SSL_CERT_FILE' && k !== 'SSL_CERT_DIR'))
+        : { container: 'lxc' };
+      log(`pct-env ${args[1]} ${Object.keys(guestEnv).sort().join(',')}`);
       const code = guestExecStep(args[1], () => {
         switch (g.mode ?? 'real') {
           case 'real':
           case 'slow': {
             if (g.mode === 'slow') sleep(g.sleepMs ?? 300);
-            const r = runInner(args[5]);
+            const r = runInner(script, guestEnv);
             out(r.stdout);
             err(r.stderr);
             return r.code;
@@ -162,8 +189,9 @@ function main() {
         if (!rows.length) break;
         out(`${'VMID'.padStart(10)} ${'NAME'.padEnd(20)} ${'STATUS'.padEnd(10)} ${'MEM(MB)'.padEnd(10)} ${'BOOTDISK(GB)'.padStart(12)} ${'PID'.padEnd(10)}\n`);
         for (const g of rows) {
+          // qm list prints $qmpstatus||$status (pve-perms-cli.md §6.1)
           out(
-            `${String(g.vmid).padStart(10)} ${(g.name ?? `VM ${g.vmid}`).padEnd(20)} ${g.status.padEnd(10)} ${'4096'.padEnd(10)} ${'32.00'.padStart(12)} ${(g.status === 'running' ? '4242' : '0').padEnd(10)}\n`,
+            `${String(g.vmid).padStart(10)} ${(g.name ?? `VM ${g.vmid}`).padEnd(20)} ${qmpStatus(g).padEnd(10)} ${'4096'.padEnd(10)} ${'32.00'.padStart(12)} ${(g.status === 'running' ? '4242' : '0').padEnd(10)}\n`,
           );
         }
         break;
@@ -186,6 +214,11 @@ function main() {
         return 2;
       }
       const g = findGuest('qemu', args[2]);
+      if (g && g.status === 'running' && qmpStatus(g) !== 'running') {
+        // vCPUs stopped: guest-ping times out (3 s) and qemu-server gives up
+        err('QEMU guest agent is not running\n');
+        return 255;
+      }
       const code = guestExecStep(args[2], () => {
         switch (g?.mode ?? 'real') {
           case 'real': {

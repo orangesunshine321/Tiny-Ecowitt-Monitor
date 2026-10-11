@@ -882,6 +882,10 @@ export async function sampleApi(method: 'GET' | 'POST', path: string, body: unkn
     return { ok: true };
   }
   if (method === 'GET' && p === '/api/push/devices') return [SAMPLE_DEVICE];
+  m = /^\/api\/push\/devices\/(.+)$/.exec(p);
+  if (method === 'GET' && m) return { ...SAMPLE_DEVICE, id: decodeURIComponent(m[1]!) };
+  m = /^\/api\/push\/devices\/(.+)$/.exec(p);
+  if (method === 'GET' && m) return { ...SAMPLE_DEVICE, id: decodeURIComponent(m[1]!) };
   if (method === 'POST' && (p === '/api/push/subscribe' || p === '/api/push/prefs')) {
     const b = (body ?? {}) as { name?: string; prefs?: Partial<PushDevice['prefs']> };
     return { ...SAMPLE_DEVICE, name: b.name ?? SAMPLE_DEVICE.name, prefs: { ...SAMPLE_DEVICE.prefs, ...b.prefs } };

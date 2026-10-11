@@ -20,6 +20,27 @@ export function isWindows(g: Pick<Guest, 'osName' | 'config'>): boolean {
   return /^win|^w2k/i.test(g.config?.ostype ?? '') || /windows/i.test(g.osName ?? '');
 }
 
+/**
+ * A short OS label for tight spots (guest cards): "Debian GNU/Linux 13 (trixie)" → "Debian 13", "Ubuntu 24.04.3 LTS" →
+ * "Ubuntu 24.04", "Home Assistant OS 16.2" → "HAOS 16.2", "Alpine Linux v3.22" → "Alpine 3.22". The full pretty name
+ * stays in the tooltip and on the detail page. Unknown shapes come back unchanged (just tidied).
+ */
+export function shortOsName(pretty: string | undefined | null): string | undefined {
+  if (!pretty) return undefined;
+  const short = pretty
+    .replace(/\s*\([^)]*\)/g, '') // "(trixie)", "(Server Edition)"
+    .replace(/^Microsoft\s+/i, '')
+    .replace(/\bHome Assistant OS\b/i, 'HAOS')
+    .replace(/\s+GNU\/Linux\b/i, '')
+    .replace(/\s+Linux\b/i, '')
+    .replace(/\s+LTS\b/i, '')
+    .replace(/\bv(?=\d)/, '') // "v3.22"
+    .replace(/\b(\d+\.\d+)\.\d+\b/, '$1') // point releases: 24.04.3 → 24.04
+    .replace(/\s+/g, ' ')
+    .trim();
+  return short || pretty;
+}
+
 // ───────────────────────────────────────────────────────────── numbers
 
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);

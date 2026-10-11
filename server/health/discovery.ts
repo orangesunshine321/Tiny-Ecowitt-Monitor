@@ -4,6 +4,7 @@
  *
  * Pure functions only; the HealthService rebuilds the list whenever `guests` or `inventory` change.
  */
+import { isIP } from 'node:net';
 import type { Config } from '../config.js';
 import type { HealthCheckTarget } from '../context.js';
 import type { DockerContainer, DockerPort, Guest, GuestInventory, GuestIp, ServiceEntry } from '../../shared/types.js';
@@ -86,8 +87,22 @@ export function guessIcon(image: string): string | undefined {
 const WEB_PORTS = new Set([80, 443, 8080, 8443, 8000, 8008, 8081, 8888, 3000, 5000, 9000]);
 const HTTPS_PORTS = new Set([443, 8443]);
 
-const isLoopback = (ip: string) => /^127\./.test(ip) || ip === '::1' || ip === 'localhost';
+const isLoopback = (ip: string) => /^127\./.test(ip) || /^::ffff:127\./i.test(ip) || ip === '::1' || ip === 'localhost';
 const isWildcard = (ip: string | undefined) => !ip || ip === '0.0.0.0' || ip === '::';
+const bare = (ip: string) => ip.replace(/^\[(.*)\]$/, '$1').toLowerCase();
+
+/**
+ * The host to reach a published port at. The bind address in `docker ps` output comes from inside the guest and is
+ * untrusted (root in a guest can print anything there, including other hosts, names or URL paths), so it is used only
+ * when it is a literal IP that belongs to the guest itself; anything else falls back to the guest's own address.
+ * This keeps auto-discovered health checks pointed at the guest that reported them.
+ */
+export function publishedHost(hostIp: string | undefined, guestAddr: string | undefined, guestIps: readonly GuestIp[]): string | undefined {
+  if (isWildcard(hostIp)) return guestAddr;
+  const ip = bare(hostIp!);
+  if (isIP(ip) && guestIps.some((g) => bare(g.address) === ip)) return isIP(ip) === 6 ? `[${ip}]` : ip;
+  return guestAddr;
+}
 
 /** Published TCP ports reachable from the dashboard (loopback-only bindings dropped). */
 export function reachablePorts(c: DockerContainer): DockerPort[] {
@@ -111,11 +126,11 @@ function ipv4Rank(ip: GuestIp): number {
 export function primaryAddress(ips: readonly GuestIp[] | undefined): string | undefined {
   const list = ips ?? [];
   const v4 = list
-    .filter((ip) => ip.family === 4 && !isLoopback(ip.address))
+    .filter((ip) => ip.family === 4 && isIP(ip.address) === 4 && !isLoopback(ip.address))
     .map((ip, idx) => ({ ip, idx }))
     .sort((a, b) => ipv4Rank(a.ip) - ipv4Rank(b.ip) || a.idx - b.idx);
   if (v4.length) return v4[0]!.ip.address;
-  const v6 = list.find((ip) => ip.family === 6 && !isLoopback(ip.address) && !/^fe80:/i.test(ip.address));
+  const v6 = list.find((ip) => ip.family === 6 && isIP(ip.address) === 6 && !isLoopback(ip.address) && !/^fe80:/i.test(ip.address));
   return v6 ? `[${v6.address}]` : undefined;
 }
 
@@ -205,7 +220,10 @@ export function buildServiceDefs(input: BuildInput): ServiceDef[] {
     const inv = input.inventory[String(vmid)]!;
     const guest = guests.get(vmid);
     if (guest?.template) continue;
-    const guestAddr = primaryAddress(guest?.ips.length ? guest.ips : inv.ips);
+    const guestIps = guest?.ips.length ? guest.ips : inv.ips;
+    const guestAddr = primaryAddress(guestIps);
+    // one group per guest ("docker-media", "apps"); compose projects made many one-tile groups
+    const defaultGroup = guest?.name || 'Docker';
     for (const c of inv.containers ?? []) {
       const ports = reachablePorts(c);
       if (!ports.length) continue;
@@ -214,7 +232,7 @@ export function buildServiceDefs(input: BuildInput): ServiceDef[] {
         continue;
       }
       const port = pickWebPort(ports)!;
-      const host = isWildcard(port.hostIp) ? guestAddr : port.hostIp!.includes(':') ? `[${port.hostIp}]` : port.hostIp;
+      const host = publishedHost(port.hostIp, guestAddr, guestIps ?? []);
       const scheme = HTTPS_PORTS.has(port.containerPort) || HTTPS_PORTS.has(port.hostPort!) ? 'https' : 'http';
       const override = services.overrides[c.name] ?? {};
       const url = override.url ?? (host ? buildUrl(scheme, host, port.hostPort!) : undefined);
@@ -237,7 +255,7 @@ export function buildServiceDefs(input: BuildInput): ServiceDef[] {
         name: override.name ?? c.name,
         url,
         icon: override.icon ?? guessIcon(c.image),
-        group: override.group ?? (c.composeProject ? titleCase(c.composeProject) : 'Docker'),
+        group: override.group ?? defaultGroup,
         description: c.image,
         vmid,
         guestName: guest?.name,

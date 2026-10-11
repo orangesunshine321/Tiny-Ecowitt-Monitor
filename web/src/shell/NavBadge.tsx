@@ -1,5 +1,8 @@
 import { useNavBadges } from '../store';
 import type { NavBadge as BadgeKind } from './nav';
+import { navBadgeInfo } from './navBadges';
+
+export { navItemLabel } from './navBadges';
 
 export interface NavBadgeProps {
   kind: BadgeKind;
@@ -9,29 +12,16 @@ export interface NavBadgeProps {
 
 /**
  * Sidebar/tab badge: running guests (neutral count), services down (red), active alerts (coloured by the worst
- * severity). Renders nothing when the count is zero (except the neutral running count in the sidebar).
+ * severity). Renders nothing when the count is zero (except the neutral running count in the sidebar). The number is
+ * hidden from assistive technology; a visually hidden ", 1 down" is read instead (where the parent has no aria-label).
  */
 export function NavBadge({ kind, variant = 'count' }: NavBadgeProps) {
-  const b = useNavBadges();
-  let n = 0;
-  let tone: 'neutral' | 'crit' | 'warn' | 'info' = 'neutral';
-  let label = '';
-  if (kind === 'runningGuests') {
-    n = b.runningGuests;
-    label = `${n} running`;
-  } else if (kind === 'servicesDown') {
-    n = b.servicesDown;
-    tone = 'crit';
-    label = `${n} down`;
-  } else {
-    n = b.activeAlerts;
-    tone = b.alertSeverity === 'critical' ? 'crit' : b.alertSeverity === 'warning' ? 'warn' : 'info';
-    label = `${n} active`;
-  }
+  const { n, tone, label } = navBadgeInfo(useNavBadges(), kind);
   if (!n || (variant === 'dot' && tone === 'neutral')) return null;
   return (
-    <span className="shell-badge" data-tone={tone} data-variant={variant} aria-label={label} title={label}>
-      {n > 99 ? '99+' : n}
+    <span className="shell-badge" data-tone={tone} data-variant={variant} title={label}>
+      <span aria-hidden="true">{n > 99 ? '99+' : n}</span>
+      <span className="sr-only">, {label}</span>
     </span>
   );
 }

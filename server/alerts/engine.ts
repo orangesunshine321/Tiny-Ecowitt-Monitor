@@ -38,6 +38,8 @@ export interface EvaluateInput {
   rules: RulesConfig;
   data: RuleData;
   ready(key: SnapshotKey): boolean;
+  /** IANA zone for clock times in alert texts (config.timezone); the process zone when omitted */
+  timeZone?: string;
 }
 
 export interface EvaluateResult {
@@ -151,6 +153,7 @@ export class AlertEngine {
       rules: input.rules,
       data: input.data,
       ready: input.ready,
+      timeZone: input.timeZone,
       mem: this.mem,
       active: (key: string) => this.active.get(key)?.event,
       wakeAt: (t: number) => {

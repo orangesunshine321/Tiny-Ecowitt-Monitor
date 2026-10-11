@@ -62,6 +62,7 @@ case $tool in
         echo "$4"
         ;;
       "get /nodes/"*"/lxc --output-format json") out pvesh-lxc.json ;;
+      "get /cluster/resources --type vm --output-format json") out pvesh-resources.json || exit 2 ;;
       *)
         echo "stub pvesh: unexpected: $*" >&2
         exit 2
@@ -99,6 +100,13 @@ case $tool in
         esac
         ;;
       "acl modify") : ;;
+      "user delete" | "user remove")
+        if [ -f "$d/no-user-delete" ]; then
+          echo "unknown command 'pveum user $2'" >&2
+          exit 255
+        fi
+        rm -f "$d/user-exists" "$d/pveum-token-list.json"
+        ;;
       *)
         echo "stub pveum: unexpected: $*" >&2
         exit 2
@@ -112,6 +120,14 @@ case $tool in
     case ${1-} in
       exec) out pct-exec.txt || exit 1 ;;
       status) out "pct-status-$2.txt" || exit 255 ;;
+      config) out "pct-config-$2.txt" || exit 255 ;;
+      start)
+        # A failing start prints the reason, like the start task does.
+        if [ -f "$d/pct-start-fails" ]; then
+          cat "$d/pct-start-fails" >&2
+          exit 255
+        fi
+        ;;
       *) : ;;
     esac
     ;;

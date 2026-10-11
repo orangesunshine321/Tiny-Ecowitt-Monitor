@@ -154,14 +154,26 @@ describe('board layout', () => {
     expect(l.rows).toBe(rowsThatFit(760, l));
   });
 
-  it('drops platform and latency on iPhone portrait but keeps flaps readable', () => {
+  it('drops platform, latency and time on iPhone portrait but keeps flaps readable', () => {
     const l = computeBoardLayout(361, 600, { kind: 'full' });
     expect(l.plat).toBe(0);
     expect(l.ms).toBe(0);
-    expect(l.time).toBe(5);
-    expect(l.dest).toBeGreaterThanOrEqual(8);
+    // every row shows the same last-check HH:MM, so TIME goes before the destination shrinks
+    expect(l.time).toBe(0);
+    expect(l.dest).toBeGreaterThanOrEqual(10);
     expect(l.cellW).toBeGreaterThanOrEqual(12);
     expect(l.rowW).toBeLessThanOrEqual(361);
+  });
+
+  it('gives the destination more flaps on phones than when TIME was kept (no "PROXMOX" twice)', () => {
+    for (const w of [341, 350, 366, 378, 390]) {
+      const l = computeBoardLayout(w, 600, { kind: 'full' });
+      expect(l.time, `@${w}`).toBe(0);
+      expect(l.dest, `@${w}`).toBeGreaterThanOrEqual(10); // "PROXMOX VE" vs "PROXMOX BA…" stay distinct
+      expect(l.rowW, `@${w}`).toBeLessThanOrEqual(w);
+    }
+    // wider boards keep the time column
+    expect(computeBoardLayout(700, 600, { kind: 'full' }).time).toBe(5);
   });
 
   it('uses the vmid for the platform when the name does not fit', () => {

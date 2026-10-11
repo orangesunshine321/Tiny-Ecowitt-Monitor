@@ -50,7 +50,9 @@ export function findNodeResource(resources: unknown, node: string): Record<strin
 /**
  * GET /nodes/{node}/status + the node's /cluster/resources entry → NodeSummary base.
  * CPU comes from cluster/resources (the status endpoint's `cpu` reads 0 on a fresh pveproxy worker, §3.4).
- * `wait` is iowait. `loadavg` items are strings. `memory.available` exists on PVE 9 only.
+ * `wait` is iowait, sampled the same per-worker way as `cpu`: it is only a fallback until the node RRD's `iowait`
+ * (latestNodeRrd, a steady 1-minute average) is known, which then overrides it. `loadavg` items are strings.
+ * `memory.available` exists on PVE 9 only.
  */
 export function mapNodeStatus(nodeName: string, status: unknown, resource: Record<string, unknown> | undefined, now: number): NodeBase {
   const s = isRecord(status) ? status : {};
@@ -123,15 +125,22 @@ export function mapNodeStatus(nodeName: string, status: unknown, resource: Recor
   return base;
 }
 
-/** Latest non-empty row of node rrddata (timeframe=hour) → the node fields the status endpoint lacks. */
-export function latestNodeRrd(points: RrdPoint[]): Pick<NodeSummary, 'netIn' | 'netOut' | 'pressure' | 'arcSize'> {
+export type NodeRrdExtras = Pick<NodeSummary, 'netIn' | 'netOut' | 'pressure' | 'arcSize' | 'ioWait'>;
+
+/**
+ * Latest non-empty row of node rrddata (timeframe=hour) → the node fields the status endpoint lacks, plus `ioWait`:
+ * the RRD `iowait` is a 1-minute average, whereas the status endpoint's `wait` depends on which pveproxy worker
+ * answered (0 on a fresh worker, pve-api-node.md §3.4), so the RRD value is preferred.
+ */
+export function latestNodeRrd(points: RrdPoint[]): NodeRrdExtras {
   for (let i = points.length - 1; i >= 0; i--) {
     const p = points[i]!;
     if (p.netIn === undefined && p.cpu === undefined && p.memUsed === undefined) continue;
-    const out: Pick<NodeSummary, 'netIn' | 'netOut' | 'pressure' | 'arcSize'> = {};
+    const out: NodeRrdExtras = {};
     if (p.netIn !== undefined) out.netIn = p.netIn;
     if (p.netOut !== undefined) out.netOut = p.netOut;
     if (p.arcSize !== undefined) out.arcSize = p.arcSize;
+    if (p.iowait !== undefined) out.ioWait = p.iowait;
     const pressure: Pressure = {};
     if (p.pressureCpuSome !== undefined) pressure.cpuSome = p.pressureCpuSome;
     if (p.pressureIoSome !== undefined) pressure.ioSome = p.pressureIoSome;
@@ -156,6 +165,11 @@ export function vmResources(resources: unknown, node: string): Record<string, un
 /**
  * cluster/resources `status` for qemu is the QMP RunState (qmpstatus || status); lxc is running/stopped;
  * "unknown" when pvestatd data expired. Collapse the long tail of QMP states onto the contract's enum.
+ *
+ * Known limitation: the contract has no value for the QMP states `guest-panicked` (guest kernel panic with a pvpanic
+ * device and a "pause" panic action) and `internal-error` (KVM/QEMU emulation failure). Both halt the VM like an I/O
+ * error does, so they map to 'io-error' to keep the critical "halted" signal, at the cost of a storage-centric wording
+ * in the alert text (docs/TROUBLESHOOTING.md, "paused on an I/O error").
  */
 export function normalizeGuestStatus(v: unknown): GuestStatus {
   switch (str(v)) {
@@ -647,6 +661,15 @@ export interface BuildGuestInput {
   lastBackup?: Guest['lastBackup'];
 }
 
+/**
+ * Whether the guest has a live process (QEMU/LXC) that holds memory and keeps counting uptime. True for every state
+ * but stopped and unknown: a paused, suspended (S3), prelaunch or io-error VM still holds its RAM on the host
+ * (pve-api-guests.md §2.1 "a paused VM is still running", §7 paused example with uptime, mem and memhost).
+ */
+export function hasLiveProcess(status: GuestStatus): boolean {
+  return status !== 'stopped' && status !== 'unknown';
+}
+
 /** One /cluster/resources qemu|lxc entry + everything we know about it → Guest. */
 export function buildGuest(i: BuildGuestInput): Guest {
   const { raw, prev, details } = i;
@@ -654,6 +677,8 @@ export function buildGuest(i: BuildGuestInput): Guest {
   const vmid = num(raw.vmid)!;
   const status = normalizeGuestStatus(raw.status);
   const running = status === 'running';
+  // cpu, rates and PSI need running vCPUs; memory, uptime and memhost only need the process.
+  const live = hasLiveProcess(status);
   // With expired pvestatd data the entry is only {id, vmid, node, type, status:"unknown"} (+tags/lock/pool/hastate):
   // keep the last known name/sizes instead of zeroing them.
   const name = str(raw.name) ?? details?.configName ?? prev?.name ?? `${type === 'qemu' ? 'VM' : 'CT'} ${vmid}`;
@@ -668,13 +693,13 @@ export function buildGuest(i: BuildGuestInput): Guest {
     tags: splitTags(raw.tags),
     cpu: running ? numOr(raw.cpu, 0) : 0,
     cpus: num(raw.maxcpu) ?? prev?.cpus ?? details?.config?.cores ?? 0,
-    mem: running ? numOr(raw.mem, 0) : 0,
+    mem: live ? numOr(raw.mem, 0) : 0,
     maxmem: num(raw.maxmem) ?? prev?.maxmem ?? details?.config?.memoryBytes ?? 0,
     // qemu `disk` is always 0 ("no info available"); only lxc reports real usage.
     disk: type === 'lxc' ? numOr(raw.disk, 0) : 0,
     maxdisk: num(raw.maxdisk) ?? prev?.maxdisk ?? 0,
     ...(i.rates ?? ZERO_RATES),
-    uptime: running ? numOr(raw.uptime, 0) : 0,
+    uptime: live ? numOr(raw.uptime, 0) : 0,
     ips: [],
     consoleUrl: buildConsoleUrl({ base: i.uiBaseUrl, type, vmid, name, node: i.node, config: details?.config, datacenterConsole: i.datacenterConsole }),
     pveUrl: buildPveUrl(i.uiBaseUrl, type, vmid),
@@ -690,7 +715,7 @@ export function buildGuest(i: BuildGuestInput): Guest {
   if (ha) g.haState = ha;
   // memhost: PVE 9, meaningful for qemu only (always 0 for lxc in cluster/resources).
   const memHost = num(raw.memhost);
-  if (type === 'qemu' && memHost !== undefined && running) g.memHost = memHost;
+  if (type === 'qemu' && memHost !== undefined && live) g.memHost = memHost;
   if (running && i.pressure) g.pressure = i.pressure;
 
   g.ips = mergeIps({
@@ -746,6 +771,7 @@ const GUEST_RRD: Record<string, RrdKey> = {
   diskread: 'diskRead',
   diskwrite: 'diskWrite',
   pressurecpusome: 'pressureCpuSome',
+  pressurecpufull: 'pressureCpuFull', // guests only: the node RRD has no cpu "full" line (pve-api-node.md §6.3)
   pressureiosome: 'pressureIoSome',
   pressureiofull: 'pressureIoFull',
   pressurememorysome: 'pressureMemSome',

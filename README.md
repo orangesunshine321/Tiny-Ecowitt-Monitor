@@ -34,10 +34,11 @@ Proxmox's own console. Works with **Proxmox VE 8.x and 9.x**.
 
 | | |
 |---|---|
-| ![Overview](docs/screenshots/overview.png) | ![Departure board](docs/screenshots/board.png) |
+| ![Overview, light](docs/screenshots/overview-light.png) | ![Overview, dark](docs/screenshots/overview-dark.png) |
 | ![Guests](docs/screenshots/guests.png) | ![Guest detail](docs/screenshots/guest-detail.png) |
-| ![Services](docs/screenshots/services.png) | ![Storage](docs/screenshots/storage.png) |
-| ![Backups](docs/screenshots/backups.png) | ![iPhone](docs/screenshots/iphone.png) |
+| ![Services](docs/screenshots/services.png) | ![Departure board](docs/screenshots/board.png) |
+| ![Storage](docs/screenshots/storage.png) | ![Backups](docs/screenshots/backups.png) |
+| ![iPhone: overview](docs/screenshots/iphone-overview.png) | ![iPhone: departure board](docs/screenshots/iphone-board.png) |
 
 ## 🚀 Quick start: try the demo
 
@@ -50,6 +51,9 @@ cd pve1-dash
 npm ci && npm run build && npm run demo
 ```
 
+(Before pve1-dash is merged into `main`, clone its branch: add `--branch claude/homelab-dashboard-pve1-dizt16` to the
+`git clone` line.)
+
 Then open <http://localhost:8080>. (Port taken? `PVE1_DASH_PORT=8081 npm run demo`.)
 
 ## 🏠 Install on your Proxmox host
@@ -60,10 +64,24 @@ On **pve1**, as root (the web UI's node → **Shell** is fine):
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)"
 ```
 
+> **Before pve1-dash is merged into `main`:** the repository's `main` branch still holds the old *Tiny Ecowitt
+> Monitor*, so the command above finds no installer there (and ends without doing anything). Until the merge, install from the pve1-dash branch. Name
+> the branch twice: in the URL (which installer to download) and in `PVE1_DASH_REF` (which code the installer builds):
+>
+> ```bash
+> PVE1_DASH_REF=claude/homelab-dashboard-pve1-dizt16 bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/claude/homelab-dashboard-pve1-dizt16/deploy/install.sh)"
+> ```
+>
+> The installer remembers the branch in the container, so updates and re-runs stay on it. Once the branch is merged
+> into `main`, the plain command above works. If the ref you give doesn't contain pve1-dash, the installer stops right
+> at the start and says so.
+
 It asks a few questions with sensible defaults, shows a plan, and then:
 
-1. creates an **unprivileged Debian 13 container** (tagged `pve1-dash`, no root password, starts on boot);
-2. creates a **read-only API token** (`pve1dash@pve!dashboard`, role `PVEAuditor`);
+1. creates an **unprivileged Debian 13 container** (tagged `pve1-dash`, no root password, starts on boot; Debian 12
+   on hosts whose `pve-container` is too old for Debian 13);
+2. creates a **read-only API token** (`pve1dash@pve!dashboard`, role `PVEAuditor`; a second dashboard in the same
+   cluster gets its own token);
 3. installs **Node.js 24 LTS** and builds pve1-dash inside the container as a sandboxed systemd service;
 4. installs a small **read-only SSH helper** on the host and authorizes the dashboard's key for it only;
 5. optionally installs **lm-sensors** for temperatures, and runs a smoke test.
@@ -75,13 +93,18 @@ Settings. Every step, and how to do it by hand, is in **[docs/SETUP.md](docs/SET
 | What | Command |
 |---|---|
 | Update | `pct exec <ctid> -- pve1-dash-update` |
-| Refresh the host helper (when the update tells you) | `bash -c "$(curl -fsSL …/deploy/install.sh)" -- --update-helper` |
-| Uninstall | `bash -c "$(curl -fsSL …/deploy/uninstall.sh)"` |
+| Refresh the host helper (when the update tells you; it prints the exact command) | `bash -c "$(curl -fsSL …/deploy/install.sh)" -- --update-helper` |
+| Repair, re-pin the certificate, change the container's network | run the installer again (it keeps your config, data and the branch or tag you installed) |
+| Uninstall | `bash -c "$(curl -fsSL …/deploy/uninstall.sh)"` (add `-- --yes` for no questions) |
 | Something's off | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) |
+
+`…` stands for `https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main` (or
+`…/claude/homelab-dashboard-pve1-dizt16` before the merge, see above).
 
 ### 📋 Requirements
 
-- Proxmox VE **8.x or 9.x** (one node; a cluster is fine, the dashboard shows one node).
+- Proxmox VE **8.x or 9.x** (one node; a cluster is fine, the dashboard shows one node, and each node can have its
+  own dashboard).
 - ~1 GiB RAM and 6 GiB disk for the container; internet access while installing.
 - An HTTPS reverse proxy on your LAN with a certificate your devices trust (for the PWA and push).
 - For push on iPhone/iPad: **iOS/iPadOS 16.4+**, with the dashboard added to the Home Screen.

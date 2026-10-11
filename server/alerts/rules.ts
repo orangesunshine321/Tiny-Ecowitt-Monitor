@@ -74,6 +74,8 @@ export interface RuleContext {
   /** ask for a re-evaluation at this time (a pending condition becomes due) */
   wakeAt(time: number): void;
   mem: RuleMemory;
+  /** IANA zone for clock times in alert texts (config.timezone); the process zone when omitted */
+  timeZone?: string;
 }
 
 export type Rule = (c: RuleContext) => RuleResult;
@@ -87,6 +89,24 @@ export function emptyMemory(): RuleMemory {
 const DAY_MS = 24 * 3600_000;
 /** a previously running guest whose status is "unknown" this long raises guest_stopped */
 export const GUEST_UNKNOWN_AFTER_MS = 5 * 60_000;
+/**
+ * Proxmox config locks of operations that stop a guest on purpose and start it again: a stop-mode vzdump keeps
+ * `lock: backup` for the whole job, offline migration `migrate`, snapshot rollback `rollback`, and so on. A guest that is
+ * stopped under one of these is not alerted until the lock has been held this long (a stale lock left behind by a
+ * crashed job must not hide a stopped guest forever).
+ */
+export const GUEST_LOCK_GRACE_MS = 6 * 3600_000;
+export const TRANSIENT_GUEST_LOCKS: ReadonlySet<string> = new Set([
+  'backup',
+  'migrate',
+  'rollback',
+  'snapshot',
+  'snapshot-delete',
+  'suspending',
+  'clone',
+  'create',
+  'copy',
+]);
 /** storage usage must drop this many percentage points below a threshold to clear it */
 export const STORAGE_HYSTERESIS_PERCENT = 2;
 /** backup failures older than this are ignored / expire */
@@ -159,7 +179,7 @@ export const nodeUnreachable: Rule = (c) => {
         kind: 'node_unreachable',
         severity: 'critical',
         title: `${n.node} is unreachable`,
-        body: `No response from the Proxmox API since ${fmtWhen(since, c.now)}${n.error ? `: ${clip(n.error, 120)}` : '.'}`,
+        body: `No response from the Proxmox API since ${fmtWhen(since, c.now, c.timeZone)}${n.error ? `: ${clip(n.error, 120)}` : '.'}`,
         path: '/',
       },
     ],
@@ -187,13 +207,23 @@ export const guestStopped: Rule = (c) => {
     if (g.template || !mem.has(g.vmid) || !isWatched(g, r.watch)) continue;
     const key = `guest_stopped:${g.vmid}`;
     const label = `${typeLabel(g)} ${g.name} (${g.vmid})`;
+    // stopped by a backup/migration/rollback that will start it again: hold off (bounded by GUEST_LOCK_GRACE_MS)
+    if (g.status === 'stopped' && g.lock && TRANSIENT_GUEST_LOCKS.has(g.lock) && !c.active(key)) {
+      const lockedSince = c.since(`${key}#lock:${g.lock}`);
+      c.since(key); // "stopped since" counts from the stop, should the alert fire later
+      if (c.now - lockedSince < GUEST_LOCK_GRACE_MS) {
+        c.wakeAt(lockedSince + GUEST_LOCK_GRACE_MS);
+        carryKeys.push(key);
+        continue;
+      }
+    }
     if (g.status === 'stopped') {
       conditions.push({
         key,
         kind: 'guest_stopped',
         severity: 'warning',
         title: `${g.name} stopped`,
-        body: `${label} was running and has been stopped since ${fmtWhen(c.since(key), c.now)}.`,
+        body: `${label} was running and has been stopped since ${fmtWhen(c.since(key), c.now, c.timeZone)}.`,
         path: `/guests/${g.vmid}`,
       });
     } else if (g.status === 'io-error') {
@@ -202,7 +232,7 @@ export const guestStopped: Rule = (c) => {
         kind: 'guest_stopped',
         severity: 'critical',
         title: `${g.name} paused on an I/O error`,
-        body: `${label} was paused by an I/O error at ${fmtWhen(c.since(key), c.now)}. Check its storage.`,
+        body: `${label} was paused by an I/O error at ${fmtWhen(c.since(key), c.now, c.timeZone)}. Check its storage.`,
         path: `/guests/${g.vmid}`,
       });
     } else if (g.status === 'unknown') {
@@ -213,7 +243,7 @@ export const guestStopped: Rule = (c) => {
           kind: 'guest_stopped',
           severity: 'warning',
           title: `${g.name} status unknown`,
-          body: `Proxmox has not reported a status for ${label} since ${fmtWhen(since, c.now)}.`,
+          body: `Proxmox has not reported a status for ${label} since ${fmtWhen(since, c.now, c.timeZone)}.`,
           path: `/guests/${g.vmid}`,
         });
       } else {
@@ -244,7 +274,7 @@ export const serviceDown: Rule = (c) => {
       kind: 'service_down',
       severity: 'critical',
       title: `${s.name} is down`,
-      body: `Health check failing since ${fmtWhen(s.lastChange ?? c.now, c.now)}: ${clip(s.message ?? 'no response', 100)}.${where}`,
+      body: `Health check failing since ${fmtWhen(s.lastChange ?? c.now, c.now, c.timeZone)}: ${clip(s.message ?? 'no response', 100)}.${where}`,
       path: '/services',
     });
   }
@@ -291,7 +321,7 @@ export const containerUnhealthy: Rule = (c) => {
         kind: 'container_unhealthy',
         severity: 'warning',
         title: what.title,
-        body: `Container on ${g?.name ?? 'guest'} (${vmid}) ${what.state} since ${fmtWhen(c.since(key), c.now)}.`,
+        body: `Container on ${g?.name ?? 'guest'} (${vmid}) ${what.state} since ${fmtWhen(c.since(key), c.now, c.timeZone)}.`,
         path: `/guests/${vmid}`,
       });
     }
@@ -352,7 +382,7 @@ export const backupFailed: Rule = (c) => {
       kind: 'backup_failed',
       severity: failed ? 'critical' : 'warning',
       title: failed ? `${subject} failed` : `${subject} finished with warnings`,
-      body: `vzdump started ${fmtWhen(issue.startTime, c.now)} ended with "${clip(issue.status ?? 'unknown error', 120)}".`,
+      body: `vzdump started ${fmtWhen(issue.startTime, c.now, c.timeZone)} ended with "${clip(issue.status ?? 'unknown error', 120)}".`,
       path: '/backups',
     });
   }
@@ -385,7 +415,7 @@ export const backupStale: Rule = (c) => {
       title: `No recent backup of ${cov.name}`,
       body:
         cov.lastBackup !== undefined
-          ? `Last backup of ${label} was ${fmtWhen(cov.lastBackup, c.now)}${cov.lastBackupStorage ? ` on ${cov.lastBackupStorage}` : ''}, more than ${plural(r.days, 'day')} ago.`
+          ? `Last backup of ${label} was ${fmtWhen(cov.lastBackup, c.now, c.timeZone)}${cov.lastBackupStorage ? ` on ${cov.lastBackupStorage}` : ''}, more than ${plural(r.days, 'day')} ago.`
           : `${label} has never been backed up, although a backup job includes it.`,
       path: '/backups',
     });

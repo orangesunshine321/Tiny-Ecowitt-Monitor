@@ -14,6 +14,7 @@ import { shellUi, useShellUi } from './uiStore';
 export function TopBar() {
   const barRef = useRef<HTMLDivElement>(null);
   const trailingRef = useRef<HTMLDivElement>(null);
+  const leadingRef = useRef<HTMLDivElement>(null);
   const header = useShellUi((s) => s.header);
   const collapsed = useShellUi((s) => s.collapsed);
 
@@ -64,12 +65,27 @@ export function TopBar() {
     return () => ro.disconnect();
   }, []);
 
+  // the iPhone compact title is centred on the bar; it must stay clear of the wider of the leading/trailing items
+  const hasBack = !!header?.back;
+  useEffect(() => {
+    const bar = barRef.current;
+    const el = leadingRef.current;
+    if (!bar) return;
+    if (!el || typeof ResizeObserver === 'undefined') {
+      bar.style.setProperty('--leading-w', '0px');
+      return;
+    }
+    const ro = new ResizeObserver(() => bar.style.setProperty('--leading-w', `${Math.ceil(el.getBoundingClientRect().width)}px`));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [hasBack]);
+
   return (
     <div ref={barRef} className="shell-topbar" data-collapsed={collapsed || undefined}>
       <div className="shell-topbar-edge" aria-hidden="true" />
       <div className="shell-topbar-inner">
         {header?.back && (
-          <div className="shell-topbar-leading">
+          <div ref={leadingRef} className="shell-topbar-leading">
             <Link to={header.back.to} className="shell-back glass">
               <ChevronLeft size={22} strokeWidth={2.3} aria-hidden="true" />
               {header.back.label}

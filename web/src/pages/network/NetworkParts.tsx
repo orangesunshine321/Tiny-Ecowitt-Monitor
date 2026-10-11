@@ -255,6 +255,7 @@ export function PortsTable({ rows }: { rows: readonly PortRow[] }) {
         key: 'process',
         header: 'Process',
         truncate: 160,
+        shrink: true,
         sortValue: (r) => r.container ?? r.process,
         cell: (r) =>
           r.container ? (

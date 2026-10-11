@@ -12,12 +12,13 @@ import type { AlertEvent, Guest, ServiceEntry } from '../shared/types.js';
 
 const silent: Logger = { debug() {}, info() {}, warn() {}, error() {}, child: () => silent };
 
-function makeCtx(dataDir: string): AppContext {
+function makeCtx(dataDir: string, over: Record<string, unknown> = {}): AppContext {
   const config = ConfigSchema.parse({
     proxmox: { url: 'https://10.10.20.10:8006', tokenId: 'dash@pve!ro', tokenSecret: 'x' },
     dataDir,
     publicUrl: 'https://dash.example.net',
     alerts: { vapidSubject: 'mailto:owner@example.net', cooldownMinutes: 30 },
+    ...over,
   });
   const store = new Store(
     {
@@ -163,5 +164,42 @@ describe('AlertService', () => {
     expect(events.map((e) => e.key)).toEqual(['guest_stopped:110']);
     expect(send.mock.calls.length).toBe(pushes + 1);
     svc2.stop();
+  });
+
+  it('writes clock times in config.timezone into alert texts and recovery pushes', async () => {
+    const ctx = makeCtx(dataDir, { timezone: 'Asia/Tokyo' }); // system time 12:00 UTC = 21:00 in Tokyo
+    const svc = createAlertService(ctx);
+    await svc.push.subscribe({ subscription: subscription(), name: 'iPhone' });
+    svc.start();
+    ctx.store.set('guests', [guest(102, 'docker-media', 'running')]);
+    await vi.advanceTimersByTimeAsync(1100);
+    ctx.store.set('guests', [guest(102, 'docker-media', 'stopped')]);
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(ctx.store.get('alerts').active[0]!.body).toBe('LXC docker-media (102) was running and has been stopped since 21:00.');
+    ctx.store.set('guests', [guest(102, 'docker-media', 'running')]);
+    await vi.advanceTimersByTimeAsync(1100);
+    const recovery = JSON.parse(send.mock.calls.at(-1)![1] as string);
+    expect(recovery.notification.body).toBe('Back to normal at 21:00 after 1 s.');
+    svc.stop();
+  });
+
+  it('badges count the alerts each device is subscribed to', async () => {
+    const ctx = makeCtx(dataDir);
+    const svc = createAlertService(ctx);
+    await svc.push.subscribe({ subscription: subscription(), name: 'all' });
+    await svc.push.subscribe({ subscription: subscription(), name: 'services only', prefs: { kinds: ['service_down'] } });
+    svc.start();
+    ctx.store.set('guests', [guest(102, 'docker-media', 'running')]);
+    await vi.advanceTimersByTimeAsync(1100);
+    ctx.store.set('guests', [guest(102, 'docker-media', 'stopped')]);
+    await vi.advanceTimersByTimeAsync(1100);
+    send.mockClear();
+    ctx.store.set('services', [service('jellyfin', 'down')]);
+    await vi.advanceTimersByTimeAsync(1100);
+    // two alerts are active; the services-only device is only told about (and counts) the service
+    expect(ctx.store.get('alerts').active).toHaveLength(2);
+    const badges = send.mock.calls.map((c: unknown[]) => JSON.parse(c[1] as string).app_badge).sort();
+    expect(badges).toEqual([1, 2]);
+    svc.stop();
   });
 });

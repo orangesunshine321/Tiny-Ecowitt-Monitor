@@ -311,7 +311,7 @@
 }
 .ov-when {
   font-size: var(--fs-footnote);
-  color: var(--label-3);
+  color: var(--label-2);
   white-space: nowrap;
 }
 .ov-more {
@@ -402,8 +402,10 @@
 .ov-grow:active {
   background: var(--fill-3);
 }
+/* the ring follows a row radius, like the app's other focus rings (rows are full-bleed, so only while focused) */
 .ov-grow:focus-visible {
   outline-offset: -3px;
+  border-radius: 12px;
 }
 .ov-glist li + li .ov-grow::before {
   content: '';

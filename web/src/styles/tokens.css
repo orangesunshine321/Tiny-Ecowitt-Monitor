@@ -38,6 +38,9 @@
   --label-2: rgb(60 60 67 / 0.6);
   --label-3: rgb(60 60 67 / 0.3);
   --label-4: rgb(60 60 67 / 0.18);
+  /* secondary text placed directly on the wallpaper (page/section subtitles, sidebar headings): the translucent
+     --label-2 drops to ~2.6:1 over the saturated blobs, so this one is opaque (about 5:1 over the brightest blob) */
+  --label-2-wp: #3c3c43;
   --separator: rgb(60 60 67 / 0.29);
   --separator-opaque: #c6c6c8;
   --hairline: rgb(60 60 67 / 0.14);
@@ -230,6 +233,7 @@
     --label-2: rgb(235 235 245 / 0.6);
     --label-3: rgb(235 235 245 / 0.3);
     --label-4: rgb(235 235 245 / 0.16);
+    --label-2-wp: rgb(235 235 245 / 0.7);
     --separator: rgb(84 84 88 / 0.6);
     --separator-opaque: #38383a;
     --hairline: rgb(255 255 255 / 0.1);
@@ -304,6 +308,7 @@
   --label-2: rgb(235 235 245 / 0.6);
   --label-3: rgb(235 235 245 / 0.3);
   --label-4: rgb(235 235 245 / 0.16);
+  --label-2-wp: rgb(235 235 245 / 0.7);
   --separator: rgb(84 84 88 / 0.6);
   --separator-opaque: #38383a;
   --hairline: rgb(255 255 255 / 0.1);
@@ -368,9 +373,10 @@
     --pink: #e7124d;
     --brown: #956d51;
     --gray: #6c6c70;
-    --label-2: rgb(60 60 67 / 0.68);
-    --label-3: rgb(60 60 67 / 0.38);
-    --label-4: rgb(60 60 67 / 0.26);
+    --label-2: rgb(60 60 67 / 0.76);
+    --label-3: rgb(60 60 67 / 0.6);
+    --label-4: rgb(60 60 67 / 0.3);
+    --label-2-wp: #26262b;
     --separator: rgb(60 60 67 / 0.37);
     --hairline: rgb(0 0 0 / 0.4);
     --glass-fill: rgb(255 255 255 / 0.92);
@@ -396,9 +402,10 @@
     --pink: #ff8ac4;
     --brown: #dba679;
     --gray: #aeaeb2;
-    --label-2: rgb(235 235 245 / 0.68);
-    --label-3: rgb(235 235 245 / 0.38);
-    --label-4: rgb(235 235 245 / 0.24);
+    --label-2: rgb(235 235 245 / 0.76);
+    --label-3: rgb(235 235 245 / 0.55);
+    --label-4: rgb(235 235 245 / 0.3);
+    --label-2-wp: rgb(235 235 245 / 0.85);
     --separator: rgb(210 210 210 / 0.68);
     --hairline: rgb(255 255 255 / 0.5);
     --glass-fill: rgb(20 20 22 / 0.92);
@@ -424,9 +431,10 @@
     --pink: #ff8ac4;
     --brown: #dba679;
     --gray: #aeaeb2;
-    --label-2: rgb(235 235 245 / 0.68);
-    --label-3: rgb(235 235 245 / 0.38);
-    --label-4: rgb(235 235 245 / 0.24);
+    --label-2: rgb(235 235 245 / 0.76);
+    --label-3: rgb(235 235 245 / 0.55);
+    --label-4: rgb(235 235 245 / 0.3);
+    --label-2-wp: rgb(235 235 245 / 0.85);
     --separator: rgb(210 210 210 / 0.68);
     --hairline: rgb(255 255 255 / 0.5);
     --glass-fill: rgb(20 20 22 / 0.92);

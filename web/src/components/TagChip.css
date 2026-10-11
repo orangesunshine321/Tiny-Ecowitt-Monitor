@@ -36,10 +36,32 @@ button.ui-tag:hover {
 button.ui-tag:active {
   transform: scale(0.95);
 }
+/* Selected: white text needs a dark enough fill. The light palette hues (teal, cyan, mint) gave ~2:1 as they were.
+   Fallback: 62% of the colour toward black (>= 5.4:1 for every palette colour in every theme). Where relative colours
+   work, keep the hue and only cap the OKLCH lightness at 0.5 (>= 5.1:1), so already dark hues stay as they are. */
 .ui-tag[aria-pressed='true'] {
   color: #fff;
-  background: var(--_c);
+  background: color-mix(in oklab, var(--_c) 62%, #000);
 }
 .ui-tag[aria-pressed='true']:hover {
-  background: color-mix(in oklab, var(--_c) 88%, #000);
+  background: color-mix(in oklab, var(--_c) 54%, #000);
+}
+@supports (color: oklch(from red l c h)) {
+  .ui-tag[aria-pressed='true'] {
+    background: oklch(from var(--_c) min(l, 0.5) c h);
+  }
+  .ui-tag[aria-pressed='true']:hover {
+    background: oklch(from var(--_c) min(l, 0.44) c h);
+  }
+}
+/* touch: a 44pt-tall hit area around the 22px chip (HIG minimum) without changing its look */
+@media (pointer: coarse) {
+  button.ui-tag {
+    position: relative;
+  }
+  button.ui-tag::after {
+    content: '';
+    position: absolute;
+    inset: -11px -3px;
+  }
 }

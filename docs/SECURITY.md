@@ -49,8 +49,13 @@ Things worth knowing:
 - Proxmox silently hides backup files from audit-only tokens, so the backup list also comes through the helper
   (`pvesh ... --content backup`, run as root but read-only).
 
-To rotate the token: run the installer again and answer "yes" to rotating (or `PVE1_DASH_ROTATE_TOKEN=yes`). To
-revoke it: Datacenter → Permissions → API Tokens → remove.
+To rotate the token: run the installer again and answer "yes" to rotating (or `PVE1_DASH_ROTATE_TOKEN=yes`). The
+installer replaces it at the very end, once the new version runs, so a run that fails half-way never leaves the
+dashboard with a revoked secret; on a re-run it also checks the container's secret against the API and offers a new
+token when Proxmox rejects it. To revoke it: Datacenter → Permissions → API Tokens → remove.
+
+Tokens are cluster-wide. A second dashboard in the same cluster (another node, or `PVE1_DASH_EXISTING=new`) gets its
+own token, `pve1dash@pve!dashboard-ct<id>`, so installing or removing one dashboard never revokes another one's.
 
 ### Why not VM.Monitor on PVE 8
 
@@ -98,15 +103,27 @@ Honest caveats:
   `pct exec`/`qm guest exec` work). The script only reads, but it is code that runs with full power: it is installed by
   root, owned by root, and `install.sh` cross-checks the copy from the container against the repository before
   installing it (the container is treated as less trusted than the host). Review it if you like; it is short and
-  commented.
+  commented. The cross-check is built so that a compromised container can't steer it:
+  - the repository is the one you chose on the host; one recorded in the container is only used after you confirm it;
+  - the ref is resolved once to a commit of that repository, and the reference copy is downloaded at that commit. A ref
+    recorded in the container is used only if the repository has it as a **branch or tag**: pull-request refs
+    (`pull/<n>/head`) and commit ids are never taken from the container, because GitHub serves the code of forks and
+    pull requests under the original repository's URLs too;
+  - if the copies differ, the installer shows both SHA-256 sums and the diff with every byte outside printable ASCII
+    shown as `\xNN` (so escape sequences can't redraw your terminal or hide lines), keeps the whole diff in
+    `/var/log/pve1-dash-helper.diff`, and installs nothing unless you say so (never with `--yes` alone).
 - If the container is compromised, the attacker gets what the helper prints: your guests' service lists, Docker
   containers, IPs and open ports, pending updates, backup lists and temperatures. Nothing more.
 - `/root/.ssh/authorized_keys` on Proxmox is a symlink to `/etc/pve/priv/authorized_keys`, **shared by every node of a
   cluster**. The key line therefore exists on all nodes; on nodes without the helper installed, sshd tries to run a
-  missing file and the login simply fails (there is no fallback to a shell).
+  missing file and the login simply fails (there is no fallback to a shell). Each dashboard has its own line
+  (`pve1-dash@ct<id>`); the installer and uninstaller only touch the line of the container they work on (and copies of
+  its key). They write the file carefully: a backup goes to `/root/.ssh/authorized_keys.pve1-dash.bak`, the new
+  content is built next to the file (not in `/tmp`) and its line count checked, the complete copy replaces the file by
+  a rename, and any failure stops the script and names the backup.
 - Optional extra fence when the container has a static IP: prefix the line with `from="192.168.1.60",` so the key only
-  works from that address. (The installer doesn't add it because DHCP addresses change; re-running
-  `install.sh --update-helper` rewrites the line, so add it again afterwards.)
+  works from that address. The installer doesn't add it because DHCP addresses change, but it **keeps** options you add
+  to the line (as long as it still has `restrict` and the helper's `command=`), on re-runs and with `--update-helper`.
 - The pve1 host key is pinned from `/etc/ssh/ssh_host_ed25519_key.pub` at install time; the dashboard refuses to
   connect if it changes ([TROUBLESHOOTING.md](TROUBLESHOOTING.md#-ssh-host-key-changed)).
 
@@ -134,6 +151,32 @@ So:
    also works in browsers; its behaviour in the iOS Home Screen app is UNVERIFIED.
 4. The container listens on plain HTTP port 8080. If you can, let only the proxy reach it (Proxmox firewall on the
    container: allow 8080 from the proxy's IP).
+
+**DNS rebinding.** Without a login, a web page on the internet could otherwise read the API through your browser by
+re-pointing its own host name at the dashboard's LAN address. The server therefore answers only requests whose `Host`
+is an IP address, `localhost`, a single-label name or a name under `.lan`, `.local`, `.home.arpa`, `.internal` (and a
+few similar private suffixes), the host of `publicUrl`, `listen.host`, the container's hostname, or a name listed in
+`allowedHosts` (exact, or `*.example.com` for subdomains). Everything else gets **421 Unknown host** (`/healthz`
+excepted). If you reach the dashboard under another public name, add it to `allowedHosts` or set `publicUrl`.
+
+`X-Forwarded-*` headers are trusted from any client (the proxy's address is not known in advance). Their only uses are
+log lines, the request origin recorded for push links (the browser's `Origin` header is preferred, and only accepted
+when its host passes the check above) and the URL inside `/setup/guest.sh` when `publicUrl` is unset (a forwarded host
+is used only when it passes the same check). A client that spoofs them only changes what it gets back itself.
+
+**Outbound requests the server makes on someone's behalf** are limited:
+
+- *Web Push.* A subscription endpoint must be an `https://` URL of a public host name (no IP literals, LAN names,
+  trailing dots or credentials). The name is resolved when connecting and only **public** addresses are used: private,
+  loopback, link-local, CGNAT, documentation, multicast and IPv4-mapped/NAT64 forms of them are refused, so a
+  registered "device" cannot make the server POST into your LAN (a device whose endpoint resolves there is removed).
+  TLS certificates are verified as usual.
+- *Docker auto-discovery.* The `docker ps` output comes from inside a guest, so root in that guest controls it. The
+  bind address of a published port is used only when it is an IP literal **of that guest**; anything else (other
+  hosts, names, URL paths) falls back to the guest's own address. A compromised guest can therefore still choose a
+  port (and, since a guest reports its own IPs through the agent or its interfaces, which of "its" addresses) for the
+  recurring `GET /` health check, but cannot aim it at arbitrary host names or paths. Turn
+  `services.autoDiscoverDocker` off if you don't trust a guest's root user.
 
 The **console buttons** only deep-link to Proxmox's own noVNC/xterm.js console. Proxmox asks for your normal Proxmox
 login there; the dashboard's token can't open consoles.
@@ -176,6 +219,11 @@ frequent, use `proxmox.tls.ca` with a copy of `/etc/pve/pve-root-ca.pem` instead
 at all (publicly trusted ACME certificate, with a `proxmox.url` host name that matches it). `insecure: true` exists
 but turns off all checks; avoid it.
 
+When the host serves a custom or ACME certificate (`pveproxy-ssl.pem`), the installer warns that a pin breaks at every
+renewal and, for a new install, offers the public-CA mode: it asks for the host name on the certificate (proposing the
+node's ACME domain) and uses it only after checking that the certificate verifies for that name against the public CAs
+and that the name resolves to the host inside the container. Otherwise it pins as before.
+
 ## What is stored where
 
 | Location | Contents | Owner / mode | Sensitivity |
@@ -184,7 +232,7 @@ but turns off all checks; avoid it.
 | Container `/etc/pve1-dash/ssh/id_ed25519` | dashboard SSH private key | pve1dash 0600 | **secret** (can run the helpers only) |
 | Container `/etc/pve1-dash/ssh/known_hosts` | pinned host keys (pve1 + learned VMs) | pve1dash 0600 | integrity matters |
 | Container `/etc/pve1-dash/config.yaml` | settings (no secrets unless you inline `tokenSecret`) | root:pve1dash 0640 | low |
-| Container `/var/lib/pve1-dash/push.json` | VAPID key pair, push subscriptions (device endpoints) | pve1dash 0600 | **secret-ish**: lets someone send notifications to your devices |
+| Container `/var/lib/pve1-dash/push.json` | VAPID key pair, push subscriptions (device endpoints) | pve1dash 0600 | **secret-ish**: lets someone send notifications to your devices. Never overwritten when unreadable; a corrupt copy is kept as `push.json.corrupt-<time>` |
 | Container `/var/lib/pve1-dash/alerts.json`, `health.json` | alert history, service uptime history | pve1dash 0600 | low |
 | Host `/usr/local/sbin/pve1-dash-helper` | the helper | root 0755 | integrity matters |
 | Host `/etc/pve/priv/authorized_keys` | one pve1-dash line | (pmxcfs) | integrity matters |
@@ -196,7 +244,13 @@ Back up the container like any other guest; `/var/lib/pve1-dash` is all the stat
 ## Supply chain and updates
 
 - The installer and update tool fetch code from the GitHub repository over HTTPS, at the ref you choose (`main` by
-  default; pin a tag with `PVE1_DASH_REF` / `pve1-dash-update --ref` if you prefer).
+  default; pin a tag with `PVE1_DASH_REF` / `pve1-dash-update --ref` if you prefer). The installer resolves the ref to
+  one commit up front: the container checks out exactly that commit, and the files the host downloads (the setup
+  script, the reference copy of the helper) come from that commit's immutable URL. It stops right away if the ref does
+  not contain pve1-dash.
+- A Node.js update is unpacked and test-run next to the working version; only then is `/opt/node` switched, and older
+  versions are deleted only after the switch is verified. A failed download or unpack (say, a full disk) leaves the
+  working Node.js untouched.
 - Node.js comes from the official `nodejs.org` tarball and is checked against `SHASUMS256.txt`. That catches corrupt
   or tampered downloads in transit, but both files come from the same server; the GPG signature of the checksums is
   **not** verified.
@@ -214,6 +268,8 @@ Back up the container like any other guest; `/var/lib/pve1-dash` is all the stat
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/uninstall.sh)"
 ```
 
-removes the key line, the helper and (after asking) the API user and token from the host. By hand: delete the
-`pve1-dash@ct...` line from `/root/.ssh/authorized_keys`, `rm /usr/local/sbin/pve1-dash-helper`, and remove the user
-in Datacenter → Permissions → Users.
+(before pve1-dash is merged into `main`: `.../claude/homelab-dashboard-pve1-dizt16/deploy/uninstall.sh`) removes one
+dashboard's key line, the helper (unless another dashboard on the node uses it) and, after asking, its API token (the
+user too when no other dashboard is left). A container you keep is stopped and taken off autostart, so it can't send
+false alerts. By hand: delete the `pve1-dash@ct<id>` line from `/root/.ssh/authorized_keys`,
+`rm /usr/local/sbin/pve1-dash-helper`, and remove the token (or the user) in Datacenter → Permissions.

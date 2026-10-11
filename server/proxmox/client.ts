@@ -38,6 +38,8 @@ export interface PveClientOptions {
   timeoutMs: number;
   /** receives configuration warnings (insecure TLS, conflicting options) */
   onWarning?: (msg: string) => void;
+  /** sockets in this client's pool (default 16) */
+  connections?: number;
 }
 
 export interface PveRequestOptions {
@@ -85,11 +87,13 @@ export function normalizeFingerprint(fp: string): string {
 export function createDispatcher(
   baseUrl: string,
   tls: PveTlsOptions = {},
-  opts: { connectTimeoutMs?: number; onWarning?: (msg: string) => void } = {},
+  opts: { connectTimeoutMs?: number; onWarning?: (msg: string) => void; connections?: number } = {},
 ): { dispatcher: Agent; mode: PveTlsMode } {
   // Enough sockets that the 5 s status poll never queues behind slow calls (disks/list runs smartctl per disk, PBS
   // prune dry-runs, guest-agent pings): the per-request timeout starts before undici dispatches the request.
-  const common = { keepAliveTimeout: 10_000, connections: 16 } as const;
+  // The pollers' own concurrency is bounded; browser-driven on-demand calls use a separate, smaller client
+  // (proxmox/index.ts), so nothing outside the pollers can fill this pool.
+  const common = { keepAliveTimeout: 10_000, connections: opts.connections ?? 16 } as const;
   const timeout = opts.connectTimeoutMs ?? 10_000;
   const warn = opts.onWarning ?? (() => {});
   const protocol = new URL(baseUrl).protocol;
@@ -174,7 +178,11 @@ export class PveClient {
   }
 
   private buildDispatcher() {
-    return createDispatcher(this.base, this.opts.tls, { connectTimeoutMs: this.opts.timeoutMs, onWarning: this.opts.onWarning });
+    return createDispatcher(this.base, this.opts.tls, {
+      connectTimeoutMs: this.opts.timeoutMs,
+      onWarning: this.opts.onWarning,
+      connections: this.opts.connections,
+    });
   }
 
   /** The dispatcher, recreated lazily after close() so the service can be restarted. */

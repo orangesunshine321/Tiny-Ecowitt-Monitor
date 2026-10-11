@@ -9,6 +9,7 @@ import {
   advanceRates,
   buildGuest,
   counterSample,
+  hasLiveProcess,
   HISTORY_SAMPLES,
   normalizeGuestStatus,
   type GuestDetails,
@@ -25,6 +26,7 @@ type NodeExtras = Partial<
     | 'pveRepoId'
     | 'netIn'
     | 'netOut'
+    | 'ioWait'
     | 'pressure'
     | 'arcSize'
     | 'subscription'
@@ -112,12 +114,14 @@ export class GuestState {
       const vmid = num(vm.vmid)!;
       seen.add(vmid);
       this.rates.set(vmid, advanceRates(this.rates.get(vmid), counterSample(vm, now)));
-      const running = normalizeGuestStatus(vm.status) === 'running';
+      const status = normalizeGuestStatus(vm.status);
+      const running = status === 'running';
       const h = this.history.get(vmid) ?? { t: [], cpu: [], mem: [] };
       this.history.set(vmid, {
         t: pushRing(h.t, now, HISTORY_SAMPLES),
         cpu: pushRing(h.cpu, running ? round(numOr(vm.cpu, 0), 4) : 0, HISTORY_SAMPLES),
-        mem: pushRing(h.mem, running ? numOr(vm.mem, 0) : 0, HISTORY_SAMPLES),
+        // a paused/suspended VM still holds its memory (see hasLiveProcess)
+        mem: pushRing(h.mem, hasLiveProcess(status) ? numOr(vm.mem, 0) : 0, HISTORY_SAMPLES),
       });
     }
     for (const map of [this.rates, this.history] as Map<number, unknown>[]) {

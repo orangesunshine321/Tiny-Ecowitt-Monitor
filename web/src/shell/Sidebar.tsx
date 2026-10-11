@@ -5,9 +5,9 @@ import { IconButton } from '../components/IconButton';
 import { formatDuration } from '../format';
 import { useBreakpoint } from '../hooks/useMediaQuery';
 import { Link, useRoute } from '../router';
-import { useSnapshot } from '../store';
+import { useNavBadges, useSnapshot } from '../store';
 import { NAV, NAV_GROUPS } from './nav';
-import { NavBadge } from './NavBadge';
+import { NavBadge, navItemLabel } from './NavBadge';
 import './Sidebar.css';
 import { shellUi, useShellUi } from './uiStore';
 
@@ -21,6 +21,7 @@ export function Sidebar() {
   const expanded = bp === 'ipad' && open;
   const { pathname } = useRoute();
   const node = useSnapshot((s) => ({ name: s.node.node, online: s.node.online, uptime: s.node.uptime, title: s.meta.title }));
+  const badges = useNavBadges();
 
   // close the overlay on navigation, on leaving the iPad layout and on Esc
   useEffect(() => shellUi.setSidebarOpen(false), [pathname, bp]);
@@ -65,7 +66,14 @@ export function Sidebar() {
               {NAV.filter((n) => n.group === group.id).map((item) => {
                 const Icon = item.icon;
                 return (
-                  <Link key={item.id} to={item.path} activeMatch="prefix" className="shell-nav-item" title={item.label}>
+                  <Link
+                    key={item.id}
+                    to={item.path}
+                    activeMatch="prefix"
+                    className="shell-nav-item"
+                    title={item.label}
+                    aria-label={navItemLabel(item.label, badges, item.badge)}
+                  >
                     <span className="shell-nav-iconwrap">
                       <Icon className="shell-nav-icon" strokeWidth={1.9} aria-hidden="true" />
                       {item.badge && <NavBadge kind={item.badge} variant="dot" />}

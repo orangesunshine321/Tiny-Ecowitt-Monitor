@@ -13,7 +13,39 @@ import { DEMO_SERVICES } from './demo/world.js';
  * parsing, so inner field defaults would NOT be applied.
  */
 
-const seconds = (def: number) => z.number().int().positive().default(def);
+/**
+ * Intervals are bounded: Node timers overflow above ~24.8 days and then fire after 1 ms, which would turn a long
+ * interval into a busy loop (see server/util/timers.ts). A week is far beyond any useful polling interval.
+ */
+export const MAX_INTERVAL_SEC = 7 * 24 * 3600;
+/** Upper bound for request/command timeouts (also keeps them clear of the timer overflow). */
+export const MAX_TIMEOUT_MS = 60 * 60_000;
+
+const seconds = (def: number) =>
+  z.number().int().positive().max(MAX_INTERVAL_SEC, `must be at most ${MAX_INTERVAL_SEC} seconds (7 days)`).default(def);
+const millis = (def: number) => z.number().int().positive().max(MAX_TIMEOUT_MS, `must be at most ${MAX_TIMEOUT_MS} ms (1 hour)`).default(def);
+
+/** Whether `tz` is an IANA time zone name this Node.js build knows (e.g. "Europe/Berlin", "UTC"). */
+export function isValidTimeZone(tz: string): boolean {
+  if (!tz.trim()) return false;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The process's zone: TZ when it names a valid zone, else the system zone (/etc/localtime), else UTC. */
+export function systemTimeZone(env: NodeJS.ProcessEnv = process.env): string {
+  const tz = env.TZ?.replace(/^:/, '').trim();
+  if (tz && isValidTimeZone(tz)) return tz;
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
+}
 
 const TlsSchema = z
   .object({
@@ -42,7 +74,7 @@ const ProxmoxSchema = z.object({
   /** base URL for links into the Proxmox web UI (defaults to `url`) */
   uiUrl: z.string().url().optional(),
   /** request timeout */
-  timeoutMs: z.number().int().positive().default(10000),
+  timeoutMs: millis(10000),
 });
 
 const PollingSchema = z
@@ -77,7 +109,7 @@ const InventorySchema = z
     /** OpenSSH known_hosts file used to pin host keys; unknown guest keys are learned on first use (TOFU) */
     knownHosts: z.string().default('/etc/pve1-dash/ssh/known_hosts'),
     /** per-command timeout */
-    timeoutMs: z.number().int().positive().default(120000),
+    timeoutMs: millis(120000),
     /** the Proxmox host itself (forced-command key → /usr/local/sbin/pve1-dash-helper) */
     host: SshTargetSchema.optional(),
     /** VMs without a guest agent, reached directly over SSH (forced-command key → /usr/local/sbin/pve1-dash-guest-inventory) */
@@ -115,7 +147,7 @@ const ServicesSchema = z
       .record(z.string(), z.object({ name: z.string().optional(), icon: z.string().optional(), group: z.string().optional(), url: z.string().optional(), alert: z.boolean().optional() }))
       .default({}),
     checkInterval: seconds(30),
-    timeoutMs: z.number().int().positive().default(5000),
+    timeoutMs: millis(5000),
     /** latency above this is "slow" */
     slowMs: z.number().int().positive().default(1500),
     /** consecutive failures before a service is "down" */
@@ -168,6 +200,22 @@ export const ConfigSchema = z.object({
    * Needed for notification click-through (Declarative Web Push requires an absolute URL) and the guest setup command.
    */
   publicUrl: z.string().url().optional(),
+  /**
+   * IANA time zone for clock times written into alert and notification texts ("stopped since 14:02"), e.g.
+   * "Europe/Berlin". Default: the TZ environment variable, else the system zone of the machine running pve1-dash
+   * (an LXC created without a time zone is usually UTC, so set this to your own zone).
+   */
+  timezone: z
+    .string()
+    .refine(isValidTimeZone, 'not a known IANA time zone (e.g. "Europe/Berlin", "America/New_York", "UTC")')
+    .default(() => systemTimeZone()),
+  /**
+   * Extra host names (as typed in the browser, without port) the dashboard answers to. Requests whose Host header is
+   * not an IP address, localhost, a single-label or .lan/.local/.home.arpa/.internal name, the host of publicUrl or one
+   * of these are refused (421), which blocks DNS-rebinding attacks from web pages. Add the name of your reverse proxy's
+   * site here if it is not publicUrl's host, e.g. ["dash.example.com"].
+   */
+  allowedHosts: z.array(z.string().min(1)).default([]),
   dataDir: z.string().default('/var/lib/pve1-dash'),
   demo: z.boolean().default(false),
   proxmox: ProxmoxSchema,

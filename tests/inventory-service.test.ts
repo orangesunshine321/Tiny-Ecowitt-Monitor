@@ -337,6 +337,56 @@ describe('inventory service', () => {
     svc.stop();
   });
 
+  it('ignores single-guest refreshes while the guest list is unknown (except direct-SSH guests)', async () => {
+    const { ctx, helper, runner, svc, logs } = setup();
+    svc.start();
+    await vi.advanceTimersByTimeAsync(1500); // first sweep done; Proxmox has not delivered a guest list
+    expect(ctx.store.get('guests')).toEqual([]);
+    const sweeps = helper.guestsFn.mock.calls.length;
+    const ssh = runner.calls.length;
+    for (let vmid = 1; vmid <= 500; vmid++) await svc.refresh(vmid);
+    expect(helper.guestsFn.mock.calls.length).toBe(sweeps); // no helper run for arbitrary vmids
+    expect(logs.filter((l) => l.startsWith('debug inventory refresh ignored')).length).toBe(499);
+    // only vmid 108, configured for direct SSH, was refreshed
+    expect(runner.calls.slice(ssh).map((c) => c.target.address)).toEqual(['10.10.20.60']);
+    svc.stop();
+  });
+
+  it('runs at most two single-guest refreshes at once and prunes its rate-limit memory', async () => {
+    const { ctx, helper, svc } = setup();
+    const vmids = Array.from({ length: 12 }, (_, i) => 200 + i);
+    ctx.store.set('guests', vmids.map((vmid) => ({ vmid }) as Guest));
+    svc.start();
+    await vi.advanceTimersByTimeAsync(1500);
+    let running = 0;
+    let peak = 0;
+    const done: number[] = [];
+    helper.guestsFn.mockImplementation(async (vmid?: number) => {
+      running++;
+      peak = Math.max(peak, running);
+      await new Promise((r) => setTimeout(r, 1000));
+      running--;
+      done.push(vmid!);
+      return [];
+    });
+    const all = Promise.all(vmids.map((v) => svc.refresh(v)));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(running).toBe(2);
+    await vi.advanceTimersByTimeAsync(6000);
+    await all;
+    expect(peak).toBe(2);
+    expect(done.sort()).toEqual(vmids);
+    // every vmid is rate limited for 10 s, then allowed again
+    await svc.refresh(200);
+    expect(helper.guestsFn).toHaveBeenCalledTimes(1 + vmids.length);
+    await vi.advanceTimersByTimeAsync(10_000);
+    const p = svc.refresh(200);
+    await vi.advanceTimersByTimeAsync(1000);
+    await p;
+    expect(helper.guestsFn).toHaveBeenCalledTimes(2 + vmids.length);
+    svc.stop();
+  });
+
   it('restarts cleanly while a sweep is still running', async () => {
     const { helper, svc } = setup();
     let release!: () => void;

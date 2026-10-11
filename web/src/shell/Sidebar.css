@@ -101,7 +101,7 @@
   font-size: var(--fs-caption);
   line-height: var(--lh-caption);
   font-weight: 600;
-  color: var(--label-2);
+  color: var(--label-2-wp);
   letter-spacing: 0.01em;
 }
 .shell-nav-item {
@@ -205,8 +205,26 @@
   }
   .shell-sidebar:not([data-expanded]) .shell-sb-header {
     flex-direction: column;
-    padding: 2px 0 8px;
-    gap: 8px;
+    padding: 2px 0 10px;
+    margin-bottom: 8px;
+    gap: 10px;
+    border-bottom: 0.5px solid var(--separator);
+  }
+  /* The rail's expand toggle is a control, not a destination: a small accent capsule above a separator, unlike the
+     48px nav tiles below it (it stays in the rail rather than the top bar, where it would collide with the large
+     title that shares the toolbar row on iPad). */
+  .shell-sidebar:not([data-expanded]) .shell-sb-toggle {
+    width: 44px;
+    height: 28px;
+    color: var(--accent);
+    background: var(--fill-3);
+  }
+  .shell-sidebar:not([data-expanded]) .shell-sb-toggle:hover {
+    background: var(--fill-2);
+  }
+  .shell-sidebar:not([data-expanded]) .shell-sb-toggle svg {
+    width: 17px;
+    height: 17px;
   }
   .shell-sidebar:not([data-expanded]) .shell-sb-section + .shell-sb-section {
     margin-top: 8px;

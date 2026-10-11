@@ -142,25 +142,34 @@ export function hostHelper(sim: DemoSim, cmdline: string, now: number): Simulate
       return n === 1 ? ok(JSON.stringify(DEMO_UPDATES), 25) : denied();
     case 'backups':
       if (n !== 2 || !RE_STORAGE.test(argv[1]!)) return denied();
-      return pveshBackups(sim, argv[1]!);
+      return pveshBackups(sim, argv[1]!, now);
     default:
       return denied();
   }
 }
 
 /** `pvesh get /nodes/pve1/storage/<id>/content --content backup --output-format json` run as root. */
-function pveshBackups(sim: DemoSim, storage: string): Simulated {
+function pveshBackups(sim: DemoSim, storage: string, now: number): Simulated {
   const s = DEMO_STORAGE.find((x) => x.id === storage);
   if (!s) return fail(255, `storage '${storage}' does not exist\n`, 900);
+  // edge cases: PBS unreachable for a few minutes (PVE gives up connecting after a while)
+  if (!sim.storageActive(storage, now)) {
+    return fail(255, `${storage}: error fetching datastores - 500 Can't connect to 10.10.20.60:8007 (No route to host)\n`, 3_000);
+  }
   if (!s.content.includes('backup')) return ok('[]\n', 800);
   const items = backupsOnStorage(sim, storage).map(contentItem);
   // PBS answers are slower (PVE lists the datastore snapshots over HTTPS)
   return ok(`${JSON.stringify(items)}\n`, s.type === 'pbs' ? 1_400 : 600);
 }
 
-/** Running LXCs (pct exec) and running VMs with an enabled agent (qm guest exec), in vmid order. */
-function inspectable(sim: DemoSim): DemoGuest[] {
-  return DEMO_GUESTS.filter((g) => !g.template && sim.isRunning(g) && (g.type === 'lxc' || agentEnabled(g))).sort((a, b) => a.vmid - b.vmid);
+/**
+ * Running LXCs (pct exec) and running VMs with an enabled agent (qm guest exec), in vmid order. Like the real helper,
+ * a VM counts as running by its QMP state, so a paused VM is skipped.
+ */
+function inspectable(sim: DemoSim, now: number): DemoGuest[] {
+  return DEMO_GUESTS.filter((g) => !g.template && sim.runState(g, now) === 'running' && (g.type === 'lxc' || agentEnabled(g))).sort(
+    (a, b) => a.vmid - b.vmid,
+  );
 }
 
 /** `qm guest exec` result as qm prints it: Perl JSON pretty + canonical (3-space indent, " : ", sorted keys). */
@@ -190,7 +199,7 @@ function guestBlock(sim: DemoSim, g: DemoGuest, now: number): { text: string; ms
 }
 
 function hostInventory(sim: DemoSim, vmid: number | undefined, now: number): Simulated {
-  const guests = inspectable(sim).filter((g) => vmid === undefined || g.vmid === vmid);
+  const guests = inspectable(sim, now).filter((g) => vmid === undefined || g.vmid === vmid);
   let out = `@@pve1-dash:inventory v${HELPER_PROTOCOL}\n`;
   // `pvesh get /nodes/pve1/{lxc,qemu}` first, then at most 4 guests in parallel
   let ms = 1_100;

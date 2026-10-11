@@ -144,6 +144,7 @@ describe('node status', () => {
       netIn: 15234.5,
       netOut: 8812.3,
       arcSize: 4294967296,
+      ioWait: 0.0011, // the RRD's 1-minute average, preferred over the per-worker status `wait`
       pressure: { cpuSome: 0.12, ioSome: 0.05, ioFull: 0.03, memSome: 0, memFull: 0 },
     });
   });
@@ -164,6 +165,7 @@ describe('RRD', () => {
     expect(pts[1]).toEqual({
       time: 1760072400000, maxcpu: 2, cpu: 0.0287, memTotal: 4294967296, memUsed: 1932735283, memHost: 2254857830,
       maxdisk: 34359738368, netIn: 1498.9, netOut: 812.5, diskRead: 0, diskWrite: 38211, pressureCpuSome: 0.31,
+      pressureCpuFull: 0.12, // guest RRDs have cpu "full" pressure (PVE 9)
     });
     expect(pts[2]).toEqual({ time: 1760072460000 }); // a gap stays a gap, not zeros
   });
@@ -175,7 +177,12 @@ describe('RRD', () => {
   it('PVE 8 node rows without PVE 9 columns map cleanly', () => {
     const [p] = mapRrd([{ time: 10, loadavg: 0.4, maxcpu: 6, cpu: 0.04, iowait: 0.001, memtotal: 100, memused: 50, swaptotal: 8, swapused: 0, roottotal: 9, rootused: 1, netin: 1, netout: 2 }], 'node');
     expect(p).toEqual({ time: 10000, loadavg: 0.4, maxcpu: 6, cpu: 0.04, iowait: 0.001, memTotal: 100, memUsed: 50, swapTotal: 8, swapUsed: 0, rootTotal: 9, rootUsed: 1, netIn: 1, netOut: 2 });
-    expect(latestNodeRrd([p!])).toEqual({ netIn: 1, netOut: 2 });
+    expect(latestNodeRrd([p!])).toEqual({ netIn: 1, netOut: 2, ioWait: 0.001 });
+  });
+
+  it('never maps a cpu "full" pressure for the node (the node RRD has none)', () => {
+    expect(mapRrd([{ time: 1, cpu: 0.1, pressurecpufull: 3, pressurecpusome: 4 }], 'node')[0]).toEqual({ time: 1000, cpu: 0.1, pressureCpuSome: 4 });
+    expect(mapRrd([{ time: 1, cpu: 0.1, pressurecpufull: 3, pressurecpusome: 4 }], 'lxc')[0]).toEqual({ time: 1000, cpu: 0.1, pressureCpuSome: 4, pressureCpuFull: 3 });
   });
 });
 
@@ -437,6 +444,23 @@ describe('buildGuest', () => {
     expect(g.disk).toBe(1073741824);
     expect(g.memHost).toBeUndefined();
     expect(g.osName).toBeUndefined();
+  });
+
+  it('keeps memory, uptime and memhost of a paused VM (the QEMU process still holds its RAM)', () => {
+    // pve-api-guests.md §7: cluster/resources reports the QMP state, here a VM stopped with `qm suspend`
+    const paused = { ...haos!, status: 'paused', lock: 'suspending', cpu: 0.0001, uptime: 3600, mem: 8589934592, memhost: 8650000000 };
+    const g = buildGuest({ raw: paused, node: 'pve1', uiBaseUrl: base, rates: { netInRate: 5, netOutRate: 5, diskReadRate: 5, diskWriteRate: 5 }, pressure: { cpuSome: 1 } });
+    expect(g).toMatchObject({ status: 'paused', lock: 'suspending', mem: 8589934592, uptime: 3600, memHost: 8650000000 });
+    // no vCPU activity while paused
+    expect(g).toMatchObject({ cpu: 0, netInRate: 0, diskWriteRate: 0 });
+    expect(g.pressure).toBeUndefined();
+    for (const status of ['suspended', 'prelaunch', 'io-error', 'internal-error', 'guest-panicked']) {
+      const x = buildGuest({ raw: { ...paused, status }, node: 'pve1', uiBaseUrl: base });
+      expect([x.mem, x.uptime, x.memHost], status).toEqual([8589934592, 3600, 8650000000]);
+    }
+    // a stopped guest has no process: zeros
+    const stopped = buildGuest({ raw: { ...paused, status: 'stopped' }, node: 'pve1', uiBaseUrl: base });
+    expect([stopped.mem, stopped.uptime, stopped.memHost]).toEqual([0, 0, undefined]);
   });
 
   it('keeps last known name/sizes when pvestatd data expired (status unknown)', () => {

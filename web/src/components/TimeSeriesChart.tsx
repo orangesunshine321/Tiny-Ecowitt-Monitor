@@ -31,7 +31,10 @@ export interface TimeSeriesChartProps {
   tooltipFormat?: (v: number) => string;
   /** fix the y domain, e.g. [0, 1] for fractions; undefined ends are data-driven (min defaults to 0) */
   yDomain?: [number | undefined, number | undefined];
-  /** 10% area wash under each line (default true) */
+  /**
+   * 10% area wash under the line. Default: only for a single series; with two or more, overlapping washes stack into a
+   * muddy band and hide the lower line, so lines plus the legend read cleaner. Pass `true` to force it.
+   */
   area?: boolean;
   /** dims the previous render while new data loads (no skeleton flash); shows a skeleton when there is no data yet */
   loading?: boolean;
@@ -67,7 +70,7 @@ const M_BOTTOM = 24;
 
 /**
  * Responsive SVG line chart for 1–3 series over time: one y-axis with nice ticks, a time x-axis with calendar-aligned
- * ticks, hairline grid, 2px lines with a 10% area wash, gaps for missing samples, and a crosshair + tooltip listing
+ * ticks, hairline grid, 2px lines (a 10% area wash under a single series), gaps for missing samples, and a crosshair + tooltip listing
  * every series (pointer, touch and arrow keys). A legend appears for 2+ series; a hidden table mirrors the data for
  * screen readers.
  *
@@ -82,7 +85,7 @@ export function TimeSeriesChart({
   yFormat = defaultFormat,
   tooltipFormat,
   yDomain,
-  area = true,
+  area,
   loading,
   ariaLabel,
   emptyMessage = 'No data for this period',
@@ -127,9 +130,10 @@ export function TimeSeriesChart({
     const x = (t: number) => left + ((t - t0) / span) * plotW;
     const y = (v: number) => M_TOP + plotH - ((Math.min(yt.max, Math.max(yt.min, v)) - yt.min) / (yt.max - yt.min || 1)) * plotH;
     const base = y(yt.min);
+    const wash = area ?? series.length === 1;
     const lines = series.map((s) => {
       const p = linePath(times, s.values, x, y);
-      return { ...p, area: area ? areaPath(p.segments, base) : '' };
+      return { ...p, area: wash ? areaPath(p.segments, base) : '' };
     });
     const tt = timeTicks(t0, t1, Math.max(2, Math.floor(plotW / 84)));
     const xTicks = tt.ticks

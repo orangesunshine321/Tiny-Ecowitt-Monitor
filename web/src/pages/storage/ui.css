@@ -45,7 +45,7 @@
   margin-top: 1px;
   font-size: var(--fs-subhead);
   line-height: var(--lh-subhead);
-  color: var(--label-2);
+  color: var(--label-2-wp);
 }
 .inf-section-accessory {
   display: flex;
@@ -483,7 +483,8 @@
   letter-spacing: 0;
 }
 .inf-muted {
-  color: var(--label-3);
+  /* "Never", "Unused", "–": real values (a guest never backed up is a warning), so secondary, not tertiary */
+  color: var(--label-2);
 }
 .inf-lines {
   display: flex;

@@ -1,0 +1,9 @@
+.ui-error-app {
+  display: grid;
+  place-items: center;
+  min-height: 100dvh;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+}
+.ui-error-page {
+  padding-top: var(--s6);
+}

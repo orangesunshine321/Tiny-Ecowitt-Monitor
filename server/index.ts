@@ -118,7 +118,9 @@ async function main(): Promise<void> {
       process.exit(1);
     }, SHUTDOWN_TIMEOUT_MS);
     force.unref();
-    // Stop producers first, then the alerts module (persists its state), then HTTP (preClose ends SSE streams).
+    // Stop producers first, then the alerts module (persists its state), then HTTP (preClose ends SSE streams and
+    // releases POST /api/inventory/refresh answers still waiting for data, so close() is not held up by them).
+    // The SSH runner closes last: a refresh still running in the background then fails fast instead of being waited for.
     await step(log, 'health', () => health.stop());
     await step(log, 'inventory', () => inventory.stop());
     await step(log, 'proxmox', () => proxmox.stop());
@@ -157,6 +159,7 @@ async function main(): Promise<void> {
 
   log.info(`pve1-dash ${appVersion} listening on ${displayUrl(host, port)}`, {
     node: config.proxmox.node,
+    timezone: config.timezone,
     ...(config.publicUrl ? { publicUrl: config.publicUrl } : {}),
   });
   if (demo) {

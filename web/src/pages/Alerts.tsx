@@ -119,7 +119,7 @@ function ActiveRow({ alert: a }: { alert: AlertEvent }) {
         <span className="al-row-sub">
           <span className="al-row-body">{a.body}</span>
           <span className="al-row-meta">
-            {info.label} · since <RelativeTime time={a.time} format="long" />
+            {info.label} · <RelativeTime time={a.time} prefix="started " />
           </span>
         </span>
       }

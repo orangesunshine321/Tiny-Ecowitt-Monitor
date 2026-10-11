@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ConfigSchema, type Config } from '../server/config.js';
-import { buildServiceDefs, guessIcon, pickWebPort, primaryAddress, slugify, titleCase } from '../server/health/discovery.js';
+import { buildServiceDefs, guessIcon, pickWebPort, primaryAddress, publishedHost, slugify, titleCase } from '../server/health/discovery.js';
 import type { DockerContainer, Guest, GuestInventory, GuestIp } from '../shared/types.js';
 
 function servicesConfig(services: Record<string, unknown> = {}): Config['services'] {
@@ -125,7 +125,7 @@ describe('buildServiceDefs', () => {
         name: 'jellyfin',
         url: 'http://10.10.20.31:8096',
         icon: 'jellyfin',
-        group: 'Media',
+        group: 'docker-media', // one group per guest, not per compose project
         description: 'jellyfin/jellyfin:10.11.2',
         vmid: 102,
         guestName: 'docker-media',
@@ -137,8 +137,22 @@ describe('buildServiceDefs', () => {
     });
     expect(byId.get('docker-102-qbittorrent')!.base.url).toBe('http://10.10.20.31:8080');
     expect(byId.get('docker-102-nginx')!.base.url).toBe('https://10.10.20.31'); // 443 → https, default port dropped
-    expect(byId.get('docker-105-immich_server')!.base).toMatchObject({ icon: 'immich', group: 'Immich', url: 'http://10.10.20.40:2283' });
-    expect(byId.get('docker-105-vaultwarden')!.base).toMatchObject({ icon: 'vaultwarden', group: 'Docker', url: 'http://10.10.20.40:8222' });
+    expect(byId.get('docker-105-immich_server')!.base).toMatchObject({ icon: 'immich', group: 'apps', url: 'http://10.10.20.40:2283' });
+    expect(byId.get('docker-105-vaultwarden')!.base).toMatchObject({ icon: 'vaultwarden', group: 'apps', url: 'http://10.10.20.40:8222' });
+    // all containers of a guest share its group, compose project or not
+    expect(new Set(defs.filter((d) => d.base.vmid === 102).map((d) => d.base.group))).toEqual(new Set(['docker-media']));
+  });
+
+  it('groups by guest name, falls back to "Docker" when the guest is unknown; overrides still set the group', () => {
+    const noGuest = buildServiceDefs({
+      services: servicesConfig(),
+      guests: [],
+      inventory: { '102': inventory(102, [container('jellyfin', 'jellyfin/jellyfin', [tcp(8096)], { composeProject: 'media' })], [ip4('10.10.20.31', 'inventory')]) },
+    });
+    expect(noGuest[0]!.base.group).toBe('Docker');
+    const overridden = buildServiceDefs({ services: servicesConfig({ overrides: { jellyfin: { group: 'Media' } } }), guests: [media, apps], inventory: inv });
+    expect(overridden.find((d) => d.base.id === 'docker-102-jellyfin')!.base.group).toBe('Media');
+    expect(overridden.find((d) => d.base.id === 'docker-102-qbittorrent')!.base.group).toBe('docker-media');
   });
 
   it('honours hide (container name, compose service or id) and overrides', () => {
@@ -225,16 +239,60 @@ describe('buildServiceDefs', () => {
     expect(defs[0]!.target).toBeUndefined();
   });
 
-  it('uses a specific host binding and skips templates; discovery can be turned off', () => {
+  it('uses a specific host binding of the guest itself and skips templates; discovery can be turned off', () => {
+    const twoNics = guest(102, 'docker-media', [ip4('10.10.20.31'), ip4('10.10.30.31')]);
     const defs = buildServiceDefs({
       services: servicesConfig(),
-      guests: [media, guest(9000, 'tpl', [], { template: true })],
+      guests: [twoNics, guest(9000, 'tpl', [], { template: true })],
       inventory: {
-        '102': inventory(102, [container('admin', 'acme/admin', [tcp(81, 81, '10.10.20.99')])]),
+        '102': inventory(102, [container('admin', 'acme/admin', [tcp(81, 81, '10.10.30.31')])]),
         '9000': inventory(9000, [container('x', 'acme/x', [tcp(80)])]),
       },
     });
-    expect(defs.map((d) => d.base.url)).toEqual(['http://10.10.20.99:81']);
+    expect(defs.map((d) => d.base.url)).toEqual(['http://10.10.30.31:81']);
     expect(buildServiceDefs({ services: servicesConfig({ autoDiscoverDocker: false }), guests: [media], inventory: inv })).toEqual([]);
+  });
+
+  it('never points a check at a bind address the guest does not own (guest-controlled docker output)', () => {
+    // root inside a guest can print anything as the "host IP" of a port: other LAN hosts, names, even URL paths
+    const forged = [
+      '10.10.20.99', // another host on the LAN
+      'login.evil.example',
+      '10.0.0.1/cgi-bin/reboot?a=1&b=',
+      '0x7f000001',
+      '169.254.169.254',
+    ];
+    for (const hostIp of forged) {
+      const defs = buildServiceDefs({
+        services: servicesConfig(),
+        guests: [media],
+        inventory: { '102': inventory(102, [container('admin', 'acme/admin', [tcp(8080, 8080, hostIp)])]) },
+      });
+      expect(defs.map((d) => d.base.url), hostIp).toEqual(['http://10.10.20.31:8080']);
+      expect(defs[0]!.target, hostIp).toMatchObject({ type: 'http', target: 'http://10.10.20.31:8080/' });
+    }
+    // an IPv4-mapped loopback binding is loopback: not reachable, no entry
+    const mapped = buildServiceDefs({
+      services: servicesConfig(),
+      guests: [media],
+      inventory: { '102': inventory(102, [container('admin', 'acme/admin', [tcp(8080, 8080, '::ffff:127.0.0.1')])]) },
+    });
+    expect(mapped).toEqual([]);
+  });
+
+  it('publishedHost: wildcard and foreign bindings use the guest address, own IPs are kept (IPv6 bracketed)', () => {
+    const ips: GuestIp[] = [ip4('10.10.20.31'), { address: 'fd00::31', family: 6, source: 'lxc-interfaces' }];
+    expect(publishedHost(undefined, '10.10.20.31', ips)).toBe('10.10.20.31');
+    expect(publishedHost('0.0.0.0', '10.10.20.31', ips)).toBe('10.10.20.31');
+    expect(publishedHost('::', '10.10.20.31', ips)).toBe('10.10.20.31');
+    expect(publishedHost('fd00::31', '10.10.20.31', ips)).toBe('[fd00::31]');
+    expect(publishedHost('[FD00::31]', '10.10.20.31', ips)).toBe('[fd00::31]');
+    expect(publishedHost('10.10.20.31', undefined, ips)).toBe('10.10.20.31');
+    expect(publishedHost('example.com', undefined, ips)).toBeUndefined();
+  });
+
+  it('ignores guest addresses that are not IP literals', () => {
+    expect(primaryAddress([ip4('evil.example/x'), ip4('10.10.20.31')])).toBe('10.10.20.31');
+    expect(primaryAddress([{ address: 'not-an-ip', family: 6, source: 'guest-agent' }])).toBeUndefined();
   });
 });

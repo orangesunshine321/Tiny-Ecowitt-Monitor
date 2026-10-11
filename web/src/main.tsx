@@ -8,26 +8,36 @@ import './styles/base.css';
 import './styles/glass.css';
 import App from './App';
 import { initPrefs } from './prefs';
-import { resyncPushSubscription } from './push';
-import { registerServiceWorker, watchServerVersion } from './shell/serviceWorker';
-import { startLiveUpdates, useAppStore } from './store';
+import { startAppBadgeSync } from './shell/appBadge';
+import { reloadForNewBuild } from './shell/buildRecovery';
+import { ErrorBoundary } from './shell/ErrorBoundary';
+import { startPushSelfHeal } from './shell/pushSelfHeal';
+import { buildIdFromUrl, registerServiceWorker, startUpdateChecks, watchServerVersion } from './shell/serviceWorker';
+import { startLiveUpdates } from './store';
+
+// A page chunk's CSS/JS preload failed: after a server update the old hashed files are gone. Reload once onto the new
+// build (guarded against loops); if that is not possible, the error reaches the page's ErrorBoundary instead.
+window.addEventListener('vite:preloadError', (event) => {
+  if (reloadForNewBuild()) event.preventDefault();
+});
 
 initPrefs();
 startLiveUpdates();
 registerServiceWorker();
+// this module is the entry chunk, so its URL carries the build hash ("/assets/index-<hash>.js")
+startUpdateChecks(buildIdFromUrl(import.meta.url));
 watchServerVersion();
-
-// Web Push self-heal (no gesture needed once granted) after the first snapshot brings the VAPID key.
-const stopWatchingForKey = useAppStore.subscribe((s) => {
-  if (!s.snapshot) return;
-  stopWatchingForKey();
-  void resyncPushSubscription();
-});
+// Web Push self-heal (no gesture needed once granted): after the first snapshot brings the VAPID key, then whenever the
+// app becomes visible again.
+startPushSelfHeal();
+startAppBadgeSync();
 
 const root = document.getElementById('root');
 if (!root) throw new Error('pve1-dash: #root is missing from index.html');
 createRoot(root).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary scope="app">
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 );

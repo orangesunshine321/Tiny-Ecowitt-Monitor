@@ -128,8 +128,8 @@ export function createPveRoutes(sim: DemoSim): Route[] {
   // ── cluster
   add('cluster/status', () => clusterStatus());
   add('cluster/resources', (_p, q, now) => clusterResources(sim, now, enumParam(q, 'type', ['vm', 'storage', 'node', 'sdn'] as const)));
-  add('cluster/backup', (_p, _q, now) => backupJobs(now));
-  add('cluster/backup-info/not-backed-up', () => notBackedUp());
+  add('cluster/backup', (_p, _q, now) => backupJobs(now, sim.edgeCases));
+  add('cluster/backup-info/not-backed-up', () => notBackedUp(sim.edgeCases));
 
   // ── node
   add('nodes', (_p, _q, now) => nodesIndex(sim, now));
@@ -194,8 +194,12 @@ export function createPveRoutes(sim: DemoSim): Route[] {
     node(p);
     return lxcStatus(sim, findGuest(sim, 'lxc', vmid(p)), now, { current: true });
   });
-  add('nodes/:node/qemu/:vmid/config', (p) => (node(p), qemuConfig(findGuest(sim, 'qemu', vmid(p)), sim.anchor)));
-  add('nodes/:node/lxc/:vmid/config', (p) => (node(p), lxcConfig(findGuest(sim, 'lxc', vmid(p)))));
+  add('nodes/:node/qemu/:vmid/config', (p, q) => {
+    node(p);
+    const current = boolParam(q, 'current') ?? false;
+    return qemuConfig(findGuest(sim, 'qemu', vmid(p)), sim.anchor, { pending: sim.edgeCases && !current });
+  });
+  add('nodes/:node/lxc/:vmid/config', (p, q) => (node(p), boolParam(q, 'current'), lxcConfig(findGuest(sim, 'lxc', vmid(p)))));
   for (const type of ['qemu', 'lxc'] as const) {
     add(`nodes/:node/${type}/:vmid/rrddata`, (p, q, now) => {
       node(p);

@@ -31,7 +31,8 @@ readonly PKGUPDATES_FILE=/var/lib/pve-manager/pkgupdates
 
 # The command line comes from sshd (forced command) or, for manual runs, from the arguments.
 CMDLINE=${SSH_ORIGINAL_COMMAND:-$*}
-# pct exec keeps the caller's environment by default (--keep-env 1 on PVE 8 and 9): don't leak the SSH session into CTs.
+# Containers are entered with `pct exec --keep-env 0` (a clean environment); dropping the SSH session variables here
+# as well is defense in depth, e.g. for anything this script starts on the host.
 unset SSH_ORIGINAL_COMMAND SSH_CLIENT SSH_CONNECTION SSH_TTY SSH_AUTH_SOCK
 
 # The inner guest script, run inside each guest. Identical to the body of pve1-dash-guest-inventory and to
@@ -139,7 +140,9 @@ PVE1_DASH_INNER
 readonly INNER
 
 # Perl is always present on PVE (the whole stack is Perl) and JSON::PP is a core module. Prints "<vmid> <kind> <status>"
-# per guest from `pvesh get /nodes/<node>/{lxc,qemu} --output-format json`, skipping templates.
+# per guest from `pvesh get /nodes/<node>/{lxc,qemu} --output-format json`, skipping templates. For VMs the status is
+# the QMP run state (`qmpstatus`, listed with --full 1), as `qm list` prints it: `status` alone says "running" for a
+# paused, suspended, prelaunch or io-error VM, whose guest agent cannot answer.
 # shellcheck disable=SC2016 # Perl code, not shell
 readonly PERL_LIST_GUESTS='
 use strict; use warnings; use JSON::PP;
@@ -151,7 +154,8 @@ for my $g (@$data) {
   next if $g->{template};
   my $id = $g->{vmid};
   next unless defined($id) && $id =~ /^[0-9]{1,9}$/;
-  my $status = defined($g->{status}) ? $g->{status} : "unknown";
+  my $status = defined($g->{qmpstatus}) && $g->{qmpstatus} ne "" ? $g->{qmpstatus}
+    : defined($g->{status}) ? $g->{status} : "unknown";
   $status =~ s/[^A-Za-z0-9_-]//g;
   print "$id $kind $status\n";
 }'
@@ -183,9 +187,13 @@ node_name() {
 # their first columns are unambiguous, and qm list's STATUS is read counting from the end.
 list_guests() { # <node> <dest file>
   local node=$1 dest=$2 kind json out failed=0
+  local -a full=()
   : >"$dest.unsorted"
   for kind in lxc qemu; do
-    if json=$(timeout -k "$KILL_AFTER" 30 pvesh get "/nodes/$node/$kind" --output-format json 2>/dev/null) &&
+    # --full 1 adds qmpstatus (one QMP query-status per running VM, as `qm list` does); lxc has no such option.
+    full=()
+    if [[ $kind == qemu ]]; then full=(--full 1); fi
+    if json=$(timeout -k "$KILL_AFTER" 30 pvesh get "/nodes/$node/$kind" "${full[@]}" --output-format json 2>/dev/null) &&
       out=$(perl -e "$PERL_LIST_GUESTS" "$kind" <<<"$json" 2>/dev/null); then
       if [[ -n $out ]]; then printf '%s\n' "$out" >>"$dest.unsorted"; fi
       continue
@@ -252,7 +260,10 @@ inspect_guest() { # <vmid> <lxc|qemu> <base path>
   if [[ $type == lxc ]]; then
     transport=pct-exec
     limit=$GUEST_TIMEOUT
-    timeout -k "$KILL_AFTER" "$GUEST_TIMEOUT" pct exec "$vmid" -- /bin/sh -c "$INNER" </dev/null 2>"$err" |
+    # --keep-env 0: the CT gets a clean environment (only container=lxc), not root's host environment, which
+    # includes whatever /root/.bashrc exports (pct exec defaults to --keep-env 1 on PVE 8 and 9). The inner script
+    # sets its own PATH and LC_ALL, and /bin/sh is an absolute path.
+    timeout -k "$KILL_AFTER" "$GUEST_TIMEOUT" pct exec "$vmid" --keep-env 0 -- /bin/sh -c "$INNER" </dev/null 2>"$err" |
       head -c "$MAX_GUEST_BYTES" >"$out"
     rc=${PIPESTATUS[0]}
   else
@@ -323,6 +334,7 @@ cmd_inventory() { # [vmid]
     exit 2
   fi
   while read -r vmid kind status; do
+    # only guests whose vCPUs run: a paused/suspended/prelaunch/io-error VM's agent cannot answer
     [[ $status == running ]] || continue
     if [[ -n $want ]] && ((10#$vmid != 10#$want)); then continue; fi
     # at most MAX_PARALLEL guests at a time

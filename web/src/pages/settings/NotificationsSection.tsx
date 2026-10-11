@@ -11,6 +11,7 @@ import { errorText, getPushDevices, postPushTest, postPushUnsubscribe } from '..
 import { AddToHomeScreenHint, Button, IconButton, ListGroup, ListRow, RelativeTime, SegmentedControl, StatusBadge, Toggle } from '../../components';
 import { useAsync } from '../../hooks/useAsync';
 import {
+  DEVICE_EVENT,
   currentPermission,
   defaultDeviceName,
   getStoredDevice,
@@ -56,6 +57,16 @@ export function NotificationsSection() {
   }, []);
 
   const query = useAsync((signal) => getPushDevices({ signal }), [], { enabled: serverEnabled });
+  // the self-heal (shell/pushSelfHeal.ts) may re-register or mark this device lost while Settings is open
+  const reloadDevices = query.reload;
+  useEffect(() => {
+    const onDeviceChange = () => {
+      setStored(getStoredDevice());
+      reloadDevices();
+    };
+    window.addEventListener(DEVICE_EVENT, onDeviceChange);
+    return () => window.removeEventListener(DEVICE_EVENT, onDeviceChange);
+  }, [reloadDevices]);
   const [devices, setDevices] = useState<PushDevice[] | undefined>(undefined);
   useEffect(() => {
     if (query.data) setDevices(query.data);
@@ -68,7 +79,7 @@ export function NotificationsSection() {
   );
   const remove = useCallback((id: string) => setDevices((list) => list?.filter((x) => x.id !== id)), []);
 
-  const state = pushUiState({ serverEnabled, supported, needsInstall, permission, storedId: stored?.id ?? null, devices });
+  const state = pushUiState({ serverEnabled, supported, needsInstall, permission, storedId: stored?.id ?? null, storedLost: stored?.lost, devices });
   const me = stored ? devices?.find((d) => d.id === stored.id) : undefined;
   const [name, setName] = useState(() => stored?.name || defaultDeviceName());
   useEffect(() => {

@@ -34,8 +34,11 @@
   height: 72%;
   object-fit: contain;
 }
+/* Monogram and glyph tiles carry white marks, so the gradient must stay dark enough: light hues (teal, cyan, mint) gave
+   ~2.2:1. Fallback: both stops pulled toward black; with relative colours, the hue is kept and the OKLCH lightness is
+   capped (0.58 → 0.46 across the tile, >= 4.5:1 behind the centred letters). */
 .ui-appicon[data-monogram] {
-  background: linear-gradient(160deg, color-mix(in oklab, var(--_c) 72%, white), var(--_c));
+  background: linear-gradient(160deg, color-mix(in oklab, var(--_c) 78%, #000), color-mix(in oklab, var(--_c) 60%, #000));
   color: #fff;
   font-family: var(--font-rounded);
   font-weight: 600;
@@ -45,8 +48,16 @@
   text-shadow: 0 1px 1px rgb(0 0 0 / 0.12);
 }
 .ui-appicon[data-glyph] {
-  background: linear-gradient(160deg, color-mix(in oklab, var(--_c, var(--gray)) 62%, white), var(--_c, var(--gray)));
+  background: linear-gradient(160deg, color-mix(in oklab, var(--_c, var(--gray)) 78%, #000), color-mix(in oklab, var(--_c, var(--gray)) 60%, #000));
   color: #fff;
+}
+@supports (color: oklch(from red l c h)) {
+  .ui-appicon[data-monogram] {
+    background: linear-gradient(160deg, oklch(from var(--_c) min(l, 0.58) c h), oklch(from var(--_c) min(l, 0.46) c h));
+  }
+  .ui-appicon[data-glyph] {
+    background: linear-gradient(160deg, oklch(from var(--_c, var(--gray)) min(l, 0.6) c h), oklch(from var(--_c, var(--gray)) min(l, 0.48) c h));
+  }
 }
 .ui-appicon[data-glyph] svg {
   width: 56%;

@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import type { AlertService, AppContext } from '../context.js';
 import type { Snapshot, SnapshotKey } from '../../shared/types.js';
 import { readJson, writeJson } from '../util/jsonstore.js';
+import { clampDelay } from '../util/timers.js';
 import { AlertEngine } from './engine.js';
 import { createPushService } from './push.js';
 import type { RuleData } from './rules.js';
@@ -46,7 +47,8 @@ export function createAlertService(ctx: AppContext): AlertService {
     cooldownMs: cfg.cooldownMinutes * 60_000,
     onRuleError: (kind, err) => log.error(`alert rule ${kind} failed`, { err }),
   });
-  const push = createPushService(ctx, { badge: () => engine.activeCount() });
+  // badges count each device's own subscribed alerts (kind and severity), not every active alert
+  const push = createPushService(ctx, { active: () => engine.view().active });
   store.patchMeta({ pushEnabled: push.enabled, vapidPublicKey: push.publicKey() });
 
   const ready = new Set<SnapshotKey>();
@@ -98,7 +100,7 @@ export function createAlertService(ctx: AppContext): AlertService {
     };
     let res;
     try {
-      res = engine.evaluate({ now: Date.now(), rules: cfg.rules, data, ready: (k) => ready.has(k) });
+      res = engine.evaluate({ now: Date.now(), rules: cfg.rules, data, ready: (k) => ready.has(k), timeZone: ctx.config.timezone });
     } catch (err) {
       log.error('alert evaluation failed', { err });
       return;
@@ -112,9 +114,11 @@ export function createAlertService(ctx: AppContext): AlertService {
       else log.info(`resolved: ${ev.title}`, { key: ev.key });
       store.emitAlert(ev);
     }
-    const badge = engine.activeCount();
-    for (const n of res.notifications) {
-      push.notify(n.event, { recovery: n.recovery, badge }).catch((err) => log.error('push delivery failed', { err }));
+    if (res.notifications.length) {
+      const active = engine.view().active;
+      for (const n of res.notifications) {
+        push.notify(n.event, { recovery: n.recovery, active }).catch((err) => log.error('push delivery failed', { err }));
+      }
     }
   }
 
@@ -126,7 +130,7 @@ export function createAlertService(ctx: AppContext): AlertService {
     wakeTimer = setTimeout(() => {
       wakeTimer = undefined;
       evaluate();
-    }, Math.max(0, at - Date.now()) + 50);
+    }, clampDelay(at - Date.now() + 50));
     wakeTimer.unref?.();
   }
 
@@ -153,7 +157,7 @@ export function createAlertService(ctx: AppContext): AlertService {
       started = true;
       if (!restored) {
         restored = true;
-        engine.restore(readJson<unknown>(file, null));
+        engine.restore(readJson<unknown>(file, null, (err) => log.warn('alerts.json is unreadable or corrupt; starting without alert history', { err })));
         lastSaved = JSON.stringify(engine.serialize());
       }
       const snap = store.snapshot();

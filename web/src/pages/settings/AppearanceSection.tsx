@@ -5,6 +5,15 @@ import { playTestClack, unlockBoardAudio } from '../../board/audio';
 import { setPref, usePrefs, type ThemePref } from '../../prefs';
 import { ListItem } from './ui';
 
+/** Web Audio follows the iPhone's Ring/Silent switch; other devices have nothing to explain. */
+function isIphone(): boolean {
+  try {
+    return /iPhone|iPod/.test(navigator.userAgent);
+  } catch {
+    return false;
+  }
+}
+
 const THEMES: { value: ThemePref; label: string }[] = [
   { value: 'system', label: 'System' },
   { value: 'light', label: 'Light' },
@@ -43,7 +52,7 @@ export function AppearanceSection() {
       <ListRow
         icon={<TrainFront strokeWidth={2} />}
         title="Board sound"
-        subtitle="Mechanical clack on the departure board. Silent when the iPhone is in silent mode."
+        subtitle={isIphone() ? 'Mechanical clack on the departure board. Silent while iPhone is in Silent mode.' : 'Mechanical clack on the departure board.'}
         wrap
         accessory={<Toggle ariaLabel="Board sound" checked={boardSound} onChange={setBoardSound} />}
       />

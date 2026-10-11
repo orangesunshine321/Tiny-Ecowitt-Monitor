@@ -7,7 +7,7 @@ import { useBreakpoint } from '../hooks/useMediaQuery';
 import { Link, isActivePath, useRoute } from '../router';
 import { useNavBadges, useSnapshot } from '../store';
 import { NAV } from './nav';
-import { NavBadge } from './NavBadge';
+import { NavBadge, navItemLabel } from './NavBadge';
 import './Sidebar.css';
 import './TabBar.css';
 import { shellUi, useShellUi } from './uiStore';
@@ -30,7 +30,7 @@ export function TabBar() {
         {tabs.map((item) => {
           const Icon = item.icon;
           return (
-            <Link key={item.id} to={item.path} activeMatch="prefix" className="shell-tab">
+            <Link key={item.id} to={item.path} activeMatch="prefix" className="shell-tab" aria-label={navItemLabel(item.label, badges, item.badge)}>
               <span className="shell-nav-iconwrap">
                 <Icon strokeWidth={1.9} aria-hidden="true" />
                 {item.badge && <NavBadge kind={item.badge} variant="dot" />}
@@ -39,7 +39,15 @@ export function TabBar() {
             </Link>
           );
         })}
-        <button type="button" className="shell-tab" data-selected={inMore || undefined} aria-haspopup="dialog" aria-expanded={moreOpen} onClick={() => shellUi.setMoreOpen(true)}>
+        <button
+          type="button"
+          className="shell-tab"
+          data-selected={inMore || undefined}
+          aria-haspopup="dialog"
+          aria-expanded={moreOpen}
+          aria-label={badges.activeAlerts > 0 ? `More, ${badges.activeAlerts} active alerts` : 'More'}
+          onClick={() => shellUi.setMoreOpen(true)}
+        >
           <span className="shell-nav-iconwrap">
             <Ellipsis strokeWidth={1.9} aria-hidden="true" />
             {badges.activeAlerts > 0 && <NavBadge kind="activeAlerts" variant="dot" />}

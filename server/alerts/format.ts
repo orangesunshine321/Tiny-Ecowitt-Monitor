@@ -1,20 +1,73 @@
-/** Small text helpers for alert titles and bodies (server local time zone, English). */
+/**
+ * Small text helpers for alert titles and bodies (English).
+ *
+ * Clock times are baked into persisted alert texts and push notifications, so they are formatted in an explicit IANA
+ * zone (config.timezone) rather than the process zone: an LXC is usually UTC while its owner is not.
+ */
 
 const pad = (n: number) => String(n).padStart(2, '0');
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-/** "14:02" */
-export function fmtClock(ms: number): string {
-  const d = new Date(ms);
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+interface WallTime {
+  year: number;
+  /** 0-11 */
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
 }
 
-/** "14:02" when on the same local day as `now`, otherwise "9 Oct 14:02". */
-export function fmtWhen(ms: number, now: number): string {
+const formatters = new Map<string, Intl.DateTimeFormat>();
+
+function formatter(timeZone: string): Intl.DateTimeFormat | undefined {
+  let f = formatters.get(timeZone);
+  if (!f) {
+    try {
+      f = new Intl.DateTimeFormat('en-US', {
+        timeZone,
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: 'numeric',
+        hourCycle: 'h23',
+      });
+    } catch {
+      return undefined; // unknown zone: fall back to the process zone
+    }
+    if (formatters.size > 32) formatters.clear();
+    formatters.set(timeZone, f);
+  }
+  return f;
+}
+
+/** Wall-clock fields of `ms` in `timeZone` (the process zone when omitted or unknown). */
+function wallTime(ms: number, timeZone?: string): WallTime {
+  const f = timeZone ? formatter(timeZone) : undefined;
+  if (f) {
+    const parts: Record<string, number> = {};
+    for (const p of f.formatToParts(new Date(ms))) if (p.type !== 'literal') parts[p.type] = Number(p.value);
+    if ([parts.year, parts.month, parts.day, parts.hour, parts.minute].every((v) => Number.isFinite(v))) {
+      return { year: parts.year!, month: parts.month! - 1, day: parts.day!, hour: parts.hour! % 24, minute: parts.minute! };
+    }
+  }
   const d = new Date(ms);
-  const n = new Date(now);
-  const sameDay = d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
-  return sameDay ? fmtClock(ms) : `${d.getDate()} ${MONTHS[d.getMonth()]} ${fmtClock(ms)}`;
+  return { year: d.getFullYear(), month: d.getMonth(), day: d.getDate(), hour: d.getHours(), minute: d.getMinutes() };
+}
+
+/** "14:02" in `timeZone` (IANA name; the process zone when omitted). */
+export function fmtClock(ms: number, timeZone?: string): string {
+  const w = wallTime(ms, timeZone);
+  return `${pad(w.hour)}:${pad(w.minute)}`;
+}
+
+/** "14:02" when on the same day as `now` in `timeZone`, otherwise "9 Oct 14:02". */
+export function fmtWhen(ms: number, now: number, timeZone?: string): string {
+  const d = wallTime(ms, timeZone);
+  const n = wallTime(now, timeZone);
+  const clock = `${pad(d.hour)}:${pad(d.minute)}`;
+  const sameDay = d.year === n.year && d.month === n.month && d.day === n.day;
+  return sameDay ? clock : `${d.day} ${MONTHS[d.month]} ${clock}`;
 }
 
 /** "45 s", "12 min", "3 h 5 min", "2 d 4 h" */

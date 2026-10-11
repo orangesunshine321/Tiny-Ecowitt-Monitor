@@ -427,12 +427,16 @@ export function describeSelection(j: Record<string, unknown>): string {
   return node ? `${sel} (node ${node})` : sel;
 }
 
-/** GET /cluster/backup (vzdump jobs). `enabled` defaults to 1; `next-run` epoch is computed even for disabled jobs. */
+/**
+ * GET /cluster/backup (vzdump jobs). `enabled` defaults to 1. PVE computes `next-run` from the schedule even for
+ * disabled jobs (pve-api-storage.md §10a), but a disabled job never runs, so `nextRun` is left out for those.
+ */
 export function mapBackupJobs(raw: unknown): BackupJob[] {
   return records(raw)
     .filter((j) => str(j.id) && (j.type === undefined || j.type === 'vzdump'))
     .map((j): BackupJob => {
-      const job: BackupJob = { id: str(j.id)!, enabled: bool(j.enabled) ?? true, selection: describeSelection(j) };
+      const enabled = bool(j.enabled) ?? true;
+      const job: BackupJob = { id: str(j.id)!, enabled, selection: describeSelection(j) };
       const schedule = str(j.schedule);
       if (schedule) job.schedule = schedule;
       const storage = str(j.storage);
@@ -440,7 +444,7 @@ export function mapBackupJobs(raw: unknown): BackupJob[] {
       const mode = str(j.mode);
       if (mode) job.mode = mode;
       const next = secToMs(j['next-run']);
-      if (next !== undefined) job.nextRun = next;
+      if (next !== undefined && enabled) job.nextRun = next;
       const comment = str(j.comment);
       if (comment) job.comment = comment;
       return job;

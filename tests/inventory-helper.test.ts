@@ -22,7 +22,10 @@ afterAll(() => {
 
 interface StubGuest {
   vmid: number;
+  /** process state (what `status` says without full=1) */
   status: 'running' | 'stopped';
+  /** QMP run state of a VM when it differs from `status` (paused, io-error, ...) */
+  qmpstatus?: string;
   name?: string;
   template?: boolean;
   mode?: string;
@@ -56,7 +59,7 @@ function setup(scenario: Scenario, opts: { omit?: Array<(typeof TOOLS)[number]> 
   const logPath = join(dir, 'stub.log');
   writeFileSync(logPath, '');
 
-  const run = (cmd: string | undefined, args: string[] = []): SpawnSyncReturns<string> =>
+  const run = (cmd: string | undefined, args: string[] = [], extraEnv: Record<string, string> = {}): SpawnSyncReturns<string> =>
     spawnSync('bash', [HELPER, ...args], {
       encoding: 'utf8',
       timeout: 60_000,
@@ -67,6 +70,7 @@ function setup(scenario: Scenario, opts: { omit?: Array<(typeof TOOLS)[number]> 
         TMPDIR: dir,
         STUB_SCENARIO: scenarioPath,
         STUB_LOG: logPath,
+        ...extraEnv,
         ...(cmd === undefined ? {} : { SSH_ORIGINAL_COMMAND: cmd }),
       },
     });
@@ -94,6 +98,9 @@ const WORLD: Scenario = {
     { vmid: 110, status: 'running', name: 'noagent', config: 'cores: 2\nostype: l26\n' },
     { vmid: 109, status: 'running', name: 'win11', config: 'agent: 1,type=virtio\nostype: win11\n' },
     { vmid: 111, status: 'running', name: 'stuck', mode: 'guest-timeout', config: 'agent: 1\nostype: l26\n' },
+    // QEMU process alive, vCPUs stopped: `status` says running, only qmpstatus tells (the agent cannot answer)
+    { vmid: 114, status: 'running', qmpstatus: 'paused', name: 'paused-vm', config: 'agent: 1\nostype: l26\n' },
+    { vmid: 115, status: 'running', qmpstatus: 'io-error', name: 'ioerr-vm', config: 'agent: 1\nostype: l26\n' },
     { vmid: 9000, status: 'stopped', name: 'vm-template', template: true, config: 'agent: 1\n' },
   ],
   backups: {
@@ -179,7 +186,7 @@ describe('pve1-dash-helper: inventory', () => {
   const env = setup(WORLD);
   const r = env.run('inventory');
 
-  it('frames all running guests in vmid order and skips stopped guests, templates and agent-less VMs', () => {
+  it('frames all running guests in vmid order and skips stopped/paused guests, templates and agent-less VMs', () => {
     expect(r.status).toBe(0);
     expect(r.stdout.split('\n')[0]).toBe('@@pve1-dash:inventory v1');
     expect(r.stdout.endsWith('@@pve1-dash:done\n')).toBe(true);
@@ -226,16 +233,26 @@ describe('pve1-dash-helper: inventory', () => {
 
   it('calls pct/qm exactly as documented and does not leak the SSH session into guests', () => {
     const calls = env.log();
+    // VMs are listed with --full 1 so that qmpstatus (paused, io-error, ...) is known
     expect(calls.filter((l) => l.startsWith('pvesh '))).toEqual([
       'pvesh ["get","/nodes/pve1/lxc","--output-format","json"] ssh_cmd=-',
-      'pvesh ["get","/nodes/pve1/qemu","--output-format","json"] ssh_cmd=-',
+      'pvesh ["get","/nodes/pve1/qemu","--full","1","--output-format","json"] ssh_cmd=-',
     ]);
+    // paused (114) and io-error (115) VMs are not even looked at
     expect(calls.filter((l) => l.startsWith('qm ["config"')).map((l) => JSON.parse(l.slice(3, l.indexOf(' ssh_cmd')))[1]).sort()).toEqual([
       '100', '105', '108', '109', '110', '111',
     ]);
     const execs = calls.filter((l) => /^(pct|qm) \[/.test(l) && !l.includes('"config"'));
     expect(execs.length).toBe(9);
     for (const l of execs) expect(l.endsWith('ssh_cmd=-')).toBe(true);
+    for (const l of execs.filter((x) => x.startsWith('pct '))) expect(JSON.parse(l.slice(4, l.indexOf(' ssh_cmd'))).slice(2, 5)).toEqual(['--keep-env', '0', '--']);
+  });
+
+  it('starts containers with a clean environment (nothing from root\'s host environment)', () => {
+    const e = setup({ lxc: [{ vmid: 101, status: 'running' }] });
+    const r = e.run('inventory', [], { PBS_PASSWORD: 's3cret', SSH_CLIENT: '10.10.20.8 50000 22', LC_TERMINAL: 'x' });
+    expect(parseHostInventory(r.stdout, 1)!.inventories[0]).toMatchObject({ vmid: 101, ok: true });
+    expect(e.log().filter((l) => l.startsWith('pct-env '))).toEqual(['pct-env 101 container']);
   });
 
   it('cleans up its temp dir', () => {
@@ -300,6 +317,7 @@ describe('pve1-dash-helper: fallbacks', () => {
       qemu: [
         { vmid: 120, status: 'running', mode: 'agent-down', config: 'agent: 1\n' }, // listed as "VM 120"
         { vmid: 121, status: 'stopped', name: 'x', config: 'agent: 1\n' },
+        { vmid: 122, status: 'running', qmpstatus: 'paused', name: 'paused vm', config: 'agent: 1\n' }, // qm list prints qmpstatus
       ],
     });
     const r = env.run('inventory');

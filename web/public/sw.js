@@ -2,10 +2,23 @@
  * pve1-dash service worker (docs/research/web-pwa-push.md §2, §6).
  *
  * Caching
- *  - Navigations: network-first (4 s timeout), falling back to the cached app shell (index.html) when offline.
- *  - /assets/* (Vite's hashed, immutable bundles), /icons/*, the manifest: stale-while-revalidate.
+ *  - Navigations: network-first with a 4 s timeout (navigation preload included), falling back to the cached app shell
+ *    (index.html) when the network fails, times out, or answers 5xx (a reverse proxy's 502/503/504 while pve1-dash
+ *    restarts would otherwise strand a Home Screen app, which has no reload button, on the proxy's error page; the
+ *    cached shell shows the app's own "can't reach the dashboard" state and reconnects by itself).
+ *  - /assets/* (Vite's hashed, immutable bundles), /icons/*, the manifest, boot.js: stale-while-revalidate.
  *  - /api/*, /setup/*, /healthz and anything cross-origin: never intercepted, never cached (SSE included).
- *  - Install precaches the shell and the assets it references; activate drops old caches.
+ *
+ * Releases
+ *  - This file is copied verbatim from web/public, so it does not change with every release, and its URL stays
+ *    /sw.js (a per-release URL races the browser's own update check after each navigation, which can re-install
+ *    the old URL over the new one). Instead the worker follows the shell: whenever it caches an index.html, it reads
+ *    the build from the entry script ("index-<hash>"), precaches that build's assets into "pve1-assets-<build>" and
+ *    keeps only that cache and the previous one (an old page that is still open may need its chunks for a while).
+ *  - The page itself detects a new release (web/src/shell/serviceWorker.ts compares its build with the one index.html
+ *    references) and offers "New version available — Reload".
+ *  - A new version of this worker takes over at once (skipWaiting): it only caches and shows notifications, so swapping
+ *    it under an open page is safe.
  *
  * Push
  *  - Payloads use the Declarative Web Push shape {"web_push":8030,"notification":{title,body,navigate,...},"app_badge"?}.
@@ -13,48 +26,77 @@
  *  - EVERY push calls showNotification (WebKit revokes the subscription after 3 silent pushes), even when the payload
  *    is malformed.
  *  - notificationclick focuses an existing window (and asks it to route to the alert) or opens a new one.
- *
- * Updates: the page posts {type:'SKIP_WAITING'} after the user taps "Reload" on the update toast.
  */
-const VERSION = 'v1';
-const SHELL_CACHE = `pve1-shell-${VERSION}`;
-const ASSET_CACHE = `pve1-assets-${VERSION}`;
+const SHELL_CACHE = 'pve1-shell';
+const ASSET_PREFIX = 'pve1-assets-';
+/** caches of earlier versions of this worker */
+const LEGACY_CACHES = ['pve1-shell-v1', 'pve1-assets-v1'];
+/** asset caches kept: the current build and the one before it */
+const KEEP_BUILDS = 2;
 const SHELL_URL = '/';
 const NAV_TIMEOUT_MS = 4000;
+const STATIC_FILES = ['/manifest.webmanifest', '/icons/icon.svg', '/icons/icon-192.png', '/boot.js'];
 
 const NEVER = [/^\/api(\/|$)/, /^\/setup(\/|$)/, /^\/healthz$/];
+
+/** The build an index.html loads: the name of its module entry script under /assets/ ("index-<hash>"), or null. */
+function buildOf(html) {
+  for (const tag of html.match(/<script\b[^>]*>/gi) || []) {
+    if (!/\btype\s*=\s*["']?module/i.test(tag)) continue;
+    const src = /\bsrc\s*=\s*["']([^"']+)["']/i.exec(tag);
+    const m = src && /\/assets\/([\w.-]+?)\.js(?:[?#]|$)/.exec(src[1]);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+/** Name of the newest asset cache (CacheStorage keeps insertion order), or a fallback before the first shell. */
+async function currentAssetCache() {
+  const names = (await caches.keys()).filter((k) => k.startsWith(ASSET_PREFIX) && !LEGACY_CACHES.includes(k));
+  return names.length ? names[names.length - 1] : `${ASSET_PREFIX}unknown`;
+}
+
+/**
+ * Remember a freshly fetched shell: cache it, precache its build's assets (once per build) and drop the asset caches of
+ * builds older than the previous one. HTML without our entry script (a reverse proxy's login or error page) is ignored.
+ */
+async function adoptShell(html, response) {
+  const build = buildOf(html);
+  if (!build) return;
+  const shell = await caches.open(SHELL_CACHE);
+  await shell.put(SHELL_URL, response);
+  const name = ASSET_PREFIX + build;
+  const existing = await caches.keys();
+  if (!existing.includes(name)) {
+    const cache = await caches.open(name);
+    const assets = [...new Set(html.match(/\/assets\/[^"'\s)]+/g) || [])];
+    await Promise.all([...STATIC_FILES, ...assets].map((u) => cache.add(u).catch(() => undefined)));
+  }
+  const assetCaches = (await caches.keys()).filter((k) => k.startsWith(ASSET_PREFIX) && k !== name);
+  const keep = new Set([name, ...assetCaches.slice(-(KEEP_BUILDS - 1))]);
+  for (const key of assetCaches) if (!keep.has(key)) await caches.delete(key);
+}
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     (async () => {
-      const shell = await caches.open(SHELL_CACHE);
       try {
         const res = await fetch(SHELL_URL, { cache: 'no-store' });
-        if (res.ok) {
-          const html = await res.clone().text();
-          await shell.put(SHELL_URL, res);
-          // precache what the shell references so a cold offline launch still renders
-          const assets = [...new Set(html.match(/\/assets\/[^"'\s)]+/g) || [])];
-          const cache = await caches.open(ASSET_CACHE);
-          await Promise.all(
-            ['/manifest.webmanifest', '/icons/icon.svg', '/icons/icon-192.png', '/boot.js', ...assets].map((u) =>
-              cache.add(u).catch(() => undefined),
-            ),
-          );
-        }
+        const type = res.headers.get('content-type') || '';
+        // precache the shell and what it references so a cold offline launch still renders
+        if (res.ok && type.includes('text/html')) await adoptShell(await res.clone().text(), res);
       } catch {
         /* offline during install: the shell is cached on the first online navigation instead */
       }
     })(),
   );
-  // no skipWaiting() here: updates wait for the user's "Reload" (see message handler)
+  self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
-      const keep = new Set([SHELL_CACHE, ASSET_CACHE]);
-      for (const key of await caches.keys()) if (!keep.has(key)) await caches.delete(key);
+      for (const key of LEGACY_CACHES) await caches.delete(key);
       if (self.registration.navigationPreload) {
         try {
           await self.registration.navigationPreload.enable();
@@ -67,6 +109,7 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+// pages of earlier releases ask a waiting worker to take over; this one already does on install
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
@@ -87,31 +130,62 @@ self.addEventListener('fetch', (event) => {
   }
 });
 
-async function networkFirstShell(event) {
-  const cache = await caches.open(SHELL_CACHE);
+// Called synchronously from the fetch event, so waitUntil() below runs during dispatch.
+function networkFirstShell(event) {
+  // The preload response (navigation preload is enabled on activate) or a plain fetch. Both are raced against the
+  // timeout: awaiting preloadResponse on its own would hang as long as the network does.
+  const network = Promise.resolve(event.preloadResponse)
+    .catch(() => undefined)
+    .then((preloaded) => preloaded || fetch(event.request));
+  // A late answer still refreshes the cached shell. This handler is attached before the one that hands the response
+  // to the page, so the copy is taken before the page reads the body.
+  event.waitUntil(
+    network
+      .then((res) => {
+        const type = res.headers.get('content-type') || '';
+        if (!res.ok || !type.includes('text/html')) return undefined;
+        const copy = res.clone();
+        return copy
+          .clone()
+          .text()
+          .then((html) => adoptShell(html, copy));
+      })
+      .catch(() => undefined),
+  );
+  return respondWithShellFallback(network);
+}
+
+async function respondWithShellFallback(network) {
+  let res;
   try {
-    const preload = event.preloadResponse ? await event.preloadResponse : undefined;
-    const res = preload || (await withTimeout(fetch(event.request), NAV_TIMEOUT_MS));
-    const type = res.headers.get('content-type') || '';
-    if (res.ok && type.includes('text/html')) await cache.put(SHELL_URL, res.clone());
-    return res;
+    res = await withTimeout(network, NAV_TIMEOUT_MS);
   } catch {
-    const cached = await cache.match(SHELL_URL);
-    if (cached) return cached;
-    return new Response(
-      '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>pve1</title>' +
-        '<body style="font:16px system-ui;padding:40px;text-align:center;color:#555">pve1-dash is offline. Try again when the network is back.</body>',
-      { status: 503, headers: { 'content-type': 'text/html; charset=utf-8' } },
-    );
+    res = undefined; // offline, refused or timed out
   }
+  // 5xx: the reverse proxy (or the server) is down for a moment; the cached shell copes with that by itself
+  if (res && res.status < 500) return res;
+  const cached = await (await caches.open(SHELL_CACHE)).match(SHELL_URL);
+  if (cached) return cached;
+  if (res) return res;
+  return new Response(
+    '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>pve1</title>' +
+      '<body style="font:16px system-ui;padding:40px;text-align:center;color:#555">pve1-dash is offline. Try again when the network is back.</body>',
+    { status: 503, headers: { 'content-type': 'text/html; charset=utf-8' } },
+  );
 }
 
 async function staleWhileRevalidate(event, req) {
-  const cache = await caches.open(ASSET_CACHE);
-  const cached = await cache.match(req);
+  // hashed asset URLs are unique, so any cache may answer; fresh copies go into the newest build's cache
+  const cached = await caches.match(req);
   const network = fetch(req)
     .then((res) => {
-      if (res.ok) cache.put(req, res.clone()).catch(() => undefined);
+      if (res.ok) {
+        const copy = res.clone();
+        currentAssetCache()
+          .then((name) => caches.open(name))
+          .then((cache) => cache.put(req, copy))
+          .catch(() => undefined);
+      }
       return res;
     })
     .catch(() => undefined);

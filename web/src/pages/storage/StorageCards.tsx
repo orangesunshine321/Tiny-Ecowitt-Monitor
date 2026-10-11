@@ -149,6 +149,7 @@ export function DisksTable({ disks, wearWarnPercent, onOpen }: { disks: readonly
       {
         key: 'disk',
         header: 'Disk',
+        shrink: true,
         sortValue: (d) => d.devpath,
         cell: (d) => (
           <span className="inf-cell">
