@@ -718,6 +718,7 @@ export interface RrdPoint {
   disk?: number; // bytes used (lxc)
   maxdisk?: number;
   pressureCpuSome?: number; // percent (PVE 9)
+  pressureCpuFull?: number; // percent (PVE 9, guests only)
   pressureIoSome?: number;
   pressureIoFull?: number;
   pressureMemSome?: number;
@@ -734,7 +735,11 @@ export interface RrdPoint {
  *  GET  /api/zfs/:name                        → ZfsPoolDetail
  *  POST /api/inventory/refresh                → { ok: true } body: { vmid?: number }  (rate limited)
  *  GET  /api/push/devices                     → PushDevice[]
- *  POST /api/push/subscribe                   → PushDevice  body: { subscription: PushSubscriptionJSON, name: string, prefs?: Partial<PushPrefs> }
+ *  POST /api/push/subscribe                   → PushDevice  body: { subscription: PushSubscriptionJSON, name: string, prefs?: Partial<PushPrefs>, replacesId?: string }
+ *                                               replacesId: the device id this browser had before (subscription refresh / VAPID
+ *                                               change). The server then updates that device in place (keeping id, name and
+ *                                               prefs) instead of creating a new one; unknown ids are ignored.
+ *  GET  /api/push/devices/:id                 → PushDevice | 404   (lets a device check whether it was removed elsewhere)
  *  POST /api/push/prefs                       → PushDevice  body: { id: string, prefs: Partial<PushPrefs>, name?: string }
  *  POST /api/push/unsubscribe                 → { ok: true } body: { id?: string, endpoint?: string }
  *  POST /api/push/test                        → { ok: boolean, error?: string } body: { id: string }

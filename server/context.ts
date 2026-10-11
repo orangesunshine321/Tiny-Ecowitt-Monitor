@@ -143,7 +143,13 @@ export interface PushService {
     subscription: { endpoint: string; keys: { p256dh: string; auth: string }; expirationTime?: number | null };
     name: string;
     prefs?: Partial<PushPrefs>;
+    /** previous device id of this browser: update it in place (keep id/name/prefs) instead of adding a device */
+    replacesId?: string;
+    /** request origin (scheme://host) — used for absolute notification links when config.publicUrl is unset */
+    origin?: string;
   }): Promise<PushDevice>;
+  /** look up one device (undefined when it was removed) */
+  device(id: string): PushDevice | undefined;
   updatePrefs(id: string, prefs: Partial<PushPrefs>, name?: string): Promise<PushDevice>;
   unsubscribe(by: { id?: string; endpoint?: string }): Promise<void>;
   test(id: string): Promise<{ ok: boolean; error?: string }>;
