@@ -1,0 +1,195 @@
+/* Buttons: capsules (iOS 26 bordered buttons are capsules); press = spring scale. */
+.ui-btn {
+  --_h: 34px;
+  --_tint: var(--accent);
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: var(--_h);
+  padding: 0 calc(var(--_h) * 0.42);
+  border-radius: var(--r-capsule);
+  font-size: var(--fs-callout);
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: var(--tr-callout);
+  white-space: nowrap;
+  text-decoration: none;
+  user-select: none;
+  -webkit-user-select: none;
+  transition:
+    transform 420ms var(--spring-bouncy),
+    background-color 160ms ease,
+    box-shadow 160ms ease,
+    opacity 160ms ease;
+  touch-action: manipulation;
+}
+.ui-btn:hover {
+  text-decoration: none;
+}
+.ui-btn:active:not(:disabled) {
+  transform: scale(0.96);
+  transition-duration: 120ms;
+}
+.ui-btn:disabled,
+.ui-btn[aria-disabled='true'] {
+  opacity: 0.4;
+  pointer-events: none;
+}
+.ui-btn[data-size='small'] {
+  --_h: 28px;
+  font-size: var(--fs-subhead);
+  gap: 4px;
+}
+.ui-btn[data-size='large'] {
+  --_h: 44px;
+  font-size: var(--fs-body);
+  padding: 0 20px;
+}
+.ui-btn[data-block] {
+  width: 100%;
+}
+
+/* glass: for buttons floating over content (toolbars, over media) */
+.ui-btn[data-variant='glass'] {
+  color: var(--label);
+}
+/* tinted: tone background at low alpha with tone text */
+.ui-btn[data-variant='tinted'] {
+  color: color-mix(in oklab, var(--_tint) 80%, var(--label));
+  background: color-mix(in srgb, var(--_tint) 15%, transparent);
+}
+.ui-btn[data-variant='tinted']:hover {
+  background: color-mix(in srgb, var(--_tint) 21%, transparent);
+}
+/* prominent: the one primary action, solid tint */
+.ui-btn[data-variant='prominent'] {
+  color: #fff;
+  background: var(--_tint);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.25),
+    0 1px 2px rgb(0 0 0 / 0.12);
+}
+.ui-btn[data-variant='prominent']:hover {
+  background: color-mix(in oklab, var(--_tint) 88%, #000);
+}
+/* gray: neutral filled (secondary actions in content) */
+.ui-btn[data-variant='gray'] {
+  color: var(--label);
+  background: var(--fill-3);
+}
+.ui-btn[data-variant='gray']:hover {
+  background: var(--fill-2);
+}
+/* plain: text only */
+.ui-btn[data-variant='plain'] {
+  color: var(--_tint);
+  padding: 0 8px;
+  font-weight: 500;
+}
+.ui-btn[data-variant='plain']:hover {
+  background: var(--fill-4);
+}
+
+.ui-btn[data-tint='red'] { --_tint: var(--red); }
+.ui-btn[data-tint='green'] { --_tint: var(--green); }
+.ui-btn[data-tint='orange'] { --_tint: var(--orange); }
+.ui-btn[data-tint='gray'] { --_tint: var(--gray); }
+.ui-btn[data-tint='purple'] { --_tint: var(--purple); }
+.ui-btn[data-tint='indigo'] { --_tint: var(--indigo); }
+
+.ui-btn-icon {
+  display: inline-flex;
+  flex: none;
+}
+.ui-btn[data-loading] .ui-btn-label {
+  opacity: 0.6;
+}
+
+/* Icon buttons: circles (or square-ish inside toolbar groups). */
+.ui-iconbtn {
+  --_s: 34px;
+  --_tint: var(--accent);
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: var(--_s);
+  height: var(--_s);
+  border-radius: var(--r-capsule);
+  color: var(--label);
+  transition:
+    transform 420ms var(--spring-bouncy),
+    background-color 160ms ease,
+    color 160ms ease;
+  touch-action: manipulation;
+}
+.ui-iconbtn[data-size='small'] {
+  --_s: 28px;
+}
+.ui-iconbtn[data-size='large'] {
+  --_s: 44px;
+}
+.ui-iconbtn:hover {
+  background: var(--row-hover);
+}
+.ui-iconbtn:active:not(:disabled) {
+  transform: scale(0.92);
+  transition-duration: 120ms;
+}
+.ui-iconbtn:disabled {
+  opacity: 0.35;
+}
+.ui-iconbtn[data-variant='glass']:hover {
+  background: var(--_fill);
+}
+.ui-iconbtn[data-variant='tinted'] {
+  color: var(--_tint);
+  background: color-mix(in srgb, var(--_tint) 15%, transparent);
+}
+.ui-iconbtn[data-variant='gray'] {
+  color: var(--label-2);
+  background: var(--fill-3);
+}
+.ui-iconbtn[aria-pressed='true'],
+.ui-iconbtn[data-active] {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.ui-iconbtn-badge {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--red);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 0 0 1.5px var(--glass-solid);
+}
+.ui-iconbtn-badge[data-dot] {
+  min-width: 9px;
+  width: 9px;
+  height: 9px;
+  padding: 0;
+  top: 4px;
+  right: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-btn,
+  .ui-iconbtn {
+    transition-duration: 0ms;
+  }
+  .ui-btn:active:not(:disabled),
+  .ui-iconbtn:active:not(:disabled) {
+    transform: none;
+  }
+}

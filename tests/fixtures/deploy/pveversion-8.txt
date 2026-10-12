@@ -1,0 +1,1 @@
+pve-manager/8.4.14/fedcba9876543210 (running kernel: 6.8.12-15-pve)

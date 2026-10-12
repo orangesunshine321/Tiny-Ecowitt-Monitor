@@ -1,0 +1,77 @@
+/* iPhone: floating glass capsule tab bar (inset 12px + safe area). */
+.shell-tabbar {
+  --glass-radius: var(--r-capsule);
+  position: fixed;
+  z-index: 40;
+  left: max(12px, var(--safe-left));
+  right: max(12px, var(--safe-right));
+  bottom: calc(var(--safe-bottom) + 10px);
+  height: var(--tabbar-h);
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  align-items: stretch;
+  padding: 4px;
+}
+@media (min-width: 768px) {
+  .shell-tabbar {
+    display: none;
+  }
+}
+.shell-tab {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border-radius: var(--r-capsule);
+  color: var(--label);
+  font-size: 10px;
+  line-height: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-decoration: none;
+  transition:
+    color 160ms ease,
+    background-color 200ms ease,
+    transform 360ms var(--spring-bouncy);
+  -webkit-tap-highlight-color: transparent;
+}
+.shell-tab:hover {
+  text-decoration: none;
+}
+.shell-tab:active {
+  transform: scale(0.92);
+}
+.shell-tab[aria-current='page'],
+.shell-tab[data-selected] {
+  color: var(--accent);
+  background: var(--fill-3);
+}
+.shell-tab svg {
+  width: 24px;
+  height: 24px;
+}
+.shell-tab .shell-nav-iconwrap {
+  position: relative;
+  display: inline-flex;
+}
+/* the bubble starts just inside the glyph's trailing edge and sits above it (as on iOS), so it never covers the third
+   dot of the More ellipsis or most of the Services grid */
+.shell-tab .shell-badge[data-variant='dot'] {
+  display: block;
+  top: -7px;
+  right: auto;
+  left: calc(100% - 4px);
+}
+.shell-more-node {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: var(--s5);
+}
+.shell-more-node img {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+}

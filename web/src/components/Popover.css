@@ -1,0 +1,26 @@
+.ui-popover {
+  --glass-radius: 18px;
+  position: fixed;
+  z-index: 90;
+  max-width: calc(100vw - 16px);
+  max-height: min(70dvh, 560px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: var(--s2);
+  outline: none;
+  opacity: 0;
+  transform: scale(0.94);
+  transition:
+    opacity 160ms ease,
+    transform 360ms var(--spring-glass);
+}
+.ui-popover[data-visible] {
+  opacity: 1;
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-popover {
+    transform: none;
+    transition: opacity 120ms ease;
+  }
+}

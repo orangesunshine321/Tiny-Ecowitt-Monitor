@@ -1,0 +1,333 @@
+/* Settings page (DESIGN §5). Page-local classes use the "set-" prefix. */
+
+.set-wrap {
+  container-type: inline-size;
+  container-name: set;
+}
+.set-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--s6);
+  align-items: start;
+  max-width: 760px;
+}
+@container set (min-width: 1000px) {
+  .set-page {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-width: none;
+  }
+}
+.set-col,
+.set-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s6);
+  min-width: 0;
+}
+/* anchors land below the floating top bar */
+.set-anchor {
+  scroll-margin-top: 84px;
+  min-width: 0;
+}
+
+/* ───────────────────────────── custom list items */
+.set-item {
+  position: relative;
+  min-width: 0;
+}
+.set-item-padded {
+  padding: 12px var(--s4);
+}
+/* hairlines between custom items and regular rows, like .ui-row */
+.set-wrap .ui-list-body > .set-item + :is(.set-item, .ui-row, .set-field)::before,
+.set-wrap .ui-list-body > .ui-row + :is(.set-item, .set-field)::before,
+.set-wrap .ui-list-body > .set-field + :is(.set-item, .ui-row, .set-field)::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: var(--s4);
+  height: 0.5px;
+  background: var(--separator);
+}
+
+.set-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px var(--s3);
+  min-height: 48px;
+}
+.set-inline-tight {
+  flex-wrap: nowrap;
+}
+.set-inline-tight .set-inline-text {
+  flex: 1 1 0;
+}
+.set-inline-icon {
+  margin-right: -2px;
+}
+.set-inline-icon > svg {
+  width: 18px;
+  height: 18px;
+}
+.set-inline-text {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+.set-inline-title {
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+}
+.set-inline-sub {
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  color: var(--label-2);
+}
+
+.set-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+.set-actions-row {
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+
+/* text field row: label left, value right */
+.set-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  min-height: 48px;
+  padding: 0 var(--s4);
+}
+.set-field-label {
+  flex: none;
+  font-size: var(--fs-body);
+}
+.set-field-input {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  border: 0;
+  background: transparent;
+  text-align: right;
+  font-size: var(--fs-body);
+  color: var(--label-2);
+  outline: none;
+}
+.set-field-input:focus {
+  color: var(--label);
+}
+.set-field-input::placeholder {
+  color: var(--label-3);
+}
+.set-field:focus-within {
+  box-shadow: inset 0 0 0 2px var(--focus-ring-color);
+  border-radius: 10px;
+}
+
+/* native select as a trailing pop-up button */
+.set-select {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  color: var(--accent);
+}
+.set-select select {
+  max-width: 100%;
+  height: 28px;
+  padding: 0 22px 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--fill-3);
+  color: var(--label);
+  font-size: var(--fs-subhead);
+  font-weight: 500;
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+}
+.set-select select:focus-visible {
+  outline: 3px solid var(--focus-ring-color);
+  outline-offset: 1px;
+}
+.set-select svg {
+  position: absolute;
+  right: 7px;
+  pointer-events: none;
+}
+
+/* callouts */
+.set-callout {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--_c) 11%, transparent);
+}
+.set-callout-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  color: #fff;
+  background: var(--_c);
+}
+.set-callout-text {
+  min-width: 0;
+}
+.set-callout-title {
+  font-weight: 600;
+  font-size: var(--fs-callout);
+  line-height: var(--lh-callout);
+}
+.set-callout-body {
+  margin-top: 3px;
+  font-size: var(--fs-subhead);
+  line-height: var(--lh-subhead);
+  color: var(--label-2);
+}
+.set-after-note {
+  margin-top: var(--s3);
+}
+
+/* code blocks with a copy button */
+.set-code {
+  position: relative;
+  min-width: 0;
+}
+.set-code pre {
+  margin: 0;
+  padding: 11px 48px 11px 13px;
+  border-radius: 12px;
+  background: var(--card-inset);
+  box-shadow: inset 0 0 0 0.5px var(--hairline);
+  font-size: 12.5px;
+  line-height: 18px;
+  color: var(--label);
+  overflow-x: auto;
+  white-space: pre;
+  -webkit-overflow-scrolling: touch;
+}
+.set-code[data-wrap] pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.set-code pre:focus-visible {
+  outline: 3px solid var(--focus-ring-color);
+  outline-offset: 1px;
+}
+.set-code-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+}
+.set-wrap code {
+  overflow-wrap: anywhere;
+}
+
+/* "add a VM" steps */
+.set-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  padding-block: 14px 16px;
+}
+.set-lead {
+  font-size: var(--fs-subhead);
+  line-height: var(--lh-subhead);
+  color: var(--label-2);
+}
+.set-steplist {
+  list-style: none;
+  counter-reset: step;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+}
+.set-steplist > li {
+  position: relative;
+  counter-increment: step;
+  padding-left: 32px;
+  min-width: 0;
+}
+.set-steplist > li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--on-accent);
+  background: var(--accent);
+}
+.set-step-title {
+  margin-bottom: 7px;
+  font-size: var(--fs-callout);
+  line-height: 22px;
+  font-weight: 600;
+}
+.set-step-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px var(--s2);
+}
+.set-step-note {
+  margin-top: 6px;
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  color: var(--label-2);
+}
+
+/* devices */
+.set-device-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.set-device-error {
+  color: color-mix(in oklab, var(--status-crit) 80%, var(--label));
+}
+.set-device-actions {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.set-about-version {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* the install hint already brings its own layout */
+.set-item .shell-a2hs {
+  margin: 0;
+}
+
+.set-every {
+  margin-left: 4px;
+  font-size: var(--fs-footnote);
+  color: var(--label-2);
+}
+/* rows with a leading icon keep the iOS inset hairline (it starts after the icon) */
+.set-wrap .ui-list-body > .set-item:has(.set-inline-icon) + .ui-row[data-has-icon]::before {
+  left: calc(var(--s4) + 30px + var(--s3));
+}

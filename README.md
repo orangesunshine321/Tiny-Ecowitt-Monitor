@@ -1,184 +1,177 @@
-# 🌿 Tiny Ecowitt Monitor for Windows (v1/Beta)🌿
+# 🚉 pve1-dash
 
-🎉 Put this together with my friend ChatGPT in an afternoon because the Ecowitt web interface sucks and I'm on my computer all day anyways. Enjoy!
-**NOTE: This has ONLY been tested with a GW1100 Firmware Version 2.3.4, so this may not work with other gateways/sensors.**
+**A read-only homelab dashboard for one Proxmox VE node, dressed like a native Apple app.**
+
+🎉 The Proxmox web UI is great for *doing* things. pve1-dash is for *looking*: a calm, glassy (macOS/iOS 26 "Liquid
+Glass" style) dashboard you can leave open on a Mac, pin to an iPad, or add to your iPhone's Home Screen, with push
+alerts when something breaks. And because a status page deserves some joy, your services also show up on a
+retro-futuristic **split-flap train-station departure board**. 🚂
+
+It is **pure information**: no power buttons, no consoles of its own, no config changes. Console buttons just open
+Proxmox's own console. Works with **Proxmox VE 8.x and 9.x**.
+
+> **Note:** this repository used to hold the *Tiny Ecowitt Monitor* Windows app. That project lives on in the git
+> history (any commit before `6ace15e`); the repo is now home to pve1-dash.
 
 ## 🌟 Features
 
-- View all of the Data from your Ecowitt Gateway/Sensors in a tiny Windows app.
-- Added automatic VPD calculator based on current readings.
-- Hopefully easy to configure and see just what you want to.
-- Updates every second, shows when last update occured.
+| | |
+|---|---|
+| **Overview** | CPU, memory, root FS and swap rings, load and IO wait, live and historical charts, network, and an "Attention" card that lists only what needs a look. |
+| **Guests** | Every VM and container with status, CPU/memory meters, IPs, tags and sparklines, as a grid or a sortable list. |
+| **Inside your guests** | Running services, Docker containers (with health and compose project), IP addresses and listening ports, collected read-only over SSH (`pct exec` for containers, the QEMU guest agent for VMs, direct SSH for VMs without it). |
+| **Service launcher** | Big tiles for your apps with health checks (HTTP or TCP), latency, 24 h uptime strips. Docker containers with published ports appear automatically. |
+| **Departure board** | Your services as a fullscreen split-flap board: ON TIME, DELAYED, CANCELLED. Optional clack sound. |
+| **Storage, ZFS & disks** | Pools with usage meters, ZFS health and vdev tree, SMART health and SSD wear per disk. |
+| **Backups** | Coverage per guest ("backed up in the last N days?"), jobs and next runs, recent backup tasks and files. |
+| **Tasks** | The Proxmox task list with readable names, durations and logs. |
+| **Network** | Bridges and interfaces, every guest's addresses, and all open ports across guests. |
+| **Alerts + Web Push** | Node unreachable, guest stopped, service down, unhealthy container, failed/stale backup, storage filling up, disk or ZFS trouble, straight to your iPhone (iOS 16.4+), iPad or Mac. |
+| **Temperatures** | CPU/board temperatures from the host (optional lm-sensors) and disk temperatures from SMART. |
+| **Feels native** | Light/dark, Reduce Transparency, spring animations, ⌘K Spotlight search, installable PWA. |
 
-![Screenshot](https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/Screenshot%202024-10-01%20160613.png)
+### 📸 Screenshots
 
-## 📋 Table of Contents
+| | |
+|---|---|
+| ![Overview, light](docs/screenshots/overview-light.png) | ![Overview, dark](docs/screenshots/overview-dark.png) |
+| ![Guests](docs/screenshots/guests.png) | ![Guest detail](docs/screenshots/guest-detail.png) |
+| ![Services](docs/screenshots/services.png) | ![Departure board](docs/screenshots/board.png) |
+| ![Storage](docs/screenshots/storage.png) | ![Backups](docs/screenshots/backups.png) |
+| ![iPhone: overview](docs/screenshots/iphone-overview.png) | ![iPhone: departure board](docs/screenshots/iphone-board.png) |
 
-- [🔍 How to Find Your Gateway IP Address](#-how-to-find-your-gateway-ip-address)
-- [💻 Download](#-download)
-- [🛠️ How to Use](#️-how-to-use)
-  - [1. Launch the App](#1-launch-the-app)
-  - [2. Enter Your Gateway IP](#2-enter-your-gateway-ip)
-  - [3. Assign and Name Your Sensors](#3-assign-and-name-your-sensors)
-  - [4. Choose Your Theme](#4-choose-your-theme)
-  - [5. Monitor Your Plant Environment](#5-monitor-your-plant-environment)
-- [🎨 Themes](#-themes)
-- [🔧 Troubleshooting](#-troubleshooting)
+## 🚀 Quick start: try the demo
 
-## 🔍 How to Find Your Gateway IP Address
+No Proxmox needed: the demo runs a simulated homelab (a mock Proxmox API and fake guests). You need Node.js 20.19 or
+newer (22+ to run the test suite).
 
-Before you start monitoring your plants, you'll need to find the IP address of your Ecowitt Gateway. Here's a simple guide to help you locate it:
+```bash
+git clone https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git pve1-dash
+cd pve1-dash
+npm ci && npm run build && npm run demo
+```
 
-### **Step 1: Find the MAC Address Using the Ecowitt App**
+(Before pve1-dash is merged into `main`, clone its branch: add `--branch claude/homelab-dashboard-pve1-dizt16` to the
+`git clone` line.)
 
-1. **Open the Ecowitt App** on your iOS device (Might be the same on Android, I don't have one to test).
-2. **Tap the Three-Line Icon** in the top left corner. 📱
-3. **Select "My Devices"** from the menu.
-4. **Tap the Three-Dot Icon** on the right side of your Ecowitt Gateway device.
-5. **Write down/copy the MAC Address** displayed. 📋
+Then open <http://localhost:8080>. (Port taken? `PVE1_DASH_PORT=8081 npm run demo`.)
 
-### **Step 2: Locate the IP Address**
+## 🏠 Install on your Proxmox host
 
-With the MAC address in hand, you can now find the corresponding IP address:
+On **pve1**, as root (the web UI's node → **Shell** is fine):
 
-#### **Method 1: Check Your Router's Connected Devices**
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)"
+```
 
-1. **Access Your Router's Admin Page**:
-   - Open a web browser.
-   - Enter your router's IP address (commonly `192.168.1.1` or `192.168.0.1`) in the address bar.
-   - Log in with your router's admin credentials.
+> **Before pve1-dash is merged into `main`:** the repository's `main` branch still holds the old *Tiny Ecowitt
+> Monitor*, so the command above finds no installer there (and ends without doing anything). Until the merge, install from the pve1-dash branch. Name
+> the branch twice: in the URL (which installer to download) and in `PVE1_DASH_REF` (which code the installer builds):
+>
+> ```bash
+> PVE1_DASH_REF=claude/homelab-dashboard-pve1-dizt16 bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/claude/homelab-dashboard-pve1-dizt16/deploy/install.sh)"
+> ```
+>
+> The installer remembers the branch in the container, so updates and re-runs stay on it. Once the branch is merged
+> into `main`, the plain command above works. If the ref you give doesn't contain pve1-dash, the installer stops right
+> at the start and says so.
 
-2. **Navigate to the Connected Devices Section**:
-   - Look for sections labeled **Connected Devices**, **Device List**, or **DHCP Clients**.
+It asks a few questions with sensible defaults, shows a plan, and then:
 
-3. **Identify Your Ecowitt Gateway**:
-   - Find the device matching the **MAC Address** you obtained.
-   - Note the corresponding **IP Address** listed next to it.
+1. creates an **unprivileged Debian 13 container** (tagged `pve1-dash`, no root password, starts on boot; Debian 12
+   on hosts whose `pve-container` is too old for Debian 13);
+2. creates a **read-only API token** (`pve1dash@pve!dashboard`, role `PVEAuditor`; a second dashboard in the same
+   cluster gets its own token);
+3. installs **Node.js 24 LTS** and builds pve1-dash inside the container as a sandboxed systemd service;
+4. installs a small **read-only SSH helper** on the host and authorizes the dashboard's key for it only;
+5. optionally installs **lm-sensors** for temperatures, and runs a smoke test.
 
-#### **Method 2: Use Command Prompt (on Windows)**
+Then put it behind your HTTPS reverse proxy ([recipes for Nginx Proxy Manager, nginx, Caddy and
+Traefik](deploy/reverse-proxy/README.md)), add it to your iPhone's Home Screen and enable notifications in
+Settings. Every step, and how to do it by hand, is in **[docs/SETUP.md](docs/SETUP.md)**.
 
-1. **Open Command Prompt**:
-   - Press `Win + R`, type `cmd`, and press `Enter`.
+| What | Command |
+|---|---|
+| Update | `pct exec <ctid> -- pve1-dash-update` |
+| Refresh the host helper (when the update tells you; it prints the exact command) | `bash -c "$(curl -fsSL …/deploy/install.sh)" -- --update-helper` |
+| Repair, re-pin the certificate, change the container's network | run the installer again (it keeps your config, data and the branch or tag you installed) |
+| Uninstall | `bash -c "$(curl -fsSL …/deploy/uninstall.sh)"` (add `-- --yes` for no questions) |
+| Something's off | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) |
 
-2. **Run the `arp` Command**:
-   - Type the following command and press `Enter`:
-     ```bash
-     arp -a
-     ```
-   - This will display a list of IP addresses and their corresponding MAC addresses.
+`…` stands for `https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main` (or
+`…/claude/homelab-dashboard-pve1-dizt16` before the merge, see above).
 
-3. **Identify the Ecowitt Gateway**:
-   - Look for the **MAC Address** you noted earlier.
-   - Note the associated **IP Address**.
+### 📋 Requirements
 
-**NOTE:** Your computer and Ecowitt Gateway MUST be connected to the same network for the app to work.
+- Proxmox VE **8.x or 9.x** (one node; a cluster is fine, the dashboard shows one node, and each node can have its
+  own dashboard).
+- ~1 GiB RAM and 6 GiB disk for the container; internet access while installing.
+- An HTTPS reverse proxy on your LAN with a certificate your devices trust (for the PWA and push).
+- For push on iPhone/iPad: **iOS/iPadOS 16.4+**, with the dashboard added to the Home Screen.
 
-## 💻 Download
+## 🛡️ Security model, in short
 
-Get started by downloading the .exe for Windows:
+- **Read-only API token** with the built-in `PVEAuditor` role. On PVE 8 the dashboard deliberately does **not** ask for
+  `VM.Monitor`, because that privilege also allows running commands inside guests.
+- **One SSH key, pinned to one read-only script** with `restrict,command="..."`: it can't open a shell, forward ports or
+  run anything else. It inspects running guests with a fixed script and reads a few files Proxmox already keeps.
+- **TLS to Proxmox is pinned**: the token is never sent before the certificate checks out.
+- **No login, LAN only.** Keep it behind your proxy and never port-forward it; add an IP allow-list or SSO at the
+  proxy if your LAN isn't just you.
+- Strict Content-Security-Policy, no third-party scripts, secrets only in the container with tight permissions.
 
-🔗 [Download Tiny Ecowitt Plant Monitor for Windows](https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor/releases/download/1.0/ecowitt3.exe)
+The full threat model is in **[docs/SECURITY.md](docs/SECURITY.md)**.
 
-## 🛠️ How to Use
+## 🧑‍💻 Development
 
-### 1. Launch the App
+```bash
+npm ci
+npm run dev          # API in demo mode + Vite dev server (http://localhost:5173, proxies /api to :8080)
+npm test             # vitest
+npm run typecheck    # server and web TypeScript
+npm run build        # web (Vite) → dist/web, server (esbuild) → dist/server/index.js
+npm start            # run the build (needs /etc/pve1-dash/config.yaml or PVE1_DASH_CONFIG)
+npm run demo         # the build's web app + the server in demo mode
+```
 
-Double-click the `ecowitt3.exe` file to open the application. The main window will appear, displaying various sensor data fields related to your grow tent environment.
+Configuration lives in YAML: every option with its default is in
+[deploy/config.example.yaml](deploy/config.example.yaml). Set `PVE1_DASH_DEMO=1` to run against the simulated
+homelab.
 
-### 2. Enter Your Gateway IP
+### 🗂️ Project layout
 
-Upon first launch, you'll be prompted to enter your **Ecowitt Gateway IP Address**:
+```
+server/              Fastify backend (TypeScript, ESM)
+  proxmox/           read-only Proxmox API client, pollers, mapping
+  inventory/         SSH runner and parsers for "what runs inside guests"
+  health/            service checks and Docker discovery
+  alerts/            alert rules, history, Web Push
+  demo/              the simulated homelab (mock Proxmox API + mock SSH)
+  http.ts            REST API, live stream (SSE), static web app
+  config.ts          config schema (zod)
+shared/types.ts      the data contract between server and web
+web/                 React 19 PWA (Vite)
+deploy/
+  install.sh         host installer   · uninstall.sh · lxc-setup.sh (inside the container) · update.sh
+  pve1-dash.service  systemd unit
+  helpers/           the read-only SSH helpers (host and guest)
+  config.example.yaml
+  reverse-proxy/     proxy recipes
+docs/                SETUP, SECURITY, TROUBLESHOOTING, helper protocol, design brief, research notes
+tests/               vitest suites (server modules, deploy scripts with stubbed Proxmox tools)
+```
 
-1. **Input the IP Address**:
-   - Enter the IP address found earlier in the provided field (e.g., `192.168.1.100`).
+## 🙏 Credits & licenses
 
-2. **Save Settings**:
-   - Click **Next** to proceed.
+- pve1-dash is MIT licensed (see `package.json`).
+- App icons: [dashboard-icons](https://github.com/homarr-labs/dashboard-icons) by homarr-labs, **Apache-2.0**,
+  loaded from jsDelivr.
+- UI icons: [Lucide](https://lucide.dev), **ISC**.
+- Built on [Fastify](https://fastify.dev), [React](https://react.dev), [Vite](https://vite.dev),
+  [ssh2](https://github.com/mscdex/ssh2), [web-push](https://github.com/web-push-libs/web-push),
+  [zod](https://zod.dev), [yaml](https://eemeli.org/yaml/), [undici](https://undici.nodejs.org) and
+  [zustand](https://zustand.docs.pmnd.rs).
+- Proxmox and Proxmox VE are trademarks of Proxmox Server Solutions GmbH. This project is not affiliated with them.
+  Apple, iPhone, iPad, macOS and Safari are trademarks of Apple Inc.
 
-### 3. Assign and Name Your Sensors
-
-Customize how your sensors are displayed to monitor your plant environment effectively:
-
-1. **Assign Sensors**:
-   - For each parameter (e.g., Temperature, Humidity, Soil Moisture), select the corresponding sensor number from the dropdown [Some sensors send values individually, some send as a group] or choose **Hide** to exclude it.
-
-2. **Name Sensors**:
-   - Put in names for each sensor to know which one is which. Easiest way is to look at the Ecowitt app during setup and match the values.
-
-3. **Finish Setup**:
-   - Click **Finish** to save your configurations.
-
-### 4. Choose Your Theme
-
-1. **Default Dark Mode** 🌓:
-   - A standard dark interface that's easy on the eyes.
-
-2. **Matrix Theme** 💚:
-   - I like The Matrix so here you go.
-
-   - Navigate to **Settings > Theme** to switch between themes anytime.
-
-### 5. Monitor Your Plant Environment
-
-View real-time updates to ensure your plants are thriving:
-
-- **Sensor Panels**: Each assigned sensor displays its current value and status, such as temperature, humidity, soil moisture, and a VPD Calculator.
-- **Automatic VPD Calculator**: Based on current Temps and Humidity from the sensors.
-- **Soil Moisture**: Specialized section for monitoring soil conditions to prevent over or under-watering.
-- **Last Updated**: Timestamp indicating the most recent data fetch to keep you informed about the latest readings.
-
-## 🎨 Themes
-
-### 🌓 Dark Mode
-
-- A modern dark theme with dark grays and whites.
-
-### 💚 Matrix Theme
-
-- Inspired by the Matrix movie, featuring green monospaced text on a black background.
-
-*You can switch themes anytime from the Settings menu.*
-
-## 🔧 Troubleshooting
-
-### ❗ App Doesn't Launch
-
-💻 Windows Defender Popup for Unknown Developer
-When you first run the Tiny Ecowitt Plant Monitor, Windows Defender may display a security warning indicating that the app is from an "Unknown Publisher." 
-
-**To Bypass the Windows Defender Popup**
-
-Double-click the ecowitt3.exe file to start the application.
-
-You will see a popup from Windows Defender SmartScreen saying:
-**Windows Defender SmartScreen
-"Tiny Ecowitt Plant Monitor" is not recognized as an app from an identified publisher.**
-
-Click on "More info":
-
-After clicking "More info," a new Run anyway button will appear. Click this.
-
-You might receive another prompt asking for confirmation. Click Yes to allow the app to run.
-
-### Other
-
-**Can't connect to Gateway**:
-1. **Verify Gateway IP**:
-   - Ensure the IP address entered is correct and the Ecowitt Gateway is powered on and connected to the network.
-
-2. **Check Network Connection**:
-   - Make sure your computer is connected to the same network as the Ecowitt Gateway.
-
-3. **Try Below Steps**:
-   - If the app fails to launch, try the steps below.
-
-### ❗ Permission Denied on Windows
-
-**Solutions**:
-1. **Run as Administrator**:
-   - Right-click the `Tiny-Ecowitt-Monitor.exe` and select **Run as administrator**.
-
-2. **Check Antivirus Settings**:
-   - Ensure your antivirus software isn't blocking the application.
-
-If you experience other issues, let me know on the BuildaSoil Discord.
+Have fun, and may all your trains run ON TIME. 🚉

@@ -1,0 +1,65 @@
+##pve1-dash:inventory v1
+##pve1-dash:section os-release
+PRETTY_NAME="Debian GNU/Linux 13 (trixie)"
+NAME="Debian GNU/Linux"
+VERSION_ID="13"
+VERSION="13 (trixie)"
+VERSION_CODENAME=trixie
+DEBIAN_VERSION_FULL=13.1
+ID=debian
+HOME_URL="https://www.debian.org/"
+SUPPORT_URL="https://www.debian.org/support"
+BUG_REPORT_URL="https://bugs.debian.org/"
+##pve1-dash:section kernel
+6.14.11-2-pve
+##pve1-dash:section uptime
+535812.41 4180318.77
+##pve1-dash:section loadavg
+1.42 1.18 0.97 3/612 88213
+##pve1-dash:section init
+systemd
+##pve1-dash:section services
+console-getty.service              loaded active running Console Getty
+containerd.service                 loaded active running containerd container runtime
+container-getty@1.service          loaded active running Container Getty on /dev/tty1
+cron.service                       loaded active running cron.service - Regular background program processing daemon
+dbus.service                       loaded active running D-Bus System Message Bus
+docker.service                     loaded active running Docker Application Container Engine
+postfix@-.service                  loaded active running Postfix Mail Transport Agent (instance -)
+ssh.service                        loaded active running OpenBSD Secure Shell server
+systemd-journald.service           loaded active running Journal Service
+systemd-logind.service             loaded active running User Login Management
+systemd-networkd.service           loaded active running Network Configuration
+tailscaled.service                 loaded active running Tailscale node agent
+user@0.service                     loaded active running User Manager for UID 0
+##pve1-dash:section docker
+present
+{"Command":"\"/init\"","CreatedAt":"2026-09-30 10:12:01 +0000 UTC","ID":"3f4e1c2a9b7d8e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f","Image":"lscr.io/linuxserver/jellyfin:10.10.7","Labels":"build_version=Linuxserver.io version:- 10.10.7ubu2404-ls76 Build-date:- 2025-06-10T06:48:39+00:00,com.docker.compose.config-hash=8c1d5e0f2a,com.docker.compose.container-number=1,com.docker.compose.depends_on=,com.docker.compose.image=sha256:5d2e4f6a8b,com.docker.compose.oneoff=False,com.docker.compose.project=media,com.docker.compose.project.config_files=/opt/media/compose.yaml,com.docker.compose.project.working_dir=/opt/media,com.docker.compose.service=jellyfin,com.docker.compose.version=2.39.1,maintainer=thespad,org.opencontainers.image.description=Jellyfin Media Server, a free software media system, built on .NET","LocalVolumes":"0","Mounts":"/opt/media/jellyfin,/srv/media","Names":"jellyfin","Networks":"media_default","Ports":"0.0.0.0:8096->8096/tcp, [::]:8096->8096/tcp, 1900/udp, 7359/udp, 8920/tcp","RunningFor":"10 days ago","Size":"0B","State":"running","Status":"Up 10 days (healthy)"}
+{"Command":"\"/init\"","CreatedAt":"2026-09-30 10:12:01 +0000 UTC","ID":"9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b","Image":"lscr.io/linuxserver/sonarr:latest","Labels":"com.docker.compose.project=media,com.docker.compose.service=sonarr,com.docker.compose.version=2.39.1","LocalVolumes":"0","Mounts":"/opt/media/sonarr,/srv/media","Names":"sonarr","Networks":"media_default","Ports":"0.0.0.0:8989->8989/tcp, [::]:8989->8989/tcp","RunningFor":"10 days ago","Size":"0B","State":"running","Status":"Up 2 hours (unhealthy)"}
+{"Command":"\"/usr/bin/dumb-init -- /bin/sh -c 'node dist/server/index.js'\"","CreatedAt":"2026-10-10 18:01:44 +0000 UTC","ID":"0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d","Image":"ghcr.io/gethomepage/homepage:v1.4.6","Labels":"com.docker.compose.project=dash,com.docker.compose.service=homepage","LocalVolumes":"0","Mounts":"/opt/dash/config","Names":"homepage","Networks":"dash_default","Ports":"0.0.0.0:3000->3000/tcp","RunningFor":"20 seconds ago","Size":"0B","State":"running","Status":"Up 18 seconds (health: starting)"}
+{"Command":"\"/entrypoint.sh\"","CreatedAt":"2026-09-01 08:00:00 +0000 UTC","ID":"5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f","Image":"pihole/pihole:2025.08.0","Labels":"com.docker.compose.project=dns,com.docker.compose.service=pihole","LocalVolumes":"2","Mounts":"dns_etc,dns_dnsmasq","Names":"pihole-backup","Networks":"dns_default","Ports":"","RunningFor":"5 weeks ago","Size":"0B","State":"exited","Status":"Exited (0) 2 days ago"}
+{"Command":"\"/usr/bin/tini -- /app/run.sh\"","CreatedAt":"2026-10-09 22:15:30 +0000 UTC","ID":"7f6e5d4c3b2a1f0e9d8c7b6a5f4e3d2c1b0a9f8e7d6c5b4a3f2e1d0c9b8a7f6e","Image":"ghcr.io/example/worker:1.2","Labels":"","LocalVolumes":"0","Mounts":"","Names":"worker","Networks":"bridge","Ports":"","RunningFor":"20 hours ago","Size":"0B","State":"restarting","Status":"Restarting (1) 12 seconds ago"}
+{"Command":"\"/sbin/tini -- /usr/local/bin/syncthing\"","CreatedAt":"2026-08-11 07:30:00 +0000 UTC","ID":"1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c","Image":"syncthing/syncthing:1.30","Labels":"com.docker.compose.project=sync,com.docker.compose.service=syncthing","LocalVolumes":"0","Mounts":"/srv/sync","Names":"syncthing","Networks":"sync_default","Ports":"0.0.0.0:22000->22000/tcp, :::22000->22000/tcp, 0.0.0.0:22000->22000/udp, :::22000->22000/udp, 0.0.0.0:21027->21027/udp, :::21027->21027/udp, 0.0.0.0:8384->8384/tcp, :::8384->8384/tcp","RunningFor":"8 weeks ago","Size":"0B","State":"running","Status":"Up 3 weeks"}
+{"Command":"\"/usr/bin/supervisord\"","CreatedAt":"2026-07-01 12:00:00 +0000 UTC","ID":"2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d","Image":"jlesage/jdownloader-2","Labels":"","LocalVolumes":"1","Mounts":"","Names":"jdownloader","Networks":"bridge","Ports":"127.0.0.1:5800->5800/tcp, 0.0.0.0:50000-50002->50000-50002/tcp","RunningFor":"3 months ago","Size":"0B","State":"paused","Status":"Up 6 days (Paused)"}
+##pve1-dash:section ip
+1: lo    inet 127.0.0.1/8 scope host lo\       valid_lft forever preferred_lft forever
+1: lo    inet6 ::1/128 scope host noprefixroute \       valid_lft forever preferred_lft forever
+2: eth0    inet 10.10.20.32/24 brd 10.10.20.255 scope global eth0\       valid_lft forever preferred_lft forever
+2: eth0    inet6 fd00:10:20::32/64 scope global dynamic mngtmpaddr noprefixroute \       valid_lft 86176sec preferred_lft 14176sec
+2: eth0    inet6 fe80::be24:11ff:fe4b:2c01/64 scope link \       valid_lft forever preferred_lft forever
+3: docker0    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0\       valid_lft forever preferred_lft forever
+4: br-3f2a1b9c4d5e    inet 172.18.0.1/16 brd 172.18.255.255 scope global br-3f2a1b9c4d5e\       valid_lft forever preferred_lft forever
+6: tailscale0    inet 100.101.102.103/32 scope global tailscale0\       valid_lft forever preferred_lft forever
+6: tailscale0    inet6 fd7a:115c:a1e0::1a01:6667/128 scope global \       valid_lft forever preferred_lft forever
+7: veth1a2b3c4@if6    inet6 fe80::d0e1:2fff:fe3a:4b5c/64 scope link \       valid_lft forever preferred_lft forever
+##pve1-dash:section listen
+LISTEN 0      4096         0.0.0.0:8096       0.0.0.0:*    users:(("docker-proxy",pid=2211,fd=7))     
+LISTEN 0      4096            [::]:8096          [::]:*    users:(("docker-proxy",pid=2219,fd=7))     
+LISTEN 0      4096         0.0.0.0:8989       0.0.0.0:*    users:(("docker-proxy",pid=2301,fd=7))     
+LISTEN 0      128          0.0.0.0:22         0.0.0.0:*    users:(("sshd",pid=301,fd=3))             
+LISTEN 0      128             [::]:22            [::]:*    users:(("sshd",pid=301,fd=4))             
+LISTEN 0      100        127.0.0.1:25         0.0.0.0:*    users:(("master",pid=412,fd=13))          
+LISTEN 0      4096   127.0.0.53%lo:53         0.0.0.0:*    users:(("systemd-resolve",pid=120,fd=15)) 
+LISTEN 0      4096               *:9100             *:*    users:(("node_exporter",pid=999,fd=3))    
+LISTEN 0      4096  100.101.102.103:41641     0.0.0.0:*    users:(("tailscaled",pid=777,fd=21))      
+##pve1-dash:end

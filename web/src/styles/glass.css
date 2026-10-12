@@ -1,0 +1,174 @@
+/*
+ * Materials (research §1.6, DESIGN §1).
+ *
+ *  .glass            Liquid Glass for chrome only (sidebar, toolbar groups, tab bar, sheets, popovers, toasts, Spotlight).
+ *                    data-variant: regular (default) | chrome (large, steadier: sidebar/tab bar/sheets) | clear (over media)
+ *  .material-card    the quiet content material for cards: mostly opaque, hairline, small blur. Never glass on glass.
+ *
+ * Rules that keep backdrop-filter working (research §1.6 "backdrop root"):
+ *  - rim (::before) and sheen (::after) live on the glass element itself;
+ *  - never animate opacity/filter on an ANCESTOR of glass; animate the glass element itself;
+ *  - never put url() in backdrop-filter (Safari would drop the whole effect).
+ *
+ * Cascade: the materials live in the `pve1-materials` layer (after `pve1-base`, see base.css), so a component's own
+ * rules ALWAYS override them, regardless of the order in which the production build links the CSS chunks. Without
+ * the layer, `.glass { position: relative }` (entry CSS) beat `.ui-sheet { position: absolute }` and
+ * `.ui-popover { position: fixed }` (shared-chunk CSS, linked first) in production: sheets opened at the wrong edge
+ * and the Live popover rendered off-screen. The accessibility fallbacks at the end stay unlayered and are scoped
+ * with `:root` so they beat ordinary single-class component rules too.
+ */
+@layer pve1-base, pve1-materials;
+
+@layer pve1-materials {
+  .glass {
+    --_fill: var(--glass-fill);
+    --_blur: var(--glass-blur);
+    --_sat: var(--glass-sat);
+    position: relative;
+    isolation: isolate;
+    background: var(--_fill);
+    -webkit-backdrop-filter: blur(var(--_blur)) saturate(var(--_sat));
+    backdrop-filter: blur(var(--_blur)) saturate(var(--_sat));
+    border-radius: var(--glass-radius, var(--r-card));
+    box-shadow:
+      inset 0 1px 0 0 var(--glass-rim-hi),
+      inset 0 -1px 0 0 var(--glass-rim-lo),
+      0 0 0 0.5px var(--glass-hairline),
+      var(--glass-shadow);
+  }
+
+  .glass[data-variant='chrome'] {
+    --_fill: var(--glass-fill-chrome);
+  }
+  .glass[data-variant='thick'] {
+    --_fill: var(--glass-fill-thick);
+    --_blur: var(--glass-blur-large);
+  }
+  .glass[data-variant='clear'] {
+    --_fill: var(--glass-fill-clear);
+    --_blur: 8px;
+    --_sat: 140%;
+  }
+
+  /* Gradient rim: light catching the bevel (mask-composite keeps only the 1px border box). */
+  .glass::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(
+      140deg,
+      rgb(255 255 255 / 0.7),
+      rgb(255 255 255 / 0.12) 35%,
+      rgb(255 255 255 / 0.04) 60%,
+      rgb(255 255 255 / 0.35)
+    );
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+    pointer-events: none;
+    opacity: 0.8;
+  }
+
+  /* Specular sheen: a soft top-left light pool. */
+  .glass::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    background:
+      radial-gradient(120% 70% at 20% -10%, var(--glass-sheen-1), transparent 55%),
+      linear-gradient(to bottom, var(--glass-sheen-2), transparent 40%);
+  }
+
+  :root[data-theme='dark'] .glass::before {
+    opacity: 0.35;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme='light']) .glass::before {
+      opacity: 0.35;
+    }
+  }
+
+  /* Pointer glow ("illuminates from within"): set --mx/--my from pointermove on [data-glow]. */
+  .glass[data-glow]::after {
+    background:
+      radial-gradient(160px circle at var(--mx, -999px) var(--my, -999px), rgb(255 255 255 / 0.22), transparent 60%),
+      radial-gradient(120% 70% at 20% -10%, var(--glass-sheen-1), transparent 55%),
+      linear-gradient(to bottom, var(--glass-sheen-2), transparent 40%);
+  }
+
+  /* ───────────────────────────── content material */
+  .material-card {
+    position: relative;
+    background: var(--card-fill);
+    -webkit-backdrop-filter: blur(var(--card-blur)) saturate(140%);
+    backdrop-filter: blur(var(--card-blur)) saturate(140%);
+    border-radius: var(--r-card);
+    box-shadow:
+      0 0 0 0.5px var(--card-hairline),
+      var(--card-shadow);
+  }
+}
+
+/* ───────────────────────────── accessibility fallbacks */
+
+/* No backdrop-filter support at all: use opaque fills. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root .glass {
+    --_fill: var(--glass-solid);
+  }
+  :root .material-card {
+    background: var(--card-solid);
+  }
+}
+
+/* In-app Reduce Transparency toggle (Safari has no prefers-reduced-transparency). */
+:root[data-reduce-transparency] .glass {
+  background: var(--glass-solid);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+:root[data-reduce-transparency] .glass::after,
+:root[data-reduce-transparency] .glass::before {
+  display: none;
+}
+:root[data-reduce-transparency] .material-card {
+  background: var(--card-solid);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* Chromium supports the media query; treat it like the in-app toggle. */
+@media (prefers-reduced-transparency: reduce) {
+  :root .glass {
+    background: var(--glass-solid);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  :root .material-card {
+    background: var(--card-solid);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+/* Increase Contrast: opaque fill plus a 1px contrasting border. */
+@media (prefers-contrast: more) {
+  :root .glass {
+    box-shadow:
+      0 0 0 1px var(--glass-hairline),
+      var(--glass-shadow);
+  }
+  :root .glass::before,
+  :root .glass::after {
+    display: none;
+  }
+  :root .material-card {
+    box-shadow: 0 0 0 1px var(--card-hairline);
+  }
+}

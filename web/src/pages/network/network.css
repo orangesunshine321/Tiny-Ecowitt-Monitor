@@ -1,0 +1,96 @@
+/* Network page. Prefix: net- */
+
+.net-card .ui-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+.net-card[data-padding='none'] .ui-card-body {
+  gap: 0;
+}
+.net-comment {
+  font-size: var(--fs-subhead);
+  line-height: var(--lh-subhead);
+  color: var(--label-2);
+  white-space: pre-line;
+}
+.net-pills-end {
+  justify-content: flex-end;
+}
+.net-attached {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: var(--s3);
+  border-top: 0.5px solid var(--hairline);
+}
+.net-attached-label {
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  font-weight: 500;
+  color: var(--label-2);
+}
+.net-dev-name {
+  font-weight: 600;
+}
+.net-table .ui-table td {
+  padding-block: 8px;
+  vertical-align: top;
+}
+.net-table .ui-table td .inf-twoline {
+  padding-top: 0;
+}
+.net-table .ui-table td[data-wrap] {
+  min-width: 140px;
+}
+.net-addr {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 6px;
+  min-width: 0;
+}
+.net-addr > .inf-mono {
+  overflow-wrap: anywhere;
+}
+.net-addr-iface {
+  font-size: var(--fs-footnote);
+  color: var(--label-2);
+}
+.net-port {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+}
+.net-port-n {
+  min-width: 5ch;
+  font-weight: 600;
+  font-size: 13px;
+}
+.net-proto {
+  font-size: var(--fs-caption);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--label-3);
+}
+@media (max-width: 767.98px) {
+  .net-port {
+    flex-direction: column;
+    gap: 0;
+  }
+  .net-port-n {
+    min-width: 0;
+  }
+}
+.net-toggle {
+  min-height: 32px;
+  padding: 0 4px 0 2px;
+  gap: var(--s2);
+  font-size: var(--fs-callout);
+}
+@media (max-width: 767.98px) {
+  .net-toggle {
+    flex: 1 1 100%;
+  }
+}

@@ -1,0 +1,112 @@
+{
+   "amdgpu-pci-0500":{
+      "Adapter": "PCI adapter",
+      "vddgfx":{
+         "in0_input": 0.993
+      },
+      "vddnb":{
+         "in1_input": 0.968
+      },
+      "edge":{
+         "temp1_input": 41.000
+      },
+      "PPT":{
+         "power1_average": 7.000
+      }
+   },
+   "nvme-pci-0100":{
+      "Adapter": "PCI adapter",
+      "Composite":{
+         "temp1_input": 38.850,
+         "temp1_max": 81.850,
+         "temp1_min": -273.150,
+         "temp1_crit": 84.850,
+         "temp1_alarm": 0.000
+      },
+      "Sensor 1":{
+         "temp2_input": 38.850,
+         "temp2_max": 65261.850,
+         "temp2_min": -273.150
+      },
+      "Sensor 2":{
+         "temp3_input": 41.850,
+         "temp3_max": 65261.850,
+         "temp3_min": -273.150
+      }
+   },
+   "k10temp-pci-00c3":{
+      "Adapter": "PCI adapter",
+      "Tctl":{
+         "temp1_input": 47.625
+      },
+      "Tccd1":{
+         "temp3_input": 44.500
+      }
+   },
+   "acpitz-acpi-0":{
+      "Adapter": "ACPI interface",
+      "temp1":{
+         "temp1_input": 16.800,
+         "temp1_crit": 20.800
+      }
+   },
+   "drivetemp-scsi-1-0":{
+      "Adapter": "SCSI adapter",
+      "temp1":{
+         "temp1_input": 34.000,
+         "temp1_max": 60.000,
+         "temp1_min": 0.000,
+         "temp1_crit": 70.000,
+         "temp1_lcrit": -40.000,
+         "temp1_lowest": 22.000,
+         "temp1_highest": 41.000
+      }
+   },
+   "nct6798-isa-0290":{
+      "Adapter": "ISA adapter",
+      "in0":{
+         "in0_input": 0.304,
+         "in0_min": 0.000,
+         "in0_max": 1.744,
+         "in0_alarm": 0.000,
+         "in0_beep": 0.000
+      },
+      "fan2":{
+         "fan2_input": 1102.000,
+         "fan2_min": 0.000,
+         "fan2_alarm": 0.000,
+         "fan2_beep": 0.000,
+         "fan2_pulses": 2.000
+      },
+      "SYSTIN":{
+         "temp1_input": 32.000,
+         "temp1_max": 80.000,
+         "temp1_max_hyst": 75.000,
+         "temp1_alarm": 0.000,
+         "temp1_type": 4.000,
+         "temp1_offset": 0.000,
+         "temp1_beep": 0.000
+      },
+      "CPUTIN":{
+         "temp2_input": 38.500,
+         "temp2_max": 80.000,
+         "temp2_max_hyst": 75.000,
+         "temp2_alarm": 0.000,
+         "temp2_type": 4.000,
+         "temp2_offset": 0.000,
+         "temp2_beep": 0.000
+      },
+      "AUXTIN0":{
+         "temp3_input": 127.000,
+         "temp3_type": 4.000,
+         "temp3_offset": 0.000
+      },
+      "PCH_CHIP_TEMP":{
+         "temp7_input": 0.000
+      },
+      "intrusion0":{
+         "intrusion0_alarm": 1.000,
+         "intrusion0_beep": 0.000
+      }
+   }
+}

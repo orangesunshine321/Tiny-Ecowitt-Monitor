@@ -1,0 +1,4 @@
+NAME                                                         SIZE  
+local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst         120.29MB
+local:vztmpl/debian-13-standard_13.0-1_amd64.tar.zst         123.58MB
+local:vztmpl/ubuntu-24.04-standard_24.04-2_amd64.tar.zst     134.69MB

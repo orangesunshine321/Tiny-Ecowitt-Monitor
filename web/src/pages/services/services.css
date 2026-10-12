@@ -1,0 +1,466 @@
+/* Services launcher (DESIGN §5). Page-local classes use the "svc-" prefix. */
+
+.svc-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s5);
+  min-width: 0;
+}
+
+/* ───────────────────────────── filters */
+.svc-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+}
+.svc-filters-search {
+  flex: 1 1 240px;
+  max-width: 380px;
+}
+@media (max-width: 767.98px) {
+  .svc-filters-seg,
+  .svc-filters-search {
+    flex: 1 1 100%;
+    max-width: none;
+  }
+}
+
+/* search field (iOS filled capsule) */
+.svc-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 34px;
+  border-radius: var(--r-control);
+  background: var(--fill-3);
+  transition: box-shadow 150ms ease;
+}
+.svc-search:focus-within {
+  box-shadow: 0 0 0 3px var(--focus-ring-color);
+}
+.svc-search-glyph {
+  position: absolute;
+  left: 10px;
+  color: var(--label-2);
+  pointer-events: none;
+}
+.svc-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0 32px 0 33px;
+  border: 0;
+  background: transparent;
+  font-size: var(--fs-body);
+  color: var(--label);
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.svc-search input::placeholder {
+  color: var(--label-2);
+}
+.svc-search input::-webkit-search-cancel-button {
+  display: none;
+}
+.svc-search-clear {
+  position: absolute;
+  right: 8px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  color: var(--bg-elevated);
+  background: var(--label-3);
+}
+.svc-search-clear:hover {
+  background: var(--label-2);
+}
+
+/* ───────────────────────────── groups: each spans as many columns as it has tiles */
+.svc-groups {
+  display: grid;
+  grid-template-columns: repeat(var(--_cols, 1), minmax(0, 1fr));
+  grid-auto-flow: row dense;
+  gap: var(--s6) var(--_gap, 16px);
+  align-items: start;
+}
+.svc-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.svc-group-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0 4px;
+  min-width: 0;
+  font-size: var(--fs-title3);
+  line-height: var(--lh-title3);
+  letter-spacing: var(--tr-title3);
+  font-weight: 700;
+}
+.svc-group-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.svc-group-count {
+  flex: none;
+  font-size: var(--fs-subhead);
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--label-2);
+  font-variant-numeric: tabular-nums;
+}
+.svc-group-problems {
+  flex: none;
+  margin-left: auto;
+  font-size: var(--fs-footnote);
+  font-weight: 600;
+  letter-spacing: 0;
+  color: color-mix(in oklab, var(--status-crit) 80%, var(--label));
+}
+.svc-group-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--_span, 1), minmax(0, 1fr));
+  gap: var(--_gap, 16px);
+}
+
+/* ───────────────────────────── tile: content material with a glass edge (rim light), no backdrop glass */
+.svc-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px 16px 12px;
+  border-radius: var(--r-card);
+  color: var(--label);
+  text-decoration: none;
+  background: var(--card-fill);
+  -webkit-backdrop-filter: blur(var(--card-blur)) saturate(140%);
+  backdrop-filter: blur(var(--card-blur)) saturate(140%);
+  box-shadow:
+    inset 0 1px 0 var(--glass-rim-hi),
+    0 0 0 0.5px var(--card-hairline),
+    var(--card-shadow);
+  transition:
+    transform 420ms var(--spring-bouncy),
+    box-shadow 200ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+/* the glass edge: a gradient rim catching the light */
+.svc-tile::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(150deg, rgb(255 255 255 / 0.75), rgb(255 255 255 / 0.08) 38%, rgb(255 255 255 / 0.02) 62%, rgb(255 255 255 / 0.4));
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box exclude,
+    linear-gradient(#000 0 0);
+  pointer-events: none;
+  opacity: 0.85;
+}
+a.svc-tile:hover {
+  text-decoration: none;
+  transform: translateY(-2px);
+  box-shadow:
+    inset 0 1px 0 var(--glass-rim-hi),
+    0 0 0 0.5px var(--card-hairline),
+    0 4px 8px rgb(0 0 0 / 0.06),
+    0 18px 36px -12px rgb(0 0 0 / 0.24);
+}
+a.svc-tile:active {
+  transform: scale(0.975);
+  transition-duration: 140ms;
+}
+a.svc-tile:focus-visible {
+  outline: 3px solid var(--focus-ring-color);
+  outline-offset: 2px;
+}
+/* problems get a tinted edge */
+.svc-tile[data-status='down'] {
+  box-shadow:
+    inset 0 1px 0 var(--glass-rim-hi),
+    0 0 0 1px color-mix(in srgb, var(--status-crit) 45%, transparent),
+    0 6px 22px -8px color-mix(in srgb, var(--status-crit) 40%, transparent);
+}
+.svc-tile[data-status='slow'] {
+  box-shadow:
+    inset 0 1px 0 var(--glass-rim-hi),
+    0 0 0 1px color-mix(in srgb, var(--status-warn) 40%, transparent),
+    var(--card-shadow);
+}
+.svc-tile[data-status='paused'] .ui-appicon {
+  filter: grayscale(1);
+  opacity: 0.7;
+}
+
+.svc-tile-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.svc-tile-titles {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.svc-tile-name {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  font-size: 16px;
+  line-height: 21px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.svc-tile-name > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.svc-tile-out {
+  flex: none;
+  color: var(--label-3);
+  transition:
+    color 150ms ease,
+    transform 300ms var(--spring-bouncy);
+}
+a.svc-tile:hover .svc-tile-out {
+  color: var(--accent);
+  transform: translate(1px, -1px);
+}
+.svc-tile-host {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  color: var(--label-2);
+}
+.svc-tile-host > svg {
+  flex: none;
+  color: var(--label-3);
+}
+.svc-tile-host > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.svc-tile-aside {
+  flex: none;
+  align-self: flex-start;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  margin-top: 2px;
+}
+.svc-tile-compact {
+  display: none;
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  font-weight: 500;
+  color: var(--label-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* latency / problem detail + uptime */
+.svc-tile-metrics {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+  min-width: 0;
+  min-height: 26px;
+}
+.svc-tile-latency,
+.svc-tile-uptime {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  flex: none;
+}
+.svc-num {
+  font-family: var(--font-rounded);
+  font-size: 24px;
+  line-height: 26px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+.svc-unit {
+  font-size: var(--fs-footnote);
+  font-weight: 500;
+  color: var(--label-2);
+}
+.svc-uptime-value {
+  font-family: var(--font-rounded);
+  font-size: 17px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.svc-tile-detail {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-callout);
+  font-weight: 600;
+  line-height: 26px;
+}
+.svc-tile-detail[data-tone='crit'] {
+  color: color-mix(in oklab, var(--status-crit) 82%, var(--label));
+}
+.svc-tile-detail[data-tone='warn'] {
+  color: color-mix(in oklab, var(--status-warn) 75%, var(--label));
+}
+.svc-tile-detail[data-tone='off'] {
+  color: var(--label-2);
+  font-weight: 500;
+}
+.svc-tile-since {
+  font-weight: 500;
+  color: var(--label-2);
+}
+
+/* ───────────────────────────── uptime strip */
+.svc-strip-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.svc-strip {
+  display: grid;
+  grid-template-columns: repeat(90, minmax(0, 1fr));
+  gap: 1px;
+  height: 22px;
+}
+.svc-strip > i {
+  border-radius: 1.5px;
+  background: var(--fill-3);
+  transition: transform 160ms var(--ease-out);
+}
+.svc-strip > i[data-tone='ok'] {
+  background: color-mix(in srgb, var(--status-ok) 82%, transparent);
+}
+.svc-strip > i[data-tone='warn'] {
+  background: var(--status-warn);
+}
+.svc-strip > i[data-tone='crit'] {
+  background: var(--status-crit);
+}
+.svc-strip > i[data-hover] {
+  transform: scaleY(1.18);
+  filter: brightness(1.1);
+}
+.svc-strip-caption {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s2);
+  min-height: 16px;
+  font-size: var(--fs-caption);
+  line-height: 16px;
+  color: var(--label-2);
+  font-variant-numeric: tabular-nums;
+}
+.svc-strip-readout {
+  color: var(--label-2);
+  font-weight: 500;
+}
+.svc-strip-readout[data-tone='crit'] {
+  color: color-mix(in oklab, var(--status-crit) 80%, var(--label));
+}
+.svc-strip-readout[data-tone='warn'] {
+  color: color-mix(in oklab, var(--status-warn) 75%, var(--label));
+}
+
+/* iPhone: compact tiles (numbers beside the badge, a slimmer strip, no axis caption) */
+@media (max-width: 767.98px) {
+  .svc-tile {
+    gap: 10px;
+    padding: 12px 14px;
+  }
+  .svc-tile-compact {
+    display: block;
+  }
+  .svc-tile-metrics {
+    display: none;
+    min-height: 0;
+  }
+  .svc-tile-metrics[data-problem] {
+    display: flex;
+  }
+  .svc-tile-metrics .svc-tile-uptime {
+    display: none;
+  }
+  .svc-tile-detail {
+    line-height: 20px;
+  }
+  .svc-strip {
+    height: 14px;
+  }
+  .svc-strip-caption {
+    display: none;
+  }
+  .svc-groups {
+    row-gap: var(--s5);
+  }
+}
+
+/* dark: quieter rim */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .svc-tile::before {
+    opacity: 0.3;
+  }
+}
+:root[data-theme='dark'] .svc-tile::before {
+  opacity: 0.3;
+}
+:root[data-reduce-transparency] .svc-tile {
+  background: var(--card-solid);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+@media (prefers-reduced-transparency: reduce) {
+  .svc-tile {
+    background: var(--card-solid);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+@media (prefers-contrast: more) {
+  .svc-tile {
+    box-shadow: 0 0 0 1px var(--card-hairline);
+  }
+  .svc-tile::before {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  a.svc-tile:hover,
+  a.svc-tile:active {
+    transform: none;
+  }
+}

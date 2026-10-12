@@ -1,0 +1,193 @@
+.spotlight-root {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: max(14vh, calc(var(--safe-top) + 16px)) 16px 16px;
+}
+.spotlight-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgb(0 0 0 / 0.14);
+  animation: shell-fade 200ms ease both;
+}
+:root[data-theme='dark'] .spotlight-scrim {
+  background: rgb(0 0 0 / 0.36);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .spotlight-scrim {
+    background: rgb(0 0 0 / 0.36);
+  }
+}
+.spotlight {
+  --glass-radius: 26px;
+  position: relative;
+  width: min(660px, 100%);
+  max-height: min(70dvh, 620px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: spotlight-in 380ms var(--spring-glass) both;
+}
+@keyframes spotlight-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(-6px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spotlight {
+    animation-duration: 1ms;
+  }
+}
+.spotlight-field {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+}
+.spotlight-field svg {
+  flex: none;
+  color: var(--label-2);
+}
+.spotlight-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  font-size: 22px;
+  line-height: 28px;
+  letter-spacing: -0.02em;
+  color: var(--label);
+}
+/* the whole glass field is the focus context (macOS Spotlight draws no ring inside its query field) */
+.spotlight-input:focus-visible {
+  outline: none;
+}
+.spotlight-input::placeholder {
+  color: var(--label-3);
+}
+/* iPhone: the 17pt of iOS search fields (22px clipped the placeholder mid-word at 393pt) */
+@media (max-width: 767.98px) {
+  .spotlight-field {
+    padding: 12px 16px;
+  }
+  .spotlight-field svg {
+    width: 19px;
+    height: 19px;
+  }
+  .spotlight-input {
+    font-size: 17px;
+    line-height: 22px;
+    letter-spacing: -0.01em;
+  }
+}
+.spotlight-input::-webkit-search-cancel-button {
+  display: none;
+}
+.spotlight-results {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 8px 8px;
+  border-top: 0.5px solid var(--separator);
+}
+.spotlight-group {
+  padding-top: 8px;
+}
+.spotlight-group-label {
+  padding: 4px 12px 4px;
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  font-weight: 600;
+  color: var(--label-2);
+}
+.spotlight-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 6px 12px;
+  border-radius: 12px;
+  cursor: pointer;
+  color: var(--label);
+}
+.spotlight-option[aria-selected='true'] {
+  background: var(--accent);
+  color: #fff;
+}
+.spotlight-option[aria-selected='true'] .spotlight-sub,
+.spotlight-option[aria-selected='true'] .spotlight-kind {
+  color: rgb(255 255 255 / 0.82);
+}
+.spotlight-glyph {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  color: #fff;
+  background: var(--_c, var(--gray));
+}
+.spotlight-glyph svg {
+  width: 17px;
+  height: 17px;
+}
+.spotlight-text {
+  flex: 1;
+  min-width: 0;
+}
+.spotlight-title {
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.spotlight-title mark {
+  background: none;
+  color: inherit;
+  font-weight: 700;
+}
+.spotlight-sub {
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  color: var(--label-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.spotlight-kind {
+  flex: none;
+  font-size: var(--fs-footnote);
+  color: var(--label-2);
+}
+.spotlight-empty {
+  padding: 28px 16px 24px;
+  text-align: center;
+  color: var(--label-2);
+  font-size: var(--fs-callout);
+}
+.spotlight-foot {
+  display: flex;
+  gap: 16px;
+  padding: 8px 18px 10px;
+  border-top: 0.5px solid var(--separator);
+  font-size: var(--fs-caption);
+  color: var(--label-2);
+}
+.spotlight-foot span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+@media (hover: none) {
+  .spotlight-foot {
+    display: none;
+  }
+}

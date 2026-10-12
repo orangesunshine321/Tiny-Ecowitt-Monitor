@@ -1,0 +1,54 @@
+##pve1-dash:inventory v1
+##pve1-dash:section os-release
+PRETTY_NAME="Ubuntu 24.04.3 LTS"
+NAME="Ubuntu"
+VERSION_ID="24.04"
+VERSION="24.04.3 LTS (Noble Numbat)"
+VERSION_CODENAME=noble
+ID=ubuntu
+ID_LIKE=debian
+UBUNTU_CODENAME=noble
+##pve1-dash:section kernel
+6.8.0-85-generic
+##pve1-dash:section uptime
+1097283.18 8541120.55
+##pve1-dash:section loadavg
+0.52 0.61 0.58 2/701 412233
+##pve1-dash:section init
+systemd
+##pve1-dash:section services
+containerd.service                 loaded active running containerd container runtime
+cron.service                       loaded active running Regular background program processing daemon
+dbus.service                       loaded active running D-Bus System Message Bus
+docker.service                     loaded active running Docker Application Container Engine
+getty@tty1.service                 loaded active running Getty on tty1
+multipathd.service                 loaded active running Device-Mapper Multipath Device Controller
+polkit.service                     loaded active running Authorization Manager
+qemu-guest-agent.service           loaded active running QEMU Guest Agent
+rsyslog.service                    loaded active running System Logging Service
+serial-getty@ttyS0.service         loaded active running Serial Getty on ttyS0
+snapd.service                      loaded active running Snap Daemon
+ssh.service                        loaded active running OpenBSD Secure Shell server
+systemd-journald.service           loaded active running Journal Service
+systemd-resolved.service           loaded active running Network Name Resolution
+systemd-timesyncd.service          loaded active running Network Time Synchronization
+systemd-udevd.service              loaded active running Rule-based Manager for Device Events and Files
+tailscaled.service                 loaded active running Tailscale node agent
+udisks2.service                    loaded active running Disk Manager
+unattended-upgrades.service        loaded active running Unattended Upgrades Shutdown
+##pve1-dash:section docker
+present
+{"Command":"\"/usr/bin/tini -- /usr/src/app/start.sh\"","CreatedAt":"2026-09-27 21:40:12 +0200 CEST","ID":"a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90","Image":"ghcr.io/immich-app/immich-server:v1.140.1","Labels":"com.docker.compose.project=immich,com.docker.compose.service=immich-server","LocalVolumes":"0","Mounts":"/srv/photos,/etc/localtime","Names":"immich_server","Networks":"immich_default","Ports":"0.0.0.0:2283->2283/tcp, [::]:2283->2283/tcp","RunningFor":"12 days ago","Size":"0B","State":"running","Status":"Up 12 days (healthy)"}
+{"Command":"\"docker-entrypoint.sh valkey-server\"","CreatedAt":"2026-09-27 21:40:10 +0200 CEST","ID":"b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1","Image":"docker.io/valkey/valkey:8","Labels":"com.docker.compose.project=immich,com.docker.compose.service=redis","LocalVolumes":"1","Mounts":"5c1f…","Names":"immich_redis","Networks":"immich_default","Ports":"6379/tcp","RunningFor":"12 days ago","Size":"0B","State":"running","Status":"Up 12 days (healthy)"}
+##pve1-dash:section ip
+1: lo    inet 127.0.0.1/8 scope host lo\       valid_lft forever preferred_lft forever
+2: ens18    inet 10.10.20.50/24 metric 100 brd 10.10.20.255 scope global dynamic ens18\       valid_lft 74512sec preferred_lft 74512sec
+2: ens18    inet6 fe80::be24:11ff:feaa:bbcc/64 scope link \       valid_lft forever preferred_lft forever
+3: docker0    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0\       valid_lft forever preferred_lft forever
+##pve1-dash:section listen
+LISTEN 0      4096   127.0.0.53%lo:53         0.0.0.0:*    users:(("systemd-resolve",pid=611,fd=15))
+LISTEN 0      4096   127.0.0.54:53            0.0.0.0:*    users:(("systemd-resolve",pid=611,fd=17))
+LISTEN 0      4096         0.0.0.0:2283       0.0.0.0:*    users:(("docker-proxy",pid=4100,fd=7))
+LISTEN 0      4096            [::]:2283          [::]:*    users:(("docker-proxy",pid=4107,fd=7))
+LISTEN 0      4096               *:22               *:*    users:(("sshd",pid=1002,fd=3),("systemd",pid=1,fd=60))
+##pve1-dash:end

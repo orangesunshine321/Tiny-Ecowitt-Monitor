@@ -1,0 +1,293 @@
+/* Floating glass sidebar (Mac) that becomes a 76px icon rail on iPad and expands as an overlay. */
+.shell-sidebar {
+  --glass-radius: var(--r-sidebar);
+  position: fixed;
+  z-index: 40;
+  top: max(var(--chrome-inset), var(--safe-top));
+  bottom: max(var(--chrome-inset), var(--safe-bottom));
+  left: max(var(--chrome-inset), var(--safe-left));
+  width: var(--sidebar-w);
+  display: flex;
+  flex-direction: column;
+  padding: 14px 10px 10px;
+  overflow: hidden;
+  transition:
+    width 520ms var(--spring-snappy),
+    box-shadow 300ms ease;
+}
+.shell-sidebar-scroll {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  margin: 0 -4px;
+  padding: 0 4px;
+}
+.shell-sidebar-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+/* header: app icon, node name, status capsule and uptime */
+.shell-sb-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 6px 14px;
+  min-width: 0;
+}
+.shell-sb-appicon {
+  flex: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 9px;
+  box-shadow: 0 2px 6px -1px rgb(0 20 80 / 0.35);
+}
+.shell-sb-node {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.shell-sb-name {
+  font-size: 17px;
+  line-height: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shell-sb-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  color: var(--label-2);
+  white-space: nowrap;
+}
+.shell-sb-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 17px;
+  padding: 0 7px 0 5px;
+  border-radius: var(--r-capsule);
+  font-weight: 600;
+  color: color-mix(in oklab, var(--_tone) 62%, var(--label));
+  background: color-mix(in srgb, var(--_tone) 15%, transparent);
+}
+.shell-sb-status[data-tone='ok'] { --_tone: var(--status-ok); }
+.shell-sb-status[data-tone='crit'] { --_tone: var(--status-crit); }
+.shell-sb-status[data-tone='off'] { --_tone: var(--status-off); }
+
+.shell-sb-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.shell-sb-section + .shell-sb-section {
+  margin-top: 14px;
+}
+.shell-sb-section[data-footer] {
+  margin-top: auto;
+  padding-top: 14px;
+}
+.shell-sb-heading {
+  padding: 0 10px 4px;
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  font-weight: 600;
+  color: var(--label-2-wp);
+  letter-spacing: 0.01em;
+}
+.shell-nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 34px;
+  padding: 0 8px 0 10px;
+  border-radius: 10px;
+  color: var(--label);
+  font-size: var(--fs-body);
+  letter-spacing: var(--tr-body);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background-color 120ms ease;
+}
+.shell-nav-item:hover {
+  text-decoration: none;
+  background: var(--row-hover);
+}
+.shell-nav-item:active {
+  background: var(--fill-3);
+}
+.shell-nav-item[aria-current='page'] {
+  background: var(--row-selected);
+  font-weight: 600;
+}
+.shell-nav-item:focus-visible {
+  outline-offset: -2px;
+}
+.shell-nav-icon {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  color: var(--accent);
+}
+.shell-nav-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* badges */
+.shell-badge {
+  flex: none;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--r-capsule);
+  font-size: 11px;
+  line-height: 18px;
+  font-weight: 600;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--label-2);
+  background: var(--fill-3);
+}
+.shell-badge[data-tone='crit'] {
+  color: #fff;
+  background: var(--red);
+}
+.shell-badge[data-tone='warn'] {
+  color: #fff;
+  background: color-mix(in oklab, var(--orange) 88%, #000);
+}
+.shell-badge[data-tone='info'] {
+  color: #fff;
+  background: var(--blue);
+}
+.shell-badge[data-variant='dot'] {
+  position: absolute;
+  top: -5px;
+  right: -9px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  font-size: 10px;
+  line-height: 17px;
+  font-weight: 700;
+  box-shadow: 0 0 0 2px var(--glass-solid);
+}
+
+.shell-sb-toggle {
+  display: none;
+}
+
+/* ───────────── iPad: icon rail (labels hidden) unless expanded */
+@media (min-width: 768px) and (max-width: 1099.98px) {
+  .shell-sidebar:not([data-expanded]) {
+    width: var(--rail-w);
+    padding: 10px 8px;
+    align-items: stretch;
+  }
+  .shell-sidebar:not([data-expanded]) .shell-sb-node,
+  .shell-sidebar:not([data-expanded]) .shell-sb-heading,
+  .shell-sidebar:not([data-expanded]) .shell-nav-label,
+  .shell-sidebar:not([data-expanded]) .shell-badge[data-variant='count'] {
+    display: none;
+  }
+  .shell-sidebar:not([data-expanded]) .shell-sb-header {
+    flex-direction: column;
+    padding: 2px 0 10px;
+    margin-bottom: 8px;
+    gap: 10px;
+    border-bottom: 0.5px solid var(--separator);
+  }
+  /* The rail's expand toggle is a control, not a destination: a small accent capsule above a separator, unlike the
+     48px nav tiles below it (it stays in the rail rather than the top bar, where it would collide with the large
+     title that shares the toolbar row on iPad). */
+  .shell-sidebar:not([data-expanded]) .shell-sb-toggle {
+    width: 44px;
+    height: 28px;
+    color: var(--accent);
+    background: var(--fill-3);
+  }
+  .shell-sidebar:not([data-expanded]) .shell-sb-toggle:hover {
+    background: var(--fill-2);
+  }
+  .shell-sidebar:not([data-expanded]) .shell-sb-toggle svg {
+    width: 17px;
+    height: 17px;
+  }
+  .shell-sidebar:not([data-expanded]) .shell-sb-section + .shell-sb-section {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 0.5px solid var(--separator);
+  }
+  .shell-sidebar:not([data-expanded]) .shell-sb-section[data-footer] {
+    margin-top: auto;
+    border-top: 0;
+  }
+  .shell-sidebar:not([data-expanded]) .shell-nav-item {
+    justify-content: center;
+    height: 48px;
+    padding: 0;
+    border-radius: 14px;
+  }
+  .shell-sidebar:not([data-expanded]) .shell-nav-icon {
+    width: 23px;
+    height: 23px;
+  }
+  .shell-nav-iconwrap {
+    position: relative;
+    display: inline-flex;
+  }
+  .shell-sidebar[data-expanded] {
+    z-index: 60;
+    box-shadow:
+      inset 0 1px 0 0 var(--glass-rim-hi),
+      0 0 0 0.5px var(--glass-hairline),
+      var(--glass-shadow-large);
+  }
+  .shell-sidebar[data-expanded] .shell-badge[data-variant='dot'] {
+    display: none;
+  }
+  .shell-sb-toggle {
+    display: inline-grid;
+  }
+}
+@media (min-width: 1100px) {
+  .shell-badge[data-variant='dot'] {
+    display: none;
+  }
+}
+.shell-nav-iconwrap {
+  position: relative;
+  display: inline-flex;
+}
+
+/* scrim behind the expanded iPad overlay */
+.shell-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: var(--scrim);
+  animation: shell-fade 240ms ease both;
+}
+@keyframes shell-fade {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .shell-sidebar {
+    transition: none;
+  }
+}

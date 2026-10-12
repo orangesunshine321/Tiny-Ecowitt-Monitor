@@ -1,0 +1,34 @@
+.ui-spark {
+  position: relative;
+  display: block;
+  width: var(--_w, 100%);
+  height: var(--_h, 28px);
+  min-width: 24px;
+}
+.ui-spark svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.ui-spark-line {
+  fill: none;
+  stroke: var(--_c);
+  stroke-width: var(--_sw, 1.5px);
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+.ui-spark-area {
+  fill: var(--_c);
+  opacity: 0.12;
+}
+.ui-spark-dot {
+  position: absolute;
+  right: -3px;
+  width: 6px;
+  height: 6px;
+  margin-top: -3px;
+  border-radius: 50%;
+  background: var(--_c);
+  box-shadow: 0 0 0 1.5px var(--chart-surface);
+}

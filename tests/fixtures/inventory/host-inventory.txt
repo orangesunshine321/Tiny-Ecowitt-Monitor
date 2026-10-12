@@ -1,0 +1,120 @@
+Linux pve1 6.14.11-2-pve #1 SMP PREEMPT_DYNAMIC PMX 6.14.11-2 (2025-09-12T09:46Z) x86_64
+
+The programs included with the Debian GNU/Linux system are free software;
+@@ not a frame line (bashrc noise)
+@@pve1-dash:inventory v1
+@@pve1-dash:guest 100 qemu qm-guest-exec
+@@pve1-dash:error QEMU guest agent is not running
+@@pve1-dash:end 100 255
+@@pve1-dash:guest 101 lxc pct-exec
+##pve1-dash:inventory v1
+##pve1-dash:section os-release
+PRETTY_NAME="Debian GNU/Linux 13 (trixie)"
+NAME="Debian GNU/Linux"
+VERSION_ID="13"
+VERSION="13 (trixie)"
+ID=debian
+##pve1-dash:section kernel
+6.14.11-2-pve
+##pve1-dash:section uptime
+2021740.02 15990321.66
+##pve1-dash:section loadavg
+0.04 0.06 0.02 1/141 27771
+##pve1-dash:section init
+systemd
+##pve1-dash:section services
+console-getty.service              loaded active running Console Getty
+container-getty@1.service          loaded active running Container Getty on /dev/tty1
+cron.service                       loaded active running Regular background program processing daemon
+lighttpd.service                   loaded active running Lighttpd Daemon
+pihole-FTL.service                 loaded active running Pi-hole FTL
+postfix@-.service                  loaded active running Postfix Mail Transport Agent (instance -)
+ssh.service                        loaded active running OpenBSD Secure Shell server
+systemd-journald.service           loaded active running Journal Service
+unbound.service                    loaded active running Unbound DNS server
+##pve1-dash:section docker
+absent
+##pve1-dash:section ip
+1: lo    inet 127.0.0.1/8 scope host lo\       valid_lft forever preferred_lft forever
+2: eth0    inet 10.10.20.31/24 brd 10.10.20.255 scope global eth0\       valid_lft forever preferred_lft forever
+##pve1-dash:section listen
+LISTEN 0      200          0.0.0.0:53         0.0.0.0:*    users:(("pihole-FTL",pid=411,fd=21))
+LISTEN 0      1024         0.0.0.0:80         0.0.0.0:*    users:(("lighttpd",pid=388,fd=4))
+LISTEN 0      256        127.0.0.1:5335       0.0.0.0:*    users:(("unbound",pid=301,fd=4))
+##pve1-dash:end
+@@pve1-dash:end 101 0
+@@pve1-dash:guest 105 qemu qm-guest-exec
+{
+   "exitcode" : 0,
+   "exited" : 1,
+   "out-data" : "##pve1-dash:inventory v1\n##pve1-dash:section os-release\nPRETTY_NAME=\"Ubuntu 24.04.3 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nVERSION=\"24.04.3 LTS (Noble Numbat)\"\nVERSION_CODENAME=noble\nID=ubuntu\nID_LIKE=debian\nUBUNTU_CODENAME=noble\n##pve1-dash:section kernel\n6.8.0-85-generic\n##pve1-dash:section uptime\n1097283.18 8541120.55\n##pve1-dash:section loadavg\n0.52 0.61 0.58 2/701 412233\n##pve1-dash:section init\nsystemd\n##pve1-dash:section services\ncontainerd.service                 loaded active running containerd container runtime\ncron.service                       loaded active running Regular background program processing daemon\ndbus.service                       loaded active running D-Bus System Message Bus\ndocker.service                     loaded active running Docker Application Container Engine\ngetty@tty1.service                 loaded active running Getty on tty1\nmultipathd.service                 loaded active running Device-Mapper Multipath Device Controller\npolkit.service                     loaded active running Authorization Manager\nqemu-guest-agent.service           loaded active running QEMU Guest Agent\nrsyslog.service                    loaded active running System Logging Service\nserial-getty@ttyS0.service         loaded active running Serial Getty on ttyS0\nsnapd.service                      loaded active running Snap Daemon\nssh.service                        loaded active running OpenBSD Secure Shell server\nsystemd-journald.service           loaded active running Journal Service\nsystemd-resolved.service           loaded active running Network Name Resolution\nsystemd-timesyncd.service          loaded active running Network Time Synchronization\nsystemd-udevd.service              loaded active running Rule-based Manager for Device Events and Files\ntailscaled.service                 loaded active running Tailscale node agent\nudisks2.service                    loaded active running Disk Manager\nunattended-upgrades.service        loaded active running Unattended Upgrades Shutdown\n##pve1-dash:section docker\npresent\n{\"Command\":\"\\\"/usr/bin/tini -- /usr/src/app/start.sh\\\"\",\"CreatedAt\":\"2026-09-27 21:40:12 +0200 CEST\",\"ID\":\"a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90\",\"Image\":\"ghcr.io/immich-app/immich-server:v1.140.1\",\"Labels\":\"com.docker.compose.project=immich,com.docker.compose.service=immich-server\",\"LocalVolumes\":\"0\",\"Mounts\":\"/srv/photos,/etc/localtime\",\"Names\":\"immich_server\",\"Networks\":\"immich_default\",\"Ports\":\"0.0.0.0:2283->2283/tcp, [::]:2283->2283/tcp\",\"RunningFor\":\"12 days ago\",\"Size\":\"0B\",\"State\":\"running\",\"Status\":\"Up 12 days (healthy)\"}\n{\"Command\":\"\\\"docker-entrypoint.sh valkey-server\\\"\",\"CreatedAt\":\"2026-09-27 21:40:10 +0200 CEST\",\"ID\":\"b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1\",\"Image\":\"docker.io/valkey/valkey:8\",\"Labels\":\"com.docker.compose.project=immich,com.docker.compose.service=redis\",\"LocalVolumes\":\"1\",\"Mounts\":\"5c1f…\",\"Names\":\"immich_redis\",\"Networks\":\"immich_default\",\"Ports\":\"6379/tcp\",\"RunningFor\":\"12 days ago\",\"Size\":\"0B\",\"State\":\"running\",\"Status\":\"Up 12 days (healthy)\"}\n##pve1-dash:section ip\n1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever preferred_lft forever\n2: ens18    inet 10.10.20.50/24 metric 100 brd 10.10.20.255 scope global dynamic ens18\\       valid_lft 74512sec preferred_lft 74512sec\n2: ens18    inet6 fe80::be24:11ff:feaa:bbcc/64 scope link \\       valid_lft forever preferred_lft forever\n3: docker0    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0\\       valid_lft forever preferred_lft forever\n##pve1-dash:section listen\nLISTEN 0      4096   127.0.0.53%lo:53         0.0.0.0:*    users:((\"systemd-resolve\",pid=611,fd=15))\nLISTEN 0      4096   127.0.0.54:53            0.0.0.0:*    users:((\"systemd-resolve\",pid=611,fd=17))\nLISTEN 0      4096         0.0.0.0:2283       0.0.0.0:*    users:((\"docker-proxy\",pid=4100,fd=7))\nLISTEN 0      4096            [::]:2283          [::]:*    users:((\"docker-proxy\",pid=4107,fd=7))\nLISTEN 0      4096               *:22               *:*    users:((\"sshd\",pid=1002,fd=3),(\"systemd\",pid=1,fd=60))\n##pve1-dash:end\n",
+   "out-truncated" : 0
+}
+@@pve1-dash:end 105 0
+@@pve1-dash:guest 106 qemu qm-guest-exec
+@@pve1-dash:error unsupported OS (windows)
+@@pve1-dash:end 106 1
+@@pve1-dash:guest 107 lxc pct-exec
+@@pve1-dash:error timeout after 25s
+@@pve1-dash:end 107 124
+@@pve1-dash:guest 109 lxc pct-exec
+##pve1-dash:inventory v1
+##pve1-dash:section os-release
+NAME="Alpine Linux"
+ID=alpine
+VERSION_ID=3.22.1
+PRETTY_NAME="Alpine Linux v3.22"
+HOME_URL="https://alpinelinux.org/"
+BUG_REPORT_URL="https://gitlab.alpinelinux.org/alpine/aports/-/issues"
+##pve1-dash:section kernel
+6.14.11-2-pve
+##pve1-dash:section uptime
+2021757.43 32182961.20
+##pve1-dash:section loadavg
+0.31 0.27 0.22 2/498 31337
+##pve1-dash:section init
+openrc
+##pve1-dash:section services
+ bootmisc                                                          [  started  ]
+ crond                                                             [  started  ]
+ hostname                                                          [  started  ]
+ networking                                                        [  started  ]
+ sshd                                                              [  started  ]
+ syslog                                                            [  started  ]
+ tailscale                                       [  started 23 day(s) 09:12:44 (0) ]
+ nginx                                                             [  stopped  ]
+ local                                                             [  started  ]
+ chronyd                                                           [  crashed  ]
+ adguardhome                                                       [  started  ]
+##pve1-dash:section docker
+absent
+##pve1-dash:section ip
+1: lo    inet 127.0.0.1/8 scope host lo\       valid_lft forever preferred_lft forever
+2: eth0@if42    inet 10.10.20.40/24 brd 10.10.20.255 scope global eth0\       valid_lft forever preferred_lft forever
+3: tailscale0    inet 100.88.12.7/32 scope global tailscale0\       valid_lft forever preferred_lft forever
+3: tailscale0    inet6 fd7a:115c:a1e0::6a01:c07/128 scope global \       valid_lft forever preferred_lft forever
+##pve1-dash:section listen
+Active Internet connections (only servers)
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name    
+tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN      312/sshd
+tcp        0      0 0.0.0.0:3000            0.0.0.0:*               LISTEN      2044/AdGuardHome
+tcp        0      0 0.0.0.0:53              0.0.0.0:*               LISTEN      2044/AdGuardHome
+tcp        0      0 100.88.12.7:60123       0.0.0.0:*               LISTEN      402/tailscaled
+tcp        0      0 :::22                   :::*                    LISTEN      312/sshd
+tcp        0      0 :::53                   :::*                    LISTEN      2044/AdGuardHome
+##pve1-dash:end
+@@pve1-dash:end 109 0
+@@pve1-dash:guest 110 qemu qm-guest-exec
+{
+   "err-data" : "sh: 1: /bin/sh: not found\n",
+   "err-truncated" : 0,
+   "exitcode" : 127,
+   "exited" : 1
+}
+@@pve1-dash:end 110 0
+@@pve1-dash:guest 111 qemu qm-guest-exec
+{
+   "pid" : 4321
+}
+@@pve1-dash:end 111 0
+@@pve1-dash:done

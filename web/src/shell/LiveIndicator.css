@@ -1,0 +1,88 @@
+.shell-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: calc(var(--toolbar-control-h) - 6px);
+  padding: 0 12px 0 11px;
+  border-radius: var(--r-capsule);
+  font-size: var(--fs-subhead);
+  font-weight: 600;
+  color: var(--label);
+  transition: background-color 120ms ease;
+}
+.shell-live:hover,
+.shell-live[aria-expanded='true'] {
+  background: var(--row-hover);
+}
+@media (max-width: 767.98px) {
+  .shell-live {
+    width: calc(var(--toolbar-control-h) - 6px);
+    padding: 0;
+    justify-content: center;
+  }
+  .shell-live-label {
+    display: none;
+  }
+}
+.shell-fresh {
+  width: 100%;
+  min-width: 300px;
+  padding: 6px 6px 4px;
+}
+.shell-fresh-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 4px 10px;
+}
+.shell-fresh-title {
+  font-size: var(--fs-headline);
+  line-height: var(--lh-headline);
+  font-weight: 600;
+}
+.shell-fresh-sub {
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  color: var(--label-2);
+}
+.shell-fresh-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px 0 0;
+  border-top: 0.5px solid var(--separator);
+}
+.shell-fresh-row {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  align-items: baseline;
+  column-gap: 10px;
+  padding: 5px 4px;
+  font-size: var(--fs-subhead);
+  line-height: var(--lh-subhead);
+}
+.shell-fresh-row .ui-dot {
+  align-self: center;
+}
+.shell-fresh-row time,
+.shell-fresh-when {
+  color: var(--label-2);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-footnote);
+}
+.shell-fresh-err {
+  grid-column: 2 / -1;
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  color: color-mix(in oklab, var(--red) 70%, var(--label));
+  overflow-wrap: anywhere;
+}
+.shell-fresh-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 4px 2px;
+  margin-top: 4px;
+  border-top: 0.5px solid var(--separator);
+  font-size: var(--fs-footnote);
+  color: var(--label-2);
+}

@@ -1,0 +1,486 @@
+/*
+ * Split-flap departure board (DESIGN §5 Board, research design-lang §6.2–6.3).
+ *
+ * The board is CONTENT: an opaque, physical-looking object, never glass. It is always dark (a real board), whatever
+ * the app theme. Cells have fixed pixel sizes (set by the layout through --cw/--ch), `contain: layout paint style`,
+ * and only `transform`/`opacity` animate. The keyframes are chosen by data-anim on each .flap (see flapEngine.ts).
+ *
+ * Variables (set inline by the board from boardModel.computeBoardLayout and FLAP_TIMING):
+ *   --cw --ch      flap width/height        --cg      gap between flaps of a column
+ *   --colgap       gap between columns      --rowgap  gap between rows
+ *   --lampw        lamp slot                --rw      REMARKS word-flap width
+ *   --flap-step --flap-final --flap-fade    durations
+ */
+
+.fb {
+  --flap-ink: #f3efe6;
+  --flap-amber: #ffb000;
+  --flap-amber-glow: rgb(255 176 0 / 0.42);
+  --flap-top-1: #2b2b2e;
+  --flap-top-2: #242427;
+  --flap-bot-1: #1e1e21;
+  --flap-bot-2: #19191b;
+  --flap-gap: #070708;
+  --flap-font: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', Inter, Roboto, Arial, sans-serif;
+  --flap-persp: calc(var(--ch, 40px) * 7);
+  color-scheme: dark;
+  display: flex;
+  flex-direction: column;
+  gap: var(--rowgap, 10px);
+  min-width: 0;
+}
+
+.fb-row {
+  display: flex;
+  align-items: center;
+  gap: var(--colgap, 16px);
+  min-width: 0;
+}
+
+.flap-text {
+  display: inline-flex;
+  flex: none;
+  gap: var(--cg, 3px);
+}
+
+/* ───────────────────────────── one flap module */
+.flap {
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: var(--cw, 28px);
+  height: var(--ch, 40px);
+  border-radius: max(2px, calc(var(--ch, 40px) * 0.085));
+  background: var(--flap-gap);
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 0.035),
+    0 calc(var(--ch, 40px) * 0.05) calc(var(--ch, 40px) * 0.08) rgb(0 0 0 / 0.55);
+  color: var(--flap-ink);
+  font-family: var(--flap-font);
+  font-weight: 600;
+  font-size: calc(var(--ch, 40px) * 0.68);
+  line-height: var(--ch, 40px);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  letter-spacing: 0;
+  contain: layout paint style;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.flap[data-variant='word'] {
+  width: var(--rw, 200px);
+  /* tracking and padding: keep in sync with REMARK_TRACKING_EM / REMARK_PADDING_EM (boardModel.ts) */
+  font-size: var(--rfont, calc(var(--ch, 40px) * 0.4));
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-align: left;
+}
+
+/* the two visible halves and the two moving flaps */
+.flap-half {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: calc(50% - 0.5px);
+  overflow: hidden;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+.flap-top {
+  top: 0;
+  border-radius: inherit;
+  border-bottom-left-radius: 1px;
+  border-bottom-right-radius: 1px;
+  background: linear-gradient(to bottom, var(--flap-top-1), var(--flap-top-2));
+  transform-origin: 50% 100%;
+}
+.flap-bottom {
+  bottom: 0;
+  border-radius: inherit;
+  border-top-left-radius: 1px;
+  border-top-right-radius: 1px;
+  background: linear-gradient(to bottom, var(--flap-bot-1), var(--flap-bot-2));
+  /* the upper flap overlaps the lower one: a soft shadow under the hinge */
+  box-shadow: inset 0 calc(var(--ch, 40px) * 0.06) calc(var(--ch, 40px) * 0.06) calc(var(--ch, 40px) * -0.03) rgb(0 0 0 / 0.55);
+  transform-origin: 50% 0;
+}
+.flap-g {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: var(--ch, 40px);
+  white-space: pre;
+  overflow: hidden;
+}
+.flap-top .flap-g {
+  top: 0;
+}
+.flap-bottom .flap-g {
+  bottom: 0;
+}
+.flap[data-variant='word'] .flap-g {
+  padding-left: 0.62em;
+  text-overflow: clip;
+}
+.flap-shade {
+  position: absolute;
+  inset: 0;
+  background: #000;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* hinge line with axle pins at both ends */
+.flap::after {
+  content: '';
+  position: absolute;
+  z-index: 3;
+  left: 0;
+  right: 0;
+  top: calc(50% - 0.5px);
+  height: 1px;
+  background: #000;
+  box-shadow: 0 1px 0 rgb(255 255 255 / 0.05);
+  pointer-events: none;
+}
+.flap::before {
+  content: '';
+  position: absolute;
+  z-index: 4;
+  top: calc(50% - max(1px, var(--ch, 40px) * 0.035));
+  left: max(1px, calc(var(--cw, 28px) * 0.06));
+  right: max(1px, calc(var(--cw, 28px) * 0.06));
+  height: max(2px, calc(var(--ch, 40px) * 0.07));
+  background:
+    radial-gradient(circle at 50% 50%, #3a3a3e 0 45%, transparent 55%) left / max(2px, calc(var(--ch, 40px) * 0.07)) 100% no-repeat,
+    radial-gradient(circle at 50% 50%, #3a3a3e 0 45%, transparent 55%) right / max(2px, calc(var(--ch, 40px) * 0.07)) 100% no-repeat;
+  pointer-events: none;
+}
+
+/* on wide word flaps a full-strength hinge reads like a strikethrough: keep the gap, soften the line */
+.flap[data-variant='word']::after {
+  height: 0.5px;
+  top: calc(50% - 0.25px);
+  background: rgb(0 0 0 / 0.4);
+  box-shadow: none;
+}
+.flap[data-variant='word'] .flap-half {
+  height: calc(50% - 0.25px);
+}
+.flap[data-variant='word']::before {
+  display: none;
+}
+
+/* moving flaps are hidden at rest */
+.flap-fall,
+.flap-rise {
+  visibility: hidden;
+  z-index: 2;
+}
+.flap[data-anim^='s'] .flap-fall,
+.flap[data-anim^='f'] .flap-fall,
+.flap[data-anim^='f'] .flap-rise {
+  visibility: visible;
+  will-change: transform;
+}
+
+/* intermediate drum steps: the top flap flicks down (a/b alternate to restart the keyframes) */
+.flap[data-anim='sa'] .flap-fall {
+  animation: flap-fall-a var(--flap-step, 60ms) cubic-bezier(0.5, 0, 1, 0.6) both;
+}
+.flap[data-anim='sb'] .flap-fall {
+  animation: flap-fall-b var(--flap-step, 60ms) cubic-bezier(0.5, 0, 1, 0.6) both;
+}
+/* the final flip: top falls (ease-in), bottom swings into place with a small bounce; faces darken as they turn */
+.flap[data-anim='fa'] .flap-fall {
+  animation: flap-fall-a calc(var(--flap-final, 280ms) * 0.45) cubic-bezier(0.55, 0, 1, 0.45) both;
+}
+.flap[data-anim='fb'] .flap-fall {
+  animation: flap-fall-b calc(var(--flap-final, 280ms) * 0.45) cubic-bezier(0.55, 0, 1, 0.45) both;
+}
+.flap[data-anim='fa'] .flap-rise {
+  animation: flap-rise-a calc(var(--flap-final, 280ms) * 0.55) calc(var(--flap-final, 280ms) * 0.45) linear both;
+}
+.flap[data-anim='fb'] .flap-rise {
+  animation: flap-rise-b calc(var(--flap-final, 280ms) * 0.55) calc(var(--flap-final, 280ms) * 0.45) linear both;
+}
+.flap[data-anim^='f'] .flap-fall .flap-shade {
+  animation: flap-shade-in calc(var(--flap-final, 280ms) * 0.45) ease-in both;
+}
+.flap[data-anim^='f'] .flap-rise .flap-shade {
+  animation: flap-shade-out calc(var(--flap-final, 280ms) * 0.4) calc(var(--flap-final, 280ms) * 0.45) ease-out both;
+}
+
+@keyframes flap-fall-a {
+  from {
+    transform: perspective(var(--flap-persp)) rotateX(0deg);
+  }
+  to {
+    transform: perspective(var(--flap-persp)) rotateX(-90deg);
+  }
+}
+@keyframes flap-fall-b {
+  from {
+    transform: perspective(var(--flap-persp)) rotateX(0deg);
+  }
+  to {
+    transform: perspective(var(--flap-persp)) rotateX(-90deg);
+  }
+}
+@keyframes flap-rise-a {
+  0% {
+    transform: perspective(var(--flap-persp)) rotateX(90deg);
+    animation-timing-function: cubic-bezier(0.4, 0, 1, 1);
+  }
+  68% {
+    transform: perspective(var(--flap-persp)) rotateX(0deg);
+    animation-timing-function: cubic-bezier(0, 0, 0.4, 1);
+  }
+  84% {
+    transform: perspective(var(--flap-persp)) rotateX(16deg);
+    animation-timing-function: cubic-bezier(0.4, 0, 1, 1);
+  }
+  100% {
+    transform: perspective(var(--flap-persp)) rotateX(0deg);
+  }
+}
+@keyframes flap-rise-b {
+  0% {
+    transform: perspective(var(--flap-persp)) rotateX(90deg);
+    animation-timing-function: cubic-bezier(0.4, 0, 1, 1);
+  }
+  68% {
+    transform: perspective(var(--flap-persp)) rotateX(0deg);
+    animation-timing-function: cubic-bezier(0, 0, 0.4, 1);
+  }
+  84% {
+    transform: perspective(var(--flap-persp)) rotateX(16deg);
+    animation-timing-function: cubic-bezier(0.4, 0, 1, 1);
+  }
+  100% {
+    transform: perspective(var(--flap-persp)) rotateX(0deg);
+  }
+}
+@keyframes flap-shade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 0.55;
+  }
+}
+@keyframes flap-shade-out {
+  from {
+    opacity: 0.5;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/*
+ * Flat mode (boards inside a card that uses backdrop-filter): WebKit flattens 3D under filters, so the flaps fold
+ * with a 2D scaleY instead of rotateX. At these sizes it reads the same.
+ */
+.fb[data-mode='flat'] .flap[data-anim='sa'] .flap-fall,
+.fb[data-mode='flat'] .flap[data-anim='fa'] .flap-fall {
+  animation-name: flap-flat-fall-a;
+}
+.fb[data-mode='flat'] .flap[data-anim='sb'] .flap-fall,
+.fb[data-mode='flat'] .flap[data-anim='fb'] .flap-fall {
+  animation-name: flap-flat-fall-b;
+}
+.fb[data-mode='flat'] .flap[data-anim='fa'] .flap-rise {
+  animation-name: flap-flat-rise-a;
+}
+.fb[data-mode='flat'] .flap[data-anim='fb'] .flap-rise {
+  animation-name: flap-flat-rise-b;
+}
+@keyframes flap-flat-fall-a {
+  from {
+    transform: scaleY(1);
+  }
+  to {
+    transform: scaleY(0);
+  }
+}
+@keyframes flap-flat-fall-b {
+  from {
+    transform: scaleY(1);
+  }
+  to {
+    transform: scaleY(0);
+  }
+}
+@keyframes flap-flat-rise-a {
+  0% {
+    transform: scaleY(0);
+  }
+  70% {
+    transform: scaleY(1);
+  }
+  85% {
+    transform: scaleY(0.9);
+  }
+  100% {
+    transform: scaleY(1);
+  }
+}
+@keyframes flap-flat-rise-b {
+  0% {
+    transform: scaleY(0);
+  }
+  70% {
+    transform: scaleY(1);
+  }
+  85% {
+    transform: scaleY(0.9);
+  }
+  100% {
+    transform: scaleY(1);
+  }
+}
+
+/* reduced motion: faces swap instantly with a subtle fade (the engine sets xa/xb) */
+.flap[data-anim='xa'] .flap-g {
+  animation: flap-fade-a var(--flap-fade, 180ms) ease-out both;
+}
+.flap[data-anim='xb'] .flap-g {
+  animation: flap-fade-b var(--flap-fade, 180ms) ease-out both;
+}
+@keyframes flap-fade-a {
+  from {
+    opacity: 0.25;
+  }
+}
+@keyframes flap-fade-b {
+  from {
+    opacity: 0.25;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .flap-fall,
+  .flap-rise {
+    animation: none !important;
+    visibility: hidden !important;
+  }
+}
+
+/* ───────────────────────────── columns */
+.fb-amber .flap {
+  color: var(--flap-amber);
+  text-shadow: 0 0 calc(var(--ch, 40px) * 0.14) var(--flap-amber-glow);
+}
+.fb-remark {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+.fb-lamp {
+  display: grid;
+  place-items: center start;
+  flex: none;
+  width: var(--lampw, 24px);
+  height: var(--ch, 40px);
+}
+.fb-lamp::before {
+  content: '';
+  width: max(6px, calc(var(--ch, 40px) * 0.3));
+  height: max(6px, calc(var(--ch, 40px) * 0.3));
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, rgb(255 255 255 / 0.18), transparent 45%), #2c2c2f;
+  box-shadow:
+    inset 0 0 0 1px rgb(0 0 0 / 0.6),
+    0 0 0 max(1px, calc(var(--ch, 40px) * 0.03)) #0c0c0d;
+}
+.fb-lamp[data-lamp='green']::before {
+  --_c: #3ddc68;
+  --_g: rgb(61 220 104 / 0.65);
+}
+.fb-lamp[data-lamp='amber']::before {
+  --_c: #ffb000;
+  --_g: rgb(255 176 0 / 0.65);
+}
+.fb-lamp[data-lamp='red']::before {
+  --_c: #ff453a;
+  --_g: rgb(255 69 58 / 0.7);
+}
+.fb-lamp[data-lamp='blink']::before {
+  --_c: #e8e2d0;
+  --_g: rgb(232 226 208 / 0.45);
+  animation: fb-lamp-blink 1.4s ease-in-out infinite;
+}
+.fb-lamp:is([data-lamp='green'], [data-lamp='amber'], [data-lamp='red'], [data-lamp='blink'])::before {
+  background: radial-gradient(circle at 35% 30%, rgb(255 255 255 / 0.75), transparent 40%), var(--_c);
+  box-shadow:
+    inset 0 0 0 1px rgb(0 0 0 / 0.25),
+    0 0 0 max(1px, calc(var(--ch, 40px) * 0.03)) #0c0c0d,
+    0 0 calc(var(--ch, 40px) * 0.28) var(--_g),
+    0 0 calc(var(--ch, 40px) * 0.7) color-mix(in srgb, var(--_g) 45%, transparent);
+}
+.fb-lamp[data-lamp='gray']::before {
+  background: radial-gradient(circle at 35% 30%, rgb(255 255 255 / 0.3), transparent 42%), #6b6b70;
+}
+@keyframes fb-lamp-blink {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fb-lamp[data-lamp='blink']::before {
+    animation: none;
+  }
+}
+
+/* column labels above the flaps */
+.fb-labels {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--colgap, 16px);
+  font-family: var(--flap-font);
+  font-size: max(9px, calc(var(--ch, 40px) * 0.27));
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  color: rgb(255 176 0 / 0.72);
+  text-transform: uppercase;
+  white-space: nowrap;
+  user-select: none;
+}
+.fb-labels > span {
+  flex: none;
+  overflow: hidden;
+  text-overflow: clip;
+}
+.fb-labels > [data-align='right'] {
+  text-align: right;
+}
+
+/* ───────────────────────────── mini board (Overview card) */
+.mb {
+  position: relative;
+  border-radius: 14px;
+  padding: 12px 12px 13px;
+  background: radial-gradient(120% 90% at 50% -20%, rgb(255 255 255 / 0.06), transparent 60%), linear-gradient(#141416, #0d0d0f);
+  box-shadow:
+    inset 0 0 0 1px rgb(255 255 255 / 0.05),
+    inset 0 1px 0 rgb(255 255 255 / 0.06),
+    0 1px 2px rgb(0 0 0 / 0.25);
+  overflow: hidden;
+  isolation: isolate;
+}
+.mb .fb-labels {
+  margin-bottom: 7px;
+}
+.mb-measure {
+  width: 100%;
+  min-width: 0;
+}
+.mb-empty {
+  margin-top: 8px;
+  font-family: var(--flap-font, sans-serif);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: rgb(255 176 0 / 0.6);
+  text-transform: uppercase;
+}

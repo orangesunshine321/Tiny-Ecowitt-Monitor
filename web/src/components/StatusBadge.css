@@ -1,0 +1,93 @@
+.ui-badge {
+  --_tone: var(--status-off);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 9px 0 7px;
+  border-radius: var(--r-capsule);
+  font-size: var(--fs-footnote);
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: 0;
+  white-space: nowrap;
+  /* readable text: the tone mixed toward the label colour (darker in light mode, lighter in dark mode) */
+  color: color-mix(in oklab, var(--_tone) 64%, var(--label));
+  background: color-mix(in srgb, var(--_tone) 14%, transparent);
+  vertical-align: middle;
+}
+.ui-badge[data-size='small'] {
+  height: 18px;
+  padding: 0 7px 0 5px;
+  font-size: var(--fs-caption);
+  gap: 3px;
+}
+.ui-badge[data-variant='inline'] {
+  background: none;
+  padding: 0;
+  height: auto;
+  color: var(--label-2);
+  font-weight: 500;
+}
+.ui-badge[data-tone='ok'] { --_tone: var(--status-ok); }
+.ui-badge[data-tone='warn'] { --_tone: var(--status-warn); }
+.ui-badge[data-tone='crit'] { --_tone: var(--status-crit); }
+.ui-badge[data-tone='off'] { --_tone: var(--status-off); }
+.ui-badge[data-tone='info'] { --_tone: var(--status-info); }
+
+.ui-spin {
+  animation: ui-spin 1s linear infinite;
+}
+@keyframes ui-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-spin {
+    animation-duration: 3s;
+  }
+}
+
+.ui-dot {
+  --_tone: var(--status-off);
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: var(--_size, 8px);
+  height: var(--_size, 8px);
+  border-radius: 50%;
+  background: var(--_tone);
+  box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--_tone) 60%, #000 40%) inset;
+  vertical-align: middle;
+}
+.ui-dot[data-tone='ok'] { --_tone: var(--status-ok); }
+.ui-dot[data-tone='warn'] { --_tone: var(--status-warn); }
+.ui-dot[data-tone='crit'] { --_tone: var(--status-crit); }
+.ui-dot[data-tone='off'] { --_tone: var(--status-off); }
+.ui-dot[data-tone='info'] { --_tone: var(--status-info); }
+.ui-dot[data-pulse]::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--_tone);
+  animation: ui-pulse 2s var(--ease-out) infinite;
+}
+@keyframes ui-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  80%,
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-dot[data-pulse]::after {
+    animation: none;
+    display: none;
+  }
+}

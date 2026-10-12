@@ -1,0 +1,434 @@
+#!/bin/bash
+# pve1-dash-helper: read-only forced-command helper for pve1-dash on the Proxmox VE host (helper protocol v1,
+# docs/HELPER_PROTOCOL.md). Works on PVE 8.x and 9.x.
+#
+# Install at /usr/local/sbin/pve1-dash-helper (root:root, 0755) and authorize the dashboard key in
+# /root/.ssh/authorized_keys (a symlink to /etc/pve/priv/authorized_keys on PVE) pinned to this script:
+#   restrict,command="/usr/local/sbin/pve1-dash-helper" ssh-ed25519 AAAA... pve1-dash
+#
+# sshd ignores the command the client asked for and passes it here as SSH_ORIGINAL_COMMAND. It is matched against a
+# strict allow-list and is never evaluated or handed to a shell:
+#   version              -> "pve1-dash-helper 1"
+#   inventory [vmid]     -> framed inventory of running LXCs (pct exec) and running agent-enabled VMs (qm guest exec)
+#   sensors              -> raw `sensors -j` JSON (exit 3 when lm-sensors is not installed)
+#   pkgupdates           -> /var/lib/pve-manager/pkgupdates (JSON array; "[]" when missing)
+#   backups <storage>    -> backup volumes of a storage as JSON (pvesh as root; the API hides them from PVEAuditor)
+# Anything else prints "denied" on stderr and exits 1. With no command, "inventory" runs.
+# Root can also run it by hand for testing: pve1-dash-helper inventory 101
+set -u
+umask 077
+export LC_ALL=C
+# Append the standard locations: sshd's PATH for root normally has them, but be explicit.
+export PATH="${PATH:+$PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+readonly PROTOCOL=1
+readonly GUEST_TIMEOUT=25        # seconds per guest (pct exec; qm guest exec --timeout)
+readonly QM_TIMEOUT=30           # outer bound for `qm guest exec` (its own --timeout is GUEST_TIMEOUT)
+readonly KILL_AFTER=5            # SIGKILL this long after timeout's SIGTERM
+readonly MAX_PARALLEL=4          # guests inspected at the same time
+readonly MAX_GUEST_BYTES=1048576 # per-guest output cap
+readonly PKGUPDATES_FILE=/var/lib/pve-manager/pkgupdates
+
+# The command line comes from sshd (forced command) or, for manual runs, from the arguments.
+CMDLINE=${SSH_ORIGINAL_COMMAND:-$*}
+# Containers are entered with `pct exec --keep-env 0` (a clean environment); dropping the SSH session variables here
+# as well is defense in depth, e.g. for anything this script starts on the host.
+unset SSH_ORIGINAL_COMMAND SSH_CLIENT SSH_CONNECTION SSH_TTY SSH_AUTH_SOCK
+
+# The inner guest script, run inside each guest. Identical to the body of pve1-dash-guest-inventory and to
+# server/inventory/innerScript.ts (tests/inventory-scripts.test.ts enforces this).
+IFS= read -r -d '' INNER <<'PVE1_DASH_INNER' || :
+# >>> pve1-dash inner v1 >>>
+# Inventory of this guest for pve1-dash (helper protocol v1). Read-only and POSIX sh, so it runs under dash, bash and
+# busybox. Every section is optional: a missing tool leaves its section empty. This exact text is also embedded in
+# pve1-dash-helper (run via pct exec / qm guest exec) and in server/inventory/innerScript.ts; keep all three identical.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
+LC_ALL=C
+export PATH LC_ALL
+# Bound every probe so a hung daemon (docker, systemd, ...) cannot stall the whole inventory.
+p1d_t=''
+if command -v timeout >/dev/null 2>&1 && timeout 5 true >/dev/null 2>&1; then p1d_t='timeout 15'; fi
+p1d_has() { command -v "$1" >/dev/null 2>&1; }
+p1d_sec() { printf '##pve1-dash:section %s\n' "$1"; }
+# Print text followed by exactly one newline; print nothing for empty text.
+p1d_put() { if [ -n "$1" ]; then printf '%s\n' "$1"; fi; }
+# Run a probe (stderr dropped) and print its stdout.
+# shellcheck disable=SC2086 # $p1d_t is intentionally split into "timeout 15"
+p1d_run() { p1d_o=$($p1d_t "$@" 2>/dev/null) || :; p1d_put "$p1d_o"; }
+
+printf '##pve1-dash:inventory v1\n'
+
+p1d_sec os-release
+for p1d_f in /etc/os-release /usr/lib/os-release; do
+  if [ -r "$p1d_f" ]; then
+    p1d_put "$(cat "$p1d_f" 2>/dev/null)"
+    break
+  fi
+done
+
+p1d_sec kernel
+p1d_run uname -r
+
+p1d_sec uptime
+p1d_put "$(cat /proc/uptime 2>/dev/null)"
+
+p1d_sec loadavg
+p1d_put "$(cat /proc/loadavg 2>/dev/null)"
+
+p1d_sec init
+if [ -d /run/systemd/system ]; then
+  p1d_init=systemd
+elif [ -d /run/openrc ] || p1d_has openrc-run || p1d_has rc-status; then
+  p1d_init=openrc
+else
+  p1d_init=unknown
+fi
+printf '%s\n' "$p1d_init"
+
+p1d_sec services
+case $p1d_init in
+  systemd)
+    p1d_run systemctl list-units --type=service --state=running --no-legend --no-pager --plain
+    ;;
+  openrc)
+    # shellcheck disable=SC2086
+    p1d_o=$($p1d_t rc-status --servicelist 2>/dev/null) || p1d_o=''
+    # shellcheck disable=SC2086
+    [ -n "$p1d_o" ] || p1d_o=$($p1d_t rc-status -s 2>/dev/null) || p1d_o=''
+    p1d_put "$p1d_o"
+    ;;
+esac
+
+p1d_sec docker
+if p1d_has docker; then
+  echo present
+  p1d_run docker ps -a --no-trunc --format '{{json .}}'
+else
+  echo absent
+fi
+
+p1d_sec ip
+p1d_o=''
+# shellcheck disable=SC2086
+if p1d_has ip; then p1d_o=$($p1d_t ip -o addr show 2>/dev/null) || p1d_o=''; fi
+# shellcheck disable=SC2086
+if [ -z "$p1d_o" ] && p1d_has ifconfig; then p1d_o=$($p1d_t ifconfig 2>/dev/null) || p1d_o=''; fi
+p1d_put "$p1d_o"
+
+p1d_sec listen
+p1d_o=''
+if p1d_has ss; then
+  # shellcheck disable=SC2086
+  p1d_o=$($p1d_t ss -Hltnp 2>/dev/null) || p1d_o=''
+  # old iproute2 has no -H; the parser skips the header line
+  # shellcheck disable=SC2086
+  [ -n "$p1d_o" ] || p1d_o=$($p1d_t ss -ltnp 2>/dev/null) || p1d_o=''
+fi
+if [ -z "$p1d_o" ] && p1d_has netstat; then
+  # shellcheck disable=SC2086
+  p1d_o=$($p1d_t netstat -ltnp 2>/dev/null) || p1d_o=''
+  # some busybox builds have no -p
+  # shellcheck disable=SC2086
+  [ -n "$p1d_o" ] || p1d_o=$($p1d_t netstat -ltn 2>/dev/null) || p1d_o=''
+fi
+p1d_put "$p1d_o"
+
+printf '##pve1-dash:end\n'
+exit 0
+# <<< pve1-dash inner v1 <<<
+PVE1_DASH_INNER
+readonly INNER
+
+# Perl is always present on PVE (the whole stack is Perl) and JSON::PP is a core module. Prints "<vmid> <kind> <status>"
+# per guest from `pvesh get /nodes/<node>/{lxc,qemu} --output-format json`, skipping templates. For VMs the status is
+# the QMP run state (`qmpstatus`, listed with --full 1), as `qm list` prints it: `status` alone says "running" for a
+# paused, suspended, prelaunch or io-error VM, whose guest agent cannot answer.
+# shellcheck disable=SC2016 # Perl code, not shell
+readonly PERL_LIST_GUESTS='
+use strict; use warnings; use JSON::PP;
+my $kind = shift @ARGV;
+my $data = eval { JSON::PP->new->decode(do { local $/; <STDIN> }) };
+exit 1 unless ref($data) eq "ARRAY";
+for my $g (@$data) {
+  next unless ref($g) eq "HASH";
+  next if $g->{template};
+  my $id = $g->{vmid};
+  next unless defined($id) && $id =~ /^[0-9]{1,9}$/;
+  my $status = defined($g->{qmpstatus}) && $g->{qmpstatus} ne "" ? $g->{qmpstatus}
+    : defined($g->{status}) ? $g->{status} : "unknown";
+  $status =~ s/[^A-Za-z0-9_-]//g;
+  print "$id $kind $status\n";
+}'
+
+deny() {
+  if command -v logger >/dev/null 2>&1; then
+    logger -t pve1-dash-helper -p auth.notice -- "denied command: ${CMDLINE//[^A-Za-z0-9._ -]/?}" 2>/dev/null || :
+  fi
+  echo 'denied' >&2
+  exit 1
+}
+
+# Node name as Proxmox sees it (PVE uses the short hostname).
+node_name() {
+  local n
+  n=$(hostname 2>/dev/null) || n=''
+  n=${n%%.*}
+  if [[ ! $n =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,62})$ ]]; then
+    echo 'cannot determine the node name' >&2
+    exit 2
+  fi
+  printf '%s' "$n"
+}
+
+# Write "<vmid> <lxc|qemu> <status>" lines for the guests on this node to <dest>, templates excluded, sorted by vmid.
+# Returns 1 when a guest type could not be listed at all.
+# Prefer pvesh JSON: `pct list` has an often-empty Lock column and `qm list` NAME defaults to "VM <vmid>" (a space),
+# so whitespace splitting of the text tables is ambiguous. The text tables are only a fallback (pvesh broken, etc.):
+# their first columns are unambiguous, and qm list's STATUS is read counting from the end.
+list_guests() { # <node> <dest file>
+  local node=$1 dest=$2 kind json out failed=0
+  local -a full=()
+  : >"$dest.unsorted"
+  for kind in lxc qemu; do
+    # --full 1 adds qmpstatus (one QMP query-status per running VM, as `qm list` does); lxc has no such option.
+    full=()
+    if [[ $kind == qemu ]]; then full=(--full 1); fi
+    if json=$(timeout -k "$KILL_AFTER" 30 pvesh get "/nodes/$node/$kind" "${full[@]}" --output-format json 2>/dev/null) &&
+      out=$(perl -e "$PERL_LIST_GUESTS" "$kind" <<<"$json" 2>/dev/null); then
+      if [[ -n $out ]]; then printf '%s\n' "$out" >>"$dest.unsorted"; fi
+      continue
+    fi
+    if [[ $kind == lxc ]]; then
+      out=$(timeout -k "$KILL_AFTER" 30 pct list 2>/dev/null)
+    else
+      out=$(timeout -k "$KILL_AFTER" 30 qm list 2>/dev/null)
+    fi || {
+      failed=1
+      continue
+    }
+    if [[ $kind == lxc ]]; then
+      awk 'NR > 1 && $1 ~ /^[0-9]+$/ && NF >= 2 { print $1, "lxc", $2 }' <<<"$out" >>"$dest.unsorted"
+    else
+      awk 'NR > 1 && $1 ~ /^[0-9]+$/ && NF >= 6 { print $1, "qemu", $(NF - 3) }' <<<"$out" >>"$dest.unsorted"
+    fi
+  done
+  sort -n -k1,1 "$dest.unsorted" >"$dest"
+  return "$failed"
+}
+
+# `agent: 1`, `agent: enabled=1,...`, `agent: 1,type=virtio` are enabled; `agent: 0` or no line is disabled.
+# The bare first value of the property string is `enabled` (qemu-server $agent_fmt default_key).
+agent_enabled() {
+  local line value part
+  local -a parts=()
+  line=$(grep -m 1 -E '^agent:' <<<"$1") || return 1
+  value=${line#agent:}
+  value=${value//[[:space:]]/}
+  IFS=, read -r -a parts <<<"$value"
+  for part in "${parts[@]}"; do
+    case $part in
+      enabled=*) part=${part#enabled=} ;;
+      *=*) continue ;;
+    esac
+    [[ ${part,,} =~ ^(1|on|yes|true)$ ]]
+    return
+  done
+  return 1
+}
+
+is_windows() {
+  grep -qE '^ostype:[[:space:]]*(win|w2k|wxp|wvista)' <<<"$1"
+}
+
+# One printable line describing why a guest could not be inspected.
+error_text() { # <exit code> <stderr file> <timeout seconds>
+  local rc=$1 errfile=$2 limit=$3 msg=''
+  if ((rc == 124 || rc == 137)); then
+    printf 'timeout after %ss' "$limit"
+    return
+  fi
+  if [[ -s $errfile ]]; then
+    msg=$(tr -d '\r' <"$errfile" | grep -v '^[[:space:]]*$' | tail -n 1 | tr -cd '[:print:]' | cut -c 1-200)
+  fi
+  printf '%s' "${msg:-exit code $rc}"
+}
+
+# Inspect one guest and write its framed block to <base>.block (no file = guest skipped).
+inspect_guest() { # <vmid> <lxc|qemu> <base path>
+  local vmid=$1 type=$2 base=$3 transport limit rc cfg size
+  local out=$base.out err=$base.err
+  if [[ $type == lxc ]]; then
+    transport=pct-exec
+    limit=$GUEST_TIMEOUT
+    # --keep-env 0: the CT gets a clean environment (only container=lxc), not root's host environment, which
+    # includes whatever /root/.bashrc exports (pct exec defaults to --keep-env 1 on PVE 8 and 9). The inner script
+    # sets its own PATH and LC_ALL, and /bin/sh is an absolute path.
+    timeout -k "$KILL_AFTER" "$GUEST_TIMEOUT" pct exec "$vmid" --keep-env 0 -- /bin/sh -c "$INNER" </dev/null 2>"$err" |
+      head -c "$MAX_GUEST_BYTES" >"$out"
+    rc=${PIPESTATUS[0]}
+  else
+    transport=qm-guest-exec
+    limit=$QM_TIMEOUT
+    cfg=$(timeout -k "$KILL_AFTER" 15 qm config "$vmid" --current 2>/dev/null) || return 0
+    agent_enabled "$cfg" || return 0
+    if is_windows "$cfg"; then
+      printf '@@pve1-dash:guest %s %s %s\n@@pve1-dash:error unsupported OS (windows)\n@@pve1-dash:end %s 1\n' \
+        "$vmid" "$type" "$transport" "$vmid" >"$base.block"
+      return 0
+    fi
+    timeout -k "$KILL_AFTER" "$QM_TIMEOUT" qm guest exec "$vmid" --timeout "$GUEST_TIMEOUT" -- /bin/sh -c "$INNER" \
+      </dev/null 2>"$err" | head -c "$MAX_GUEST_BYTES" >"$out"
+    rc=${PIPESTATUS[0]}
+  fi
+  size=$(wc -c <"$out")
+  {
+    printf '@@pve1-dash:guest %s %s %s\n' "$vmid" "$type" "$transport"
+    if ((size >= MAX_GUEST_BYTES)); then
+      printf '@@pve1-dash:error output exceeded %s bytes\n' "$MAX_GUEST_BYTES"
+    elif ((rc != 0)); then
+      printf '@@pve1-dash:error %s\n' "$(error_text "$rc" "$err" "$limit")"
+    elif ((size == 0)); then
+      printf '@@pve1-dash:error no output\n'
+    else
+      # A guest must not be able to forge framing lines for other guests.
+      sed 's/^@@/ @@/' "$out"
+      [[ -z $(tail -c 1 "$out") ]] || echo
+    fi
+    printf '@@pve1-dash:end %s %s\n' "$vmid" "$rc"
+  } >"$base.block"
+}
+
+# Print the blocks of finished guests, in vmid order, up to the first guest that is still running. Streaming them
+# (instead of printing everything at the end) means a client that gives up early still gets the finished guests.
+FLUSHED=0
+flush_blocks() {
+  local vmid
+  while ((FLUSHED < ${#ORDER[@]})); do
+    vmid=${ORDER[FLUSHED]}
+    [[ -e $TMPD/$vmid.done ]] || return 0
+    if [[ -s $TMPD/$vmid.block ]]; then cat -- "$TMPD/$vmid.block"; fi
+    FLUSHED=$((FLUSHED + 1))
+  done
+}
+
+cmd_inventory() { # [vmid]
+  local want=${1:-} node vmid kind status
+  local -a running=()
+  ORDER=()
+  # Header first: anything a noisy .bashrc printed before it is ignored by the dashboard.
+  printf '@@pve1-dash:inventory v%s\n' "$PROTOCOL"
+  node=$(node_name) || exit 2
+  TMPD=$(mktemp -d "${TMPDIR:-/tmp}/pve1-dash.XXXXXXXX") || {
+    echo 'mktemp failed' >&2
+    exit 2
+  }
+  trap 'rm -rf -- "$TMPD"' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 141' PIPE
+  trap 'exit 143' TERM
+
+  if ! list_guests "$node" "$TMPD/guests"; then
+    # No "done" line: the dashboard treats this run as failed and keeps its previous data.
+    echo "cannot list the guests of node $node (pvesh and pct/qm list failed)" >&2
+    exit 2
+  fi
+  while read -r vmid kind status; do
+    # only guests whose vCPUs run: a paused/suspended/prelaunch/io-error VM's agent cannot answer
+    [[ $status == running ]] || continue
+    if [[ -n $want ]] && ((10#$vmid != 10#$want)); then continue; fi
+    # at most MAX_PARALLEL guests at a time
+    while :; do
+      mapfile -t running < <(jobs -rp)
+      ((${#running[@]} < MAX_PARALLEL)) && break
+      wait -n 2>/dev/null || :
+      flush_blocks
+    done
+    # Workers write only to their files; stdout carries nothing but framed, in-order blocks.
+    {
+      inspect_guest "$vmid" "$kind" "$TMPD/$vmid"
+      : >"$TMPD/$vmid.done"
+    } </dev/null >/dev/null &
+    ORDER+=("$vmid")
+  done <"$TMPD/guests"
+  while ((FLUSHED < ${#ORDER[@]})); do
+    mapfile -t running < <(jobs -rp)
+    if ((${#running[@]} == 0)); then
+      wait
+      flush_blocks
+      # A worker that died without its marker (should not happen): skip that guest instead of waiting forever.
+      if ((FLUSHED < ${#ORDER[@]})); then : >"$TMPD/${ORDER[FLUSHED]}.done"; fi
+      continue
+    fi
+    wait -n 2>/dev/null || :
+    flush_blocks
+  done
+  printf '@@pve1-dash:done\n'
+}
+
+cmd_sensors() {
+  if ! command -v sensors >/dev/null 2>&1; then
+    echo 'lm-sensors not installed' >&2
+    exit 3
+  fi
+  timeout -k "$KILL_AFTER" 20 sensors -j
+  exit $?
+}
+
+cmd_pkgupdates() {
+  if [[ -s $PKGUPDATES_FILE ]]; then
+    cat -- "$PKGUPDATES_FILE"
+  else
+    echo '[]'
+  fi
+}
+
+cmd_backups() { # <storage id, validated>
+  local node
+  node=$(node_name) || exit 2
+  # PBS storages can take long to answer (PVE allows 120 s to connect); the dashboard waits slightly longer than this.
+  timeout -k "$KILL_AFTER" 90 pvesh get "/nodes/$node/storage/$1/content" --content backup --output-format json
+  exit $?
+}
+
+main() {
+  local -a argv=()
+  local re_line='^[A-Za-z0-9._ -]*$' re_vmid='^[0-9]{1,9}$' re_storage='^[A-Za-z][A-Za-z0-9._-]{0,63}$'
+  # Whole-line check first (also rejects newlines, tabs and anything shell-like), then split on spaces without globbing.
+  ((${#CMDLINE} <= 200)) || deny
+  [[ $CMDLINE =~ $re_line ]] || deny
+  read -r -a argv <<<"$CMDLINE"
+  local n=${#argv[@]}
+  case ${argv[0]:-inventory} in
+    version)
+      ((n == 1)) || deny
+      echo "pve1-dash-helper $PROTOCOL"
+      ;;
+    inventory)
+      if ((n <= 1)); then
+        cmd_inventory ''
+      elif ((n == 2)) && [[ ${argv[1]} =~ $re_vmid ]]; then
+        cmd_inventory "${argv[1]}"
+      else
+        deny
+      fi
+      ;;
+    sensors)
+      ((n == 1)) || deny
+      cmd_sensors
+      ;;
+    pkgupdates)
+      ((n == 1)) || deny
+      cmd_pkgupdates
+      ;;
+    backups)
+      ((n == 2)) && [[ ${argv[1]} =~ $re_storage ]] || deny
+      cmd_backups "${argv[1]}"
+      ;;
+    *)
+      deny
+      ;;
+  esac
+}
+
+main

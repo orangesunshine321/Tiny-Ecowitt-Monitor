@@ -1,0 +1,60 @@
+.ui-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.ui-meter-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s2);
+  min-width: 0;
+  font-size: var(--fs-subhead);
+  line-height: var(--lh-subhead);
+}
+.ui-meter-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--label);
+  font-weight: 500;
+}
+.ui-meter-value {
+  flex: none;
+  color: var(--label-2);
+  font-variant-numeric: tabular-nums;
+}
+.ui-meter-track {
+  --_h: 6px;
+  position: relative;
+  height: var(--_h);
+  border-radius: var(--r-capsule);
+  /* a lighter step of the same hue, so state reads across the whole bar */
+  background: color-mix(in srgb, var(--_fill) 17%, transparent);
+  overflow: hidden;
+}
+.ui-meter[data-size='small'] .ui-meter-track {
+  --_h: 4px;
+}
+.ui-meter[data-size='large'] .ui-meter-track {
+  --_h: 10px;
+}
+.ui-meter-fill {
+  /* width (not scaleX) keeps the round data-end; absolutely positioned, so only this box re-lays out */
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: calc(var(--_v) * 100%);
+  min-width: calc(var(--_nz, 0) * var(--_h));
+  border-radius: var(--r-capsule);
+  background: var(--_fill);
+  transition:
+    width var(--dur-snappy) var(--spring-snappy),
+    background-color 300ms ease;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-meter-fill {
+    transition: none;
+  }
+}
