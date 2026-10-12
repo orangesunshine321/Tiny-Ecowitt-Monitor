@@ -1,7 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { ConfigSchema, type Config } from '../server/config.js';
-import { buildServiceDefs, guessIcon, pickWebPort, primaryAddress, publishedHost, slugify, titleCase } from '../server/health/discovery.js';
-import type { DockerContainer, Guest, GuestInventory, GuestIp } from '../shared/types.js';
+import {
+  ANY_ANSWER,
+  buildServiceDefs,
+  findNativeApps,
+  guessIcon,
+  pickPort,
+  pickWebPort,
+  primaryAddress,
+  processMatches,
+  publishedHost,
+  slugify,
+  titleCase,
+} from '../server/health/discovery.js';
+import type { DockerContainer, Guest, GuestInventory, GuestIp, ListeningPort } from '../shared/types.js';
 
 function servicesConfig(services: Record<string, unknown> = {}): Config['services'] {
   return ConfigSchema.parse({
@@ -133,8 +145,12 @@ describe('buildServiceDefs', () => {
         check: { type: 'http', target: 'http://10.10.20.31:8096/' },
         alert: true,
       },
-      target: { type: 'http', target: 'http://10.10.20.31:8096/', insecureTls: true, timeoutMs: 5000 },
+      // any answer below 500 means the app is there (401/403/404 at "/" are normal)
+      target: { type: 'http', target: 'http://10.10.20.31:8096/', insecureTls: true, timeoutMs: 5000, expectStatus: [...ANY_ANSWER] },
+      guessed: 'http://10.10.20.31:8096/',
     });
+    expect(ANY_ANSWER[0]).toBe(200);
+    expect(ANY_ANSWER.at(-1)).toBe(499);
     expect(byId.get('docker-102-qbittorrent')!.base.url).toBe('http://10.10.20.31:8080');
     expect(byId.get('docker-102-nginx')!.base.url).toBe('https://10.10.20.31'); // 443 → https, default port dropped
     expect(byId.get('docker-105-immich_server')!.base).toMatchObject({ icon: 'immich', group: 'apps', url: 'http://10.10.20.40:2283' });
@@ -294,5 +310,203 @@ describe('buildServiceDefs', () => {
   it('ignores guest addresses that are not IP literals', () => {
     expect(primaryAddress([ip4('evil.example/x'), ip4('10.10.20.31')])).toBe('10.10.20.31');
     expect(primaryAddress([{ address: 'not-an-ip', family: 6, source: 'guest-agent' }])).toBeUndefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────── checks that fit the port, addresses, native apps
+
+describe('port choice for containers', () => {
+  it('skips database and SSH only containers; MQTT gets a TCP check; known images pick their web UI', () => {
+    expect(pickPort({ image: 'postgres:16' }, [tcp(5432)])).toBeUndefined();
+    expect(pickPort({ image: 'redis:7' }, [tcp(6379)])).toBeUndefined();
+    expect(pickPort({ image: 'linuxserver/openssh-server' }, [tcp(2222, 22)])).toBeUndefined();
+    expect(pickPort({ image: 'eclipse-mosquitto:2' }, [tcp(1883), tcp(9001)])).toMatchObject({ port: { hostPort: 1883 }, mode: 'tcp', icon: 'mosquitto' });
+    expect(pickPort({ image: 'acme/broker' }, [tcp(1883)])).toMatchObject({ mode: 'tcp' });
+    expect(pickPort({ image: 'syncthing/syncthing' }, [tcp(22000), tcp(8384)])).toMatchObject({ port: { hostPort: 8384 }, mode: 'http' });
+    expect(pickPort({ image: 'portainer/portainer-ce:2.21' }, [tcp(8000), tcp(9443)])).toMatchObject({ port: { hostPort: 9443 }, mode: 'https', icon: 'portainer' });
+    expect(pickPort({ image: 'jc21/nginx-proxy-manager:2' }, [tcp(80), tcp(443), tcp(81)])).toMatchObject({ port: { hostPort: 81 }, mode: 'http' });
+    expect(pickPort({ image: 'plexinc/pms-docker' }, [tcp(32400)])).toMatchObject({ mode: 'http', path: '/web', icon: 'plex' });
+    expect(pickPort({ image: 'lscr.io/linuxserver/code-server' }, [tcp(8443)])).toMatchObject({ mode: 'http' }); // plain HTTP on 8443
+    // unknown images: a web port, else any port not known to be non-HTTP, else TCP
+    expect(pickPort({ image: 'acme/app' }, [tcp(5432), tcp(2283)])).toMatchObject({ port: { hostPort: 2283 }, mode: 'http' });
+    expect(pickPort({ image: 'acme/app' }, [tcp(9443)])).toMatchObject({ mode: 'https' });
+    expect(pickPort({ image: 'acme/app' }, [tcp(6881), tcp(22000)])).toMatchObject({ port: { hostPort: 6881 }, mode: 'tcp' });
+  });
+
+  it('builds TCP entries without a link, skips databases, and takes check settings from overrides', () => {
+    const base = servicesConfig();
+    // overrides as server/config.ts declares them (check, expectStatus, insecureTls)
+    const services = { ...base, overrides: { grafana: { check: 'tcp' }, kuma: { expectStatus: [200], insecureTls: false } } } as Config['services'];
+    const defs = buildServiceDefs({
+      services,
+      guests: [guest(102, 'docker-media', [ip4('10.10.20.31')])],
+      inventory: {
+        '102': inventory(102, [
+          container('db', 'postgres:16', [tcp(5432)]),
+          container('mqtt', 'eclipse-mosquitto:2', [tcp(1883)]),
+          container('grafana', 'grafana/grafana', [tcp(3000)]),
+          container('kuma', 'louislam/uptime-kuma:2', [tcp(3001)]),
+        ]),
+      },
+    });
+    const byId = new Map(defs.map((d) => [d.base.id, d]));
+    expect([...byId.keys()]).toEqual(['docker-102-mqtt', 'docker-102-grafana', 'docker-102-kuma']);
+    expect(byId.get('docker-102-mqtt')).toMatchObject({
+      base: { check: { type: 'tcp', target: '10.10.20.31:1883' }, icon: 'mosquitto' },
+      target: { type: 'tcp', target: '10.10.20.31:1883' },
+    });
+    expect(byId.get('docker-102-mqtt')!.base.url).toBeUndefined();
+    expect(byId.get('docker-102-grafana')!.target).toEqual({ type: 'tcp', target: '10.10.20.31:3000', insecureTls: true, timeoutMs: 5000 });
+    expect(byId.get('docker-102-grafana')!.guessed).toBeUndefined(); // the user's check is not re-learned
+    expect(byId.get('docker-102-kuma')!.target).toEqual({ type: 'http', target: 'http://10.10.20.31:3001/', insecureTls: false, expectStatus: [200], timeoutMs: 5000 });
+  });
+
+  it('a configured item named like a container on the same guest is that container', () => {
+    const services = servicesConfig({ items: [{ name: 'Jellyfin', url: 'https://jellyfin.home.lan', vmid: 102 }] });
+    const defs = buildServiceDefs({
+      services,
+      guests: [guest(102, 'docker-media', [ip4('10.10.20.31')])],
+      inventory: { '102': inventory(102, [container('jellyfin', 'jellyfin/jellyfin', [tcp(8096)])]) },
+    });
+    expect(defs.map((d) => d.base.id)).toEqual(['jellyfin']);
+  });
+
+  it('applies a learned protocol while discovery still guesses the same target', () => {
+    const media = guest(102, 'docker-media', [ip4('10.10.20.31')]);
+    const inv = { '102': inventory(102, [container('broker', 'acme/broker', [tcp(7000)])]) };
+    const services = servicesConfig();
+    const plain = buildServiceDefs({ services, guests: [media], inventory: inv });
+    expect(plain[0]).toMatchObject({ base: { url: 'http://10.10.20.31:7000' }, guessed: 'http://10.10.20.31:7000/' });
+    const learned = new Map([['docker-102-broker', { mode: 'tcp' as const, guessed: 'http://10.10.20.31:7000/' }]]);
+    const asTcp = buildServiceDefs({ services, guests: [media], inventory: inv, learned })[0]!;
+    expect(asTcp.base.url).toBeUndefined();
+    expect(asTcp.base.check).toEqual({ type: 'tcp', target: '10.10.20.31:7000' });
+    expect(asTcp.target).toEqual({ type: 'tcp', target: '10.10.20.31:7000', insecureTls: true, timeoutMs: 5000 });
+    expect(asTcp.guessed).toBe('http://10.10.20.31:7000/');
+    const tls = new Map([['docker-102-broker', { mode: 'https' as const, guessed: 'http://10.10.20.31:7000/' }]]);
+    expect(buildServiceDefs({ services, guests: [media], inventory: inv, learned: tls })[0]!.base.url).toBe('https://10.10.20.31:7000');
+    // the guess changed (new address): what was learned no longer applies
+    const moved = buildServiceDefs({ services, guests: [guest(102, 'docker-media', [ip4('10.10.20.99')])], inventory: inv, learned })[0]!;
+    expect(moved.target!.type).toBe('http');
+  });
+});
+
+describe('guest address preference', () => {
+  it('prefers preferSubnets, then the Proxmox host /24, then private addresses (a guest on an IoT VLAN and the LAN)', () => {
+    const ips = [ip4('192.168.50.20'), ip4('10.10.10.20')];
+    expect(primaryAddress(ips)).toBe('192.168.50.20'); // no hints: interface order
+    expect(primaryAddress(ips, { hostAddress: '10.10.10.5' })).toBe('10.10.10.20');
+    expect(primaryAddress(ips, { preferSubnets: ['192.168.50.0/24'], hostAddress: '10.10.10.5' })).toBe('192.168.50.20');
+    expect(primaryAddress(ips, { preferSubnets: ['10.10.10.20'] })).toBe('10.10.10.20');
+    expect(primaryAddress([ip4('10.1.1.1')], { preferSubnets: ['nonsense', '10.1.0.0/99'] })).toBe('10.1.1.1');
+    expect(primaryAddress([ip4('100.101.1.2'), { address: 'fd00::5', family: 6, source: 'guest-agent' }])).toBe('100.101.1.2');
+    expect(primaryAddress([ip4('169.254.3.3'), { address: '2001:db8::5', family: 6, source: 'guest-agent' }])).toBe('[2001:db8::5]');
+  });
+
+  it('discovered entries use it (services.preferSubnets, the host address)', () => {
+    const multi = guest(102, 'docker-media', [ip4('192.168.50.20'), ip4('10.10.10.20')]);
+    const inv = { '102': inventory(102, [container('jellyfin', 'jellyfin/jellyfin', [tcp(8096)])]) };
+    expect(buildServiceDefs({ services: servicesConfig(), guests: [multi], inventory: inv, hostAddress: '10.10.10.5' })[0]!.base.url).toBe('http://10.10.10.20:8096');
+    const preferIot = { ...servicesConfig(), preferSubnets: ['192.168.50.0/24'] } as Config['services'];
+    expect(buildServiceDefs({ services: preferIot, guests: [multi], inventory: inv, hostAddress: '10.10.10.5' })[0]!.base.url).toBe('http://192.168.50.20:8096');
+  });
+
+  it('a link-local bind address is not usable as a host', () => {
+    const ips: GuestIp[] = [ip4('10.10.20.31'), { address: 'fe80::1', family: 6, source: 'lxc-interfaces' }];
+    expect(publishedHost('fe80::1', '10.10.20.31', ips)).toBe('10.10.20.31');
+  });
+});
+
+function listener(port: number, process: string, address = '0.0.0.0'): ListeningPort {
+  return { proto: 'tcp', address, port, process };
+}
+function nativeInv(vmid: number, ports: ListeningPort[], units: string[] = []): GuestInventory {
+  return { vmid, source: 'pct-exec', collectedAt: 0, ok: true, ips: [], services: units.map((unit) => ({ unit, system: false })), containers: [], ports };
+}
+
+describe('native apps (listening sockets)', () => {
+  const pihole = guest(101, 'pihole', [ip4('10.10.20.2')]);
+
+  it('recognises Pi-hole with Unbound, UniFi, PBS (truncated process name) and Home Assistant by its port', () => {
+    const defs = buildServiceDefs({
+      services: servicesConfig(),
+      guests: [
+        pihole,
+        guest(107, 'unifi', [ip4('10.10.20.6')]),
+        guest(108, 'pbs', [ip4('10.10.20.60')], { type: 'qemu' }),
+        guest(100, 'haos', [ip4('10.10.20.20')], { type: 'qemu' }),
+      ],
+      inventory: {
+        '101': nativeInv(101, [listener(53, 'pihole-FTL'), listener(80, 'lighttpd'), listener(5335, 'unbound', '127.0.0.1'), listener(5335, 'unbound'), listener(22, 'sshd')]),
+        '107': nativeInv(107, [listener(8443, 'java', '*'), listener(8080, 'java', '*'), listener(27117, 'mongod', '127.0.0.1')], ['unifi', 'mongod']),
+        '108': nativeInv(108, [listener(8007, 'proxmox-backup-', '*')]),
+        '100': nativeInv(100, [listener(8123, 'python3')]),
+      },
+    });
+    expect(defs.map((d) => [d.base.id, d.base.url ?? d.base.check.target])).toEqual([
+      ['port-100-home-assistant', 'http://10.10.20.20:8123'],
+      ['port-101-pi-hole', 'http://10.10.20.2/admin'],
+      ['port-101-unbound', '10.10.20.2:5335'],
+      ['port-107-unifi', 'https://10.10.20.6:8443'],
+      ['port-108-proxmox-backup-server', 'https://10.10.20.60:8007'],
+    ]);
+    const ph = defs.find((d) => d.base.id === 'port-101-pi-hole')!;
+    expect(ph.base).toMatchObject({ name: 'Pi-hole', source: 'port', icon: 'pi-hole', group: 'pihole', vmid: 101, guestName: 'pihole', description: 'lighttpd on port 80', alert: true });
+    expect(ph.target).toMatchObject({ type: 'http', target: 'http://10.10.20.2/admin', insecureTls: true });
+    expect(defs.find((d) => d.base.id === 'port-101-unbound')!.target).toMatchObject({ type: 'tcp', target: '10.10.20.2:5335' });
+    expect(defs.find((d) => d.base.id === 'port-108-proxmox-backup-server')!.base.icon).toBe('proxmox');
+  });
+
+  it('dedupes against configured items (same endpoint, or same name on the same guest)', () => {
+    const services = servicesConfig({
+      items: [
+        { name: 'Pi-hole', url: 'http://pihole.lan/admin', vmid: 101 },
+        { name: 'Unbound', check: 'tcp://10.10.20.2:5335' },
+      ],
+    });
+    const defs = buildServiceDefs({ services, guests: [pihole], inventory: { '101': nativeInv(101, [listener(80, 'lighttpd'), listener(53, 'pihole-FTL'), listener(5335, 'unbound')]) } });
+    expect(defs.map((d) => d.base.id)).toEqual(['pi-hole', 'unbound']);
+  });
+
+  it('ignores loopback, docker-proxy (Docker discovery covers it), SSH, databases and unknown software', () => {
+    const defs = buildServiceDefs({
+      services: servicesConfig(),
+      guests: [pihole],
+      inventory: {
+        '101': nativeInv(101, [
+          listener(8096, 'docker-proxy'),
+          listener(3000, 'grafana', '127.0.0.1'),
+          listener(5432, 'postgres'),
+          listener(22, 'sshd'),
+          listener(80, 'nginx'),
+          listener(8080, 'node'),
+        ]),
+      },
+    });
+    expect(defs).toEqual([]);
+  });
+
+  it('honours hide and overrides (by id, slug or name); autoDiscoverPorts: false turns it off', () => {
+    const inv101 = { '101': nativeInv(101, [listener(80, 'lighttpd'), listener(53, 'pihole-FTL'), listener(5335, 'unbound')]) };
+    expect(buildServiceDefs({ services: servicesConfig({ hide: ['port-101-unbound'] }), guests: [pihole], inventory: inv101 }).map((d) => d.base.id)).toEqual([
+      'port-101-pi-hole',
+    ]);
+    expect(buildServiceDefs({ services: servicesConfig({ hide: ['Unbound'] }), guests: [pihole], inventory: inv101 }).map((d) => d.base.id)).toEqual(['port-101-pi-hole']);
+    const renamed = buildServiceDefs({
+      services: servicesConfig({ overrides: { 'Pi-hole': { name: 'DNS', group: 'Network', alert: false } } }),
+      guests: [pihole],
+      inventory: inv101,
+    });
+    expect(renamed[0]!.base).toMatchObject({ id: 'port-101-pi-hole', name: 'DNS', group: 'Network', alert: false });
+    const off = { ...servicesConfig(), autoDiscoverPorts: false } as Config['services'];
+    expect(buildServiceDefs({ services: off, guests: [pihole], inventory: inv101 })).toEqual([]);
+  });
+
+  it('process names cut at 15 characters still match', () => {
+    expect(processMatches('Plex Media Serv', ['Plex Media Server'])).toBe(true);
+    expect(processMatches('transmission-da', ['transmission-daemon'])).toBe(true);
+    expect(processMatches('trans', ['transmission-daemon'])).toBe(false);
+    expect(processMatches(undefined, ['x'])).toBe(false);
+    expect(findNativeApps(nativeInv(1, [listener(32400, 'Plex Media Serv')])).map((a) => a.app.slug)).toEqual(['plex']);
   });
 });

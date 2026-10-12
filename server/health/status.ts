@@ -6,7 +6,8 @@
  * sample: same answer to within one bucket at the window edge, but a fixed ~288 entries per service on disk.
  */
 import type { HealthCheckResult } from '../context.js';
-import type { ServiceCheckSample, ServiceStatus } from '../../shared/types.js';
+import type { ServiceCheckSample, ServiceEntry, ServiceStatus } from '../../shared/types.js';
+import type { LearnedProtocol } from './discovery.js';
 
 export const HISTORY_SAMPLES = 90;
 export const BUCKET_MS = 5 * 60_000;
@@ -34,6 +35,13 @@ export interface ServiceState {
    * so an unchanged status keeps its lastChange.
    */
   restored?: ServiceStatus;
+  /** at least one check has succeeded (a discovered service alerts only once it was seen working) */
+  everUp?: boolean;
+  /** protocol learned for a discovered service whose guessed check did not fit */
+  learned?: LearnedProtocol;
+  /** leaf certificate of an https check, and when it was read */
+  tls?: NonNullable<ServiceEntry['tls']>;
+  tlsCheckedAt?: number;
 }
 
 export interface StatusOptions {
@@ -70,11 +78,18 @@ export function uptime24h(buckets: readonly UptimeBucket[], now: number): number
   return total ? Math.round((ok / total) * 10_000) / 10_000 : undefined;
 }
 
-function withStatus(prev: ServiceState, next: Omit<ServiceState, 'lastChange' | 'restored'>, now: number): ServiceState {
+type StatusFields = Omit<ServiceState, 'lastChange' | 'restored' | 'everUp' | 'learned' | 'tls' | 'tlsCheckedAt'>;
+
+function withStatus(prev: ServiceState, next: StatusFields, now: number, ok = false): ServiceState {
   const basis = prev.status === 'unknown' && prev.restored ? prev.restored : prev.status;
   const out: ServiceState = { ...next, lastChange: next.status !== basis ? now : (prev.lastChange ?? now) };
   if (out.latencyMs === undefined) delete out.latencyMs;
   if (out.message === undefined) delete out.message;
+  // facts about the service that outlive a status change
+  if (prev.everUp || ok) out.everUp = true;
+  if (prev.learned) out.learned = prev.learned;
+  if (prev.tls) out.tls = prev.tls;
+  if (prev.tlsCheckedAt !== undefined) out.tlsCheckedAt = prev.tlsCheckedAt;
   return out;
 }
 
@@ -118,6 +133,7 @@ export function applyCheck(prev: ServiceState, r: HealthCheckResult, now: number
         buckets,
       },
       now,
+      true,
     );
   }
   const failures = prev.failures + 1;
@@ -168,6 +184,10 @@ export interface PersistedState {
   h: string;
   /** buckets: "<t / BUCKET_MS>:<ok>:<total>" joined by "," */
   b: string;
+  everUp?: boolean;
+  learned?: LearnedProtocol;
+  tls?: NonNullable<ServiceEntry['tls']>;
+  tlsCheckedAt?: number;
 }
 
 const STATUSES: readonly ServiceStatus[] = ['up', 'slow', 'down', 'unknown', 'paused'];
@@ -223,6 +243,20 @@ export function restoreState(raw: unknown): ServiceState | undefined {
   if (typeof r.lastChange === 'number') st.lastChange = r.lastChange;
   if (typeof r.message === 'string') st.message = r.message;
   if (r.status && STATUSES.includes(r.status) && r.status !== 'unknown') st.restored = r.status;
+  // files written before `everUp` existed: a successful sample or an up status proves it
+  if (r.everUp === true || st.history.some((h) => h.ok) || st.buckets.some((b) => b.ok > 0) || r.status === 'up' || r.status === 'slow') st.everUp = true;
+  const learned = r.learned as Partial<LearnedProtocol> | undefined;
+  if (learned && (learned.mode === 'http' || learned.mode === 'https' || learned.mode === 'tcp') && typeof learned.guessed === 'string') {
+    st.learned = { mode: learned.mode, guessed: learned.guessed };
+  }
+  const tls = r.tls as Partial<NonNullable<ServiceEntry['tls']>> | undefined;
+  if (tls && typeof tls.notAfter === 'number' && Number.isFinite(tls.notAfter)) {
+    st.tls = { notAfter: tls.notAfter };
+    if (typeof tls.issuer === 'string') st.tls.issuer = tls.issuer;
+    if (typeof tls.subject === 'string') st.tls.subject = tls.subject;
+    if (typeof tls.selfSigned === 'boolean') st.tls.selfSigned = tls.selfSigned;
+    if (typeof r.tlsCheckedAt === 'number') st.tlsCheckedAt = r.tlsCheckedAt;
+  }
   return st;
 }
 
@@ -238,5 +272,9 @@ export function persistState(s: ServiceState): PersistedState {
   if (s.lastChecked !== undefined) out.lastChecked = s.lastChecked;
   if (s.lastChange !== undefined) out.lastChange = s.lastChange;
   if (s.message !== undefined) out.message = s.message;
+  if (s.everUp) out.everUp = true;
+  if (s.learned) out.learned = { ...s.learned };
+  if (s.tls) out.tls = { ...s.tls };
+  if (s.tlsCheckedAt !== undefined) out.tlsCheckedAt = s.tlsCheckedAt;
   return out;
 }

@@ -10,11 +10,11 @@ const emptyData = {} as RuleData; // the scripted rules below don't read data
 
 /** A scripted rule: returns whatever `state.conds` / `state.carry` hold at evaluation time. */
 function scripted(kind: RuleKind) {
-  const state: { conds: Condition[]; carry?: boolean; throws?: boolean; sinceKey?: string } = { conds: [] };
+  const state: { conds: Condition[]; carry?: boolean; throws?: boolean; sinceKey?: string; silent?: string[]; carryPrefixes?: string[] } = { conds: [] };
   const rule: Rule = (c) => {
     if (state.throws) throw new Error('boom');
     if (state.sinceKey) c.since(state.sinceKey);
-    return { conditions: state.conds, carryAll: state.carry };
+    return { conditions: state.conds, carryAll: state.carry, silentResolve: state.silent, carryPrefixes: state.carryPrefixes };
   };
   return { state, rule };
 }
@@ -210,5 +210,131 @@ describe('AlertEngine', () => {
     expect(engine.serialize()).toMatchObject({ since: { c: 5 }, seenUpids: ['u'], backupIssues: [] });
     engine.restore(null);
     engine.restore('nope');
+  });
+});
+
+describe('AlertEngine: quiet alerts and silent resolutions', () => {
+  it('a quiet condition is shown but never pushed, nor is its resolution', () => {
+    const { s, engine, run } = setup();
+    s.state.conds = [cond('dev', { severity: 'info', quiet: true })];
+    const fired = run(T0);
+    expect(fired.emitted).toHaveLength(1);
+    expect(fired.notifications).toEqual([]);
+    s.state.conds = [];
+    const resolved = run(T0 + MIN);
+    expect(resolved.emitted).toEqual([expect.objectContaining({ resolved: true })]);
+    expect(resolved.notifications).toEqual([]);
+    expect(engine.view().active).toEqual([]);
+  });
+
+  it('a quiet alert that turns into a real one (warning) is pushed then', () => {
+    const { s, run } = setup();
+    s.state.conds = [cond('dev', { severity: 'info', quiet: true })];
+    run(T0);
+    s.state.conds = [cond('dev', { severity: 'warning' })];
+    expect(run(T0 + MIN).notifications).toEqual([{ event: expect.objectContaining({ severity: 'warning' }), recovery: false }]);
+    s.state.conds = [];
+    expect(run(T0 + 2 * MIN).notifications).toEqual([expect.objectContaining({ recovery: true })]);
+  });
+
+  it('silentResolve resolves without a recovery push, even inside a carried prefix', () => {
+    const { s, run } = setup();
+    s.state.conds = [cond('a'), cond('b')];
+    run(T0);
+    s.state.conds = [];
+    s.state.carryPrefixes = ['service_down:'];
+    s.state.silent = ['service_down:b'];
+    const r = run(T0 + MIN);
+    expect(r.emitted).toEqual([expect.objectContaining({ key: 'service_down:b', resolved: true })]);
+    expect(r.notifications).toEqual([]);
+  });
+
+  it('quiet survives a restart', () => {
+    const a = setup();
+    a.s.state.conds = [cond('dev', { severity: 'info', quiet: true })];
+    a.run(T0);
+    const b = setup();
+    b.engine.restore(JSON.parse(JSON.stringify(a.engine.serialize())));
+    b.s.state.conds = [];
+    expect(b.run(T0 + MIN).notifications).toEqual([]);
+  });
+});
+
+describe('AlertEngine: acknowledge (snooze)', () => {
+  it('snoozes by id or key; a snoozed alert is not re-pushed and resolves without a recovery push', () => {
+    const { s, engine, run } = setup(0); // no cooldown: only the snooze holds pushes back
+    s.state.conds = [cond('jf')];
+    run(T0);
+    const ev = engine.acknowledge('id1', undefined, T0 + MIN);
+    expect(ev).toMatchObject({ id: 'id1', acknowledged: { at: T0 + MIN } });
+    expect(ev!.acknowledged!.until).toBeUndefined();
+    expect(engine.view().active[0]!.acknowledged).toEqual({ at: T0 + MIN });
+    expect(engine.view().recent[0]!.acknowledged).toEqual({ at: T0 + MIN });
+    expect(engine.acknowledge('service_down:jf', 2, T0 + MIN)!.acknowledged).toEqual({ at: T0 + MIN, until: T0 + MIN + 2 * 3600_000 });
+    expect(engine.acknowledge('nope', 1, T0)).toBeUndefined();
+    engine.acknowledge('id1', undefined, T0 + MIN);
+    s.state.conds = [cond('jf', { body: 'HTTP 504' })];
+    expect(run(T0 + 2 * MIN).notifications).toEqual([]);
+    s.state.conds = [];
+    const res = run(T0 + 3 * MIN);
+    expect(res.emitted).toEqual([expect.objectContaining({ resolved: true })]);
+    expect(res.emitted[0]!.acknowledged).toBeUndefined(); // it clears with the resolution
+    expect(res.notifications).toEqual([]);
+    // the next occurrence is a new alert, not snoozed, pushed as usual
+    s.state.conds = [cond('jf')];
+    expect(run(T0 + 4 * MIN).notifications).toHaveLength(1);
+    expect(engine.view().active[0]!.acknowledged).toBeUndefined();
+  });
+
+  it('a severity increase is pushed and ends the snooze', () => {
+    const { s, engine, run } = setup();
+    s.state.conds = [cond('disk', { severity: 'warning' })];
+    run(T0);
+    engine.acknowledge('id1', 24, T0 + MIN);
+    s.state.conds = [cond('disk', { severity: 'critical' })];
+    const esc = run(T0 + 2 * MIN);
+    expect(esc.notifications).toEqual([{ event: expect.objectContaining({ severity: 'critical' }), recovery: false }]);
+    expect(engine.view().active[0]!.acknowledged).toBeUndefined();
+  });
+
+  it('a timed snooze runs out with a reminder push and asks for a wake-up at its end', () => {
+    const { s, engine, run } = setup();
+    s.state.conds = [cond('jf')];
+    run(T0);
+    engine.acknowledge('id1', 1, T0 + MIN);
+    const during = run(T0 + 30 * MIN);
+    expect(during.notifications).toEqual([]);
+    expect(during.wakeAt).toBe(T0 + MIN + 3600_000);
+    const after = run(T0 + MIN + 3600_000);
+    expect(after.changed).toBe(true);
+    expect(after.notifications).toEqual([{ event: expect.objectContaining({ id: 'id1' }), recovery: false }]);
+    expect(engine.view().active[0]!.acknowledged).toBeUndefined();
+  });
+
+  it('unacknowledge lifts it; invalid durations are refused with 400', () => {
+    const { s, engine, run } = setup();
+    s.state.conds = [cond('jf')];
+    run(T0);
+    engine.acknowledge('id1', undefined, T0);
+    expect(engine.unacknowledge('id1')!.acknowledged).toBeUndefined();
+    expect(engine.unacknowledge('nope')).toBeUndefined();
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 24 * 400]) {
+      expect(() => engine.acknowledge('id1', bad, T0)).toThrow(expect.objectContaining({ statusCode: 400 }));
+    }
+  });
+
+  it('a snooze survives a restart; garbage in the file is dropped', () => {
+    const a = setup();
+    a.s.state.conds = [cond('jf')];
+    a.run(T0);
+    a.engine.acknowledge('id1', 8, T0 + MIN);
+    const saved = JSON.parse(JSON.stringify(a.engine.serialize()));
+    const b = setup();
+    b.engine.restore(saved);
+    expect(b.engine.view().active[0]!.acknowledged).toEqual({ at: T0 + MIN, until: T0 + MIN + 8 * 3600_000 });
+    saved.active[0].event.acknowledged = { at: 'yesterday' };
+    const c = setup();
+    c.engine.restore(saved);
+    expect(c.engine.view().active[0]!.acknowledged).toBeUndefined();
   });
 });

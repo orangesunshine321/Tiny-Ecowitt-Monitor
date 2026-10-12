@@ -170,3 +170,36 @@ describe('persistence', () => {
     expect(restoreState({ status: 'bogus', history: [{ t: 'x' }], buckets: 3 })).toEqual({ status: 'unknown', failures: 0, history: [], buckets: [] });
   });
 });
+
+describe('facts that outlive a status', () => {
+  it('remembers that a service has worked (everUp), its learned protocol and certificate, across restarts', () => {
+    let s = applyCheck(initialState(), fail(), T0, opts);
+    expect(s.everUp).toBeUndefined();
+    s = applyCheck(s, ok(), T0 + 1000, opts);
+    expect(s.everUp).toBe(true);
+    s = applyCheck(s, fail(), T0 + 2000, opts);
+    expect(s.everUp).toBe(true);
+    s = { ...s, learned: { mode: 'tcp', guessed: 'http://10.0.0.5:7000/' }, tls: { notAfter: T0 + 1e9, issuer: 'R11', selfSigned: false }, tlsCheckedAt: T0 };
+    s = applyResumed(applyPaused(s, T0 + 3000, 'x is stopped'), T0 + 4000);
+    expect(s).toMatchObject({ everUp: true, learned: { mode: 'tcp' }, tls: { issuer: 'R11' }, tlsCheckedAt: T0 });
+    const back = restoreState(JSON.parse(JSON.stringify(persistState(s))))!;
+    expect(back).toMatchObject({
+      everUp: true,
+      learned: { mode: 'tcp', guessed: 'http://10.0.0.5:7000/' },
+      tls: { notAfter: T0 + 1e9, issuer: 'R11', selfSigned: false },
+      tlsCheckedAt: T0,
+    });
+  });
+
+  it('files written before everUp existed: a successful sample or an up status proves it', () => {
+    expect(restoreState({ status: 'down', failures: 3, h: '1:1:5,2:0:', b: '' })!.everUp).toBe(true);
+    expect(restoreState({ status: 'up', failures: 0, h: '', b: '' })!.everUp).toBe(true);
+    expect(restoreState({ status: 'down', failures: 3, h: '2:0:', b: '' })!.everUp).toBeUndefined();
+    expect(restoreState({ status: 'down', failures: 3, h: '', b: '', learned: { mode: 'ftp', guessed: 1 }, tls: { notAfter: 'soon' } })).toMatchObject({
+      status: 'unknown',
+    });
+    const junk = restoreState({ status: 'down', failures: 3, h: '', b: '', learned: { mode: 'ftp', guessed: 1 }, tls: { notAfter: 'soon' } })!;
+    expect(junk.learned).toBeUndefined();
+    expect(junk.tls).toBeUndefined();
+  });
+});

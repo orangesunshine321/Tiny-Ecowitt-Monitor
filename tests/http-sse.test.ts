@@ -55,7 +55,7 @@ const push: PushService = {
   unsubscribe: unused,
   test: unused,
 };
-const alerts: AlertService = { start() {}, stop() {}, push };
+const alerts: AlertService = { start() {}, stop() {}, push, acknowledge: () => undefined, unacknowledge: () => undefined };
 
 // ─────────────────────────────────────────────────────────────── a tiny SSE client
 

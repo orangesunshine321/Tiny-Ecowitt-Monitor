@@ -216,7 +216,7 @@ async function harness(opts: { webRoot?: string; config?: Record<string, unknown
   const proxmox = new FakeProxmox();
   const inventory = new FakeInventory();
   const push = new FakePush();
-  const alerts: AlertService = { start() {}, stop() {}, push };
+  const alerts: AlertService = { start() {}, stop() {}, push, acknowledge: () => undefined, unacknowledge: () => undefined };
   const app = await createHttpServer(ctx, { proxmox, inventory, alerts }, { webRoot: opts.webRoot ?? webRoot });
   return { app, ctx, proxmox, inventory, push };
 }

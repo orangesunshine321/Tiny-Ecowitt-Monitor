@@ -1,6 +1,7 @@
 import type { Config, SshTarget } from './config.js';
 import type { Store } from './state.js';
 import type {
+  AlertEvent,
   GuestInventory,
   HostInventory,
   PushDevice,
@@ -51,7 +52,8 @@ export interface ProxmoxService {
   /** start all pollers (idempotent) */
   start(): void;
   stop(): void;
-  getRrd(target: RrdTarget, timeframe: Timeframe): Promise<RrdPoint[]>;
+  /** at most `maxPoints` points (default 400), downsampled with min/max-preserving buckets; gaps are kept */
+  getRrd(target: RrdTarget, timeframe: Timeframe, opts?: { maxPoints?: number }): Promise<RrdPoint[]>;
   getTaskLog(upid: string, limit?: number): Promise<TaskLog>;
   getSmart(disk: string): Promise<SmartReport>;
   getZfsDetail(name: string): Promise<ZfsPoolDetail>;
@@ -91,6 +93,11 @@ export interface HostHelper {
   host(): Promise<HostInventory | null>;
   /** inventories of running LXCs (pct exec) and agent-enabled running VMs (qm guest exec); one guest when vmid given */
   guests(vmid?: number): Promise<GuestInventory[] | null>;
+  /**
+   * Host facts that need root (helper command "hostinfo"): running vs newest installed kernel, and when the package
+   * lists behind pkgupdates were last refreshed. Null when unavailable.
+   */
+  hostInfo?(): Promise<{ runningKernel?: string; newestKernel?: string; updatesCheckedAt?: number } | null>;
   /** last error message for a helper command (e.g. "inventory", "sensors"), for collector status */
   lastError?(command: string): string | undefined;
 }
@@ -159,4 +166,7 @@ export interface AlertService {
   start(): void;
   stop(): void;
   push: PushService;
+  /** acknowledge/snooze an active alert: no pushes and no badge until `hours` pass (or until it resolves). */
+  acknowledge(id: string, hours?: number): AlertEvent | undefined;
+  unacknowledge(id: string): AlertEvent | undefined;
 }
