@@ -35,21 +35,13 @@
   left: 2px;
   width: calc((100% - 4px) / var(--_n));
   border-radius: var(--r-capsule);
-  background: var(--seg-thumb, #fff);
+  background: var(--seg-thumb, #fff); /* per theme in tokens.css */
   box-shadow:
     0 3px 8px rgb(0 0 0 / 0.12),
     0 1px 1px rgb(0 0 0 / 0.04),
     0 0 0 0.5px rgb(0 0 0 / 0.04);
   transform: translateX(calc(var(--_i) * 100%));
   transition: transform var(--dur-snappy) var(--spring-snappy);
-}
-:root[data-theme='dark'] .ui-seg-thumb {
-  --seg-thumb: rgb(255 255 255 / 0.2);
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .ui-seg-thumb {
-    --seg-thumb: rgb(255 255 255 / 0.2);
-  }
 }
 .ui-seg[data-none] .ui-seg-thumb {
   opacity: 0;

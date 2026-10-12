@@ -1,8 +1,9 @@
 /** Settings → Appearance: theme, Reduce Transparency and the departure board's sound (all stored per device). */
-import { Contrast, Moon, Sun, SunMoon, TrainFront } from 'lucide-react';
-import { ListGroup, ListRow, SegmentedControl, Toggle } from '../../components';
+import { Binary, Contrast, Moon, Sun, SunMoon, TrainFront } from 'lucide-react';
+import { ListGroup, ListRow, Toggle } from '../../components';
 import { playTestClack, unlockBoardAudio } from '../../board/audio';
 import { setPref, usePrefs, type ThemePref } from '../../prefs';
+import { THEME_LABEL, ThemePicker } from './ThemePicker';
 import { ListItem } from './ui';
 
 /** Web Audio follows the iPhone's Ring/Silent switch; other devices have nothing to explain. */
@@ -14,17 +15,20 @@ function isIphone(): boolean {
   }
 }
 
-const THEMES: { value: ThemePref; label: string }[] = [
-  { value: 'system', label: 'System' },
-  { value: 'light', label: 'Light' },
-  { value: 'dark', label: 'Dark' },
-];
+const THEME_ICON: Record<ThemePref, typeof Sun> = { system: SunMoon, light: Sun, dark: Moon, matrix: Binary };
+
+const THEME_NOTE: Record<ThemePref, string> = {
+  system: 'Follows this device’s light or dark appearance',
+  light: 'Always light',
+  dark: 'Always dark',
+  matrix: 'Green phosphor on black glass',
+};
 
 export function AppearanceSection() {
   const theme = usePrefs((p) => p.theme);
   const reduceTransparency = usePrefs((p) => p.reduceTransparency);
   const boardSound = usePrefs((p) => p.boardSound);
-  const ThemeIcon = theme === 'dark' ? Moon : theme === 'light' ? Sun : SunMoon;
+  const ThemeIcon = THEME_ICON[theme];
 
   const setBoardSound = (on: boolean) => {
     setPref('boardSound', on);
@@ -34,14 +38,19 @@ export function AppearanceSection() {
 
   return (
     <ListGroup header="Appearance" footer="These settings are saved on this device only.">
-      <ListItem className="set-inline set-inline-tight">
-        <span className="ui-row-icon set-inline-icon" aria-hidden="true">
-          <ThemeIcon />
-        </span>
-        <div className="set-inline-text">
-          <div className="set-inline-title">Theme</div>
+      <ListItem className="set-theme">
+        <div className="set-inline set-inline-tight set-theme-head">
+          <span className="ui-row-icon set-inline-icon" aria-hidden="true">
+            <ThemeIcon />
+          </span>
+          <div className="set-inline-text">
+            <div className="set-inline-title">Theme</div>
+            <div className="set-inline-sub" aria-live="polite">
+              {THEME_LABEL[theme]} · {THEME_NOTE[theme]}
+            </div>
+          </div>
         </div>
-        <SegmentedControl ariaLabel="Theme" size="small" options={THEMES} value={theme} onChange={(v) => setPref('theme', v)} />
+        <ThemePicker />
       </ListItem>
       <ListRow
         icon={<Contrast strokeWidth={2} />}

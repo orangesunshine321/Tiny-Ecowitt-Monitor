@@ -188,3 +188,26 @@
     transition: none;
   }
 }
+
+/* ───────────────────────────── Matrix */
+
+/* the coverage ring's glow takes the ring's own colour (it is amber or red when coverage is poor, never a green halo) */
+:root[data-theme='matrix'] .bk-summary-main .ui-ring-dial svg {
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--_ring) 34%, transparent));
+}
+/* the page's hero figure is lit like the other hero numbers; mono figures sit a little tighter */
+:root[data-theme='matrix'] .bk-hero {
+  letter-spacing: -0.03em;
+  text-shadow: var(--matrix-glow);
+}
+:root[data-theme='matrix'] .bk-job-when {
+  letter-spacing: -0.03em;
+}
+@media (prefers-contrast: more) {
+  :root[data-theme='matrix'] .bk-summary-main .ui-ring-dial svg {
+    filter: none;
+  }
+  :root[data-theme='matrix'] .bk-hero {
+    text-shadow: none;
+  }
+}

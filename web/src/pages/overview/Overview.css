@@ -527,3 +527,8 @@
 .ov-temp[data-tone='crit'] {
   color: color-mix(in oklab, var(--status-crit) 74%, var(--label));
 }
+
+/* Matrix: mono figures sit a little tighter than the rounded face they replace (ring glow: Ring.css) */
+:root[data-theme='matrix'] .ov-gcount-value {
+  letter-spacing: -0.03em;
+}

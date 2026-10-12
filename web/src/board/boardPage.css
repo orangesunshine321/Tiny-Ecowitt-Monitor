@@ -1,6 +1,7 @@
 /*
  * Fullscreen departure board page (no app chrome). The page is always dark: a station board is a physical object.
  * Glass is only used for the floating controls (top right), which sit beside the board, never around the flaps.
+ * In the Matrix theme the board turns green phosphor with a faint CRT scanline cover (end of this file).
  */
 
 .bd-page {
@@ -21,7 +22,8 @@
   --glass-shadow: 0 10px 28px -8px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.35);
   --glass-sheen-1: rgb(255 255 255 / 0.14);
   --glass-sheen-2: rgb(255 255 255 / 0.03);
-  --bd-amber: #ffb000;
+  --bd-accent: #ffb000; /* clock colon, current page dot (phosphor green in Matrix) */
+  --bd-warn: #ffb000; /* the offline / stale note: stays amber in every theme */
 
   color-scheme: dark;
   position: fixed;
@@ -120,8 +122,8 @@
   gap: 5px;
 }
 .bd-clock .flap {
-  color: var(--bd-amber);
-  text-shadow: 0 0 calc(var(--ch) * 0.14) rgb(255 176 0 / 0.42);
+  color: var(--flap-accent);
+  text-shadow: 0 0 calc(var(--ch) * 0.14) var(--flap-accent-glow);
 }
 .bd-clock-colon {
   display: inline-flex;
@@ -133,7 +135,7 @@
   width: calc(var(--cw) * 0.16);
   height: calc(var(--cw) * 0.16);
   border-radius: 50%;
-  background: var(--bd-amber);
+  background: var(--bd-accent);
   box-shadow: 0 0 6px rgb(255 176 0 / 0.6);
   animation: bd-colon 2s steps(1, end) infinite;
 }
@@ -252,7 +254,7 @@
   text-overflow: ellipsis;
 }
 .bd-note[data-tone='warn'] {
-  color: var(--bd-amber);
+  color: var(--bd-warn);
 }
 .bd-pages {
   grid-column: 2;
@@ -286,7 +288,7 @@
     transform 300ms var(--spring-bouncy);
 }
 .bd-page-dot[aria-current='page']::before {
-  background: var(--bd-amber);
+  background: var(--bd-accent);
   box-shadow: 0 0 8px rgb(255 176 0 / 0.6);
   transform: scale(1.15);
 }
@@ -315,16 +317,17 @@
 .bd-legend i:first-child {
   margin-left: 0;
 }
+/* lamp colours come from board.css (--lamp-*), so the legend always matches the lamps */
 .bd-legend i[data-lamp='green'] {
-  background: #3ddc68;
+  background: var(--lamp-green);
   box-shadow: 0 0 6px rgb(61 220 104 / 0.6);
 }
 .bd-legend i[data-lamp='amber'] {
-  background: #ffb000;
+  background: var(--lamp-amber);
   box-shadow: 0 0 6px rgb(255 176 0 / 0.6);
 }
 .bd-legend i[data-lamp='red'] {
-  background: #ff453a;
+  background: var(--lamp-red);
   box-shadow: 0 0 6px rgb(255 69 58 / 0.6);
 }
 
@@ -388,5 +391,151 @@
   }
   .bd-frame {
     padding: 10px 12px;
+  }
+}
+
+/* ═════════════════════════════ Matrix: green phosphor station board ═════════════════════════════
+ *
+ * Header sign, title, clock, page dots and captions go phosphor green (mono for the title and the small print);
+ * the housing becomes black-green with a green rim light and bloom; the glass cover keeps its top glare and slow
+ * reflection sweep (green-tinted) and adds a static CRT scanline texture with a soft vignette. Nothing new animates.
+ * The page colour matches the Matrix status-bar colour (boardModel BOARD_BG.matrix = prefs THEME_COLOR.matrix).
+ */
+:root[data-theme='matrix'] .bd-page {
+  /* Matrix is a dark theme already: the glass controls use its green glass tokens as they are (they still follow
+     Reduce Transparency and Increase Contrast) */
+  --label: inherit;
+  --label-2: inherit;
+  --label-3: inherit;
+  --separator: inherit;
+  --fill-2: inherit;
+  --fill-3: inherit;
+  --fill-4: inherit;
+  --row-hover: inherit;
+  --glass-fill: inherit;
+  --glass-solid: inherit;
+  --glass-rim-hi: inherit;
+  --glass-rim-lo: inherit;
+  --glass-hairline: inherit;
+  --glass-shadow: inherit;
+  --glass-sheen-1: inherit;
+  --glass-sheen-2: inherit;
+  --bd-accent: var(--matrix-green);
+  --bd-warn: var(--status-warn);
+  color: var(--label);
+  background:
+    radial-gradient(120% 70% at 50% -10%, rgb(0 255 102 / 0.075), transparent 60%),
+    radial-gradient(90% 60% at 50% 115%, rgb(0 120 60 / 0.13), transparent 65%), #020604;
+}
+
+/* header: a tinted sign tile (like the Matrix icon tiles), a lit phosphor title, mono small print */
+:root[data-theme='matrix'] .bd-sign-icon {
+  color: var(--matrix-green);
+  background: linear-gradient(160deg, color-mix(in oklab, #00ff66 24%, #030a06), color-mix(in oklab, #00ff66 12%, #020604));
+  box-shadow:
+    inset 0 0 0 0.5px rgb(0 255 102 / 0.6),
+    inset 0 1px 0 rgb(0 255 102 / 0.32),
+    0 0 20px -4px rgb(0 255 102 / 0.45);
+}
+:root[data-theme='matrix'] .bd-sign-icon svg {
+  filter: drop-shadow(0 0 4px rgb(0 255 102 / 0.55));
+}
+:root[data-theme='matrix'] .bd-title {
+  /* the title clips (ellipsis): room for the glow inside its box, without moving the text */
+  margin: -14px;
+  padding: 14px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--matrix-green);
+  text-shadow:
+    0 0 1px rgb(0 255 102 / 0.4),
+    0 0 12px rgb(0 255 102 / 0.36);
+}
+:root[data-theme='matrix'] .bd-station {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  color: rgb(0 255 102 / 0.74);
+}
+:root[data-theme='matrix'] .bd-clock-colon i {
+  box-shadow: 0 0 6px rgb(0 255 102 / 0.7);
+}
+
+/* the housing: black-green, a hairline of green rim light, a soft green bloom around it */
+:root[data-theme='matrix'] .bd-frame {
+  background: linear-gradient(180deg, rgb(0 255 102 / 0.025), transparent 18%), linear-gradient(180deg, #07100b, #030805);
+  box-shadow:
+    inset 0 0 0 1px rgb(0 255 102 / 0.1),
+    inset 0 1px 0 rgb(160 255 195 / 0.09),
+    inset 0 -12px 30px rgb(0 0 0 / 0.5),
+    0 0 0 1px #000,
+    0 30px 60px -24px rgb(0 0 0 / 0.9),
+    0 0 80px -28px rgb(0 255 102 / 0.24);
+}
+
+/* the glass cover: green-tinted glare and reflection sweep, plus static scanlines and a CRT vignette */
+:root[data-theme='matrix'] .bd-sweep {
+  background: linear-gradient(170deg, rgb(150 255 190 / 0.05), transparent 32%);
+}
+:root[data-theme='matrix'] .bd-sweep::before {
+  background: linear-gradient(
+    100deg,
+    transparent 0%,
+    rgb(150 255 190 / 0.025) 38%,
+    rgb(150 255 190 / 0.065) 50%,
+    rgb(150 255 190 / 0.025) 62%,
+    transparent 100%
+  );
+}
+:root[data-theme='matrix'] .bd-sweep::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    repeating-linear-gradient(180deg, transparent 0 2px, rgb(0 0 0 / 0.2) 2px 3px),
+    radial-gradient(130% 115% at 50% 45%, transparent 60%, rgb(0 0 0 / 0.42) 100%);
+}
+
+/* footer: mono small print in the green secondary label colour; the current page in phosphor */
+:root[data-theme='matrix'] .bd-foot {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--label-2);
+}
+:root[data-theme='matrix'] .bd-page-dot::before {
+  background: rgb(0 255 102 / 0.24);
+}
+:root[data-theme='matrix'] .bd-page-dot[aria-current='page']::before {
+  background: var(--bd-accent);
+  box-shadow: 0 0 8px rgb(0 255 102 / 0.75);
+}
+:root[data-theme='matrix'] .bd-page-label {
+  color: rgb(0 255 102 / 0.78);
+}
+:root[data-theme='matrix'] .bd-legend i:is([data-lamp='green'], [data-lamp='amber'], [data-lamp='red']) {
+  box-shadow: 0 0 6px var(--_lg);
+}
+:root[data-theme='matrix'] .bd-legend i[data-lamp='green'] {
+  --_lg: var(--lamp-green-glow);
+}
+:root[data-theme='matrix'] .bd-legend i[data-lamp='amber'] {
+  --_lg: var(--lamp-amber-glow);
+}
+:root[data-theme='matrix'] .bd-legend i[data-lamp='red'] {
+  --_lg: var(--lamp-red-glow);
+}
+
+/* Increase Contrast: no glow, no scanlines or vignette; solid captions */
+@media (prefers-contrast: more) {
+  :root[data-theme='matrix'] .bd-title {
+    text-shadow: none;
+  }
+  :root[data-theme='matrix'] .bd-station,
+  :root[data-theme='matrix'] .bd-page-label {
+    color: var(--matrix-green);
+  }
+  :root[data-theme='matrix'] .bd-sweep::after {
+    display: none;
   }
 }

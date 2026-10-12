@@ -24,3 +24,14 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* Matrix: the rings' phosphor glow takes each ring's own colour (an amber or red ring must not get a green halo).
+   Host rings on Overview and guest rings on the guest page; the Backups coverage ring has the same rule. */
+:root[data-theme='matrix'] :is(.ov-rings, .gd-rings) .ui-ring-dial svg {
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--_ring) 34%, transparent));
+}
+@media (prefers-contrast: more) {
+  :root[data-theme='matrix'] :is(.ov-rings, .gd-rings) .ui-ring-dial svg {
+    filter: none;
+  }
+}

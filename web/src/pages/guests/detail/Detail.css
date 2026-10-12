@@ -519,3 +519,8 @@
   color: var(--label);
   max-width: 76ch;
 }
+
+/* Matrix: mono figures sit a little tighter than the rounded face they replace */
+:root[data-theme='matrix'] .gd-lastbk-when {
+  letter-spacing: -0.03em;
+}

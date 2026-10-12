@@ -429,13 +429,14 @@ a.svc-tile:hover .svc-tile-out {
   }
 }
 
-/* dark: quieter rim */
+/* dark: quieter rim (forced Dark and Matrix too, whatever the OS appearance; matrix.css tints it green) */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) .svc-tile::before {
     opacity: 0.3;
   }
 }
-:root[data-theme='dark'] .svc-tile::before {
+:root[data-theme='dark'] .svc-tile::before,
+:root[data-theme='matrix'] .svc-tile::before {
   opacity: 0.3;
 }
 :root[data-reduce-transparency] .svc-tile {
@@ -463,4 +464,9 @@ a.svc-tile:hover .svc-tile-out {
   a.svc-tile:active {
     transform: none;
   }
+}
+
+/* Matrix: mono figures sit a little tighter than the rounded face they replace */
+:root[data-theme='matrix'] .svc-num {
+  letter-spacing: -0.03em;
 }

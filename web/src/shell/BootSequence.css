@@ -1,0 +1,184 @@
+/*
+ * Matrix boot sequence (BootSequence.tsx): a full-screen near-black terminal over the app for ≤ 2.2 s.
+ *
+ * Classy, not a hacker skin: one calm column of SF Mono lines with a soft phosphor glow, a faint CRT bloom and scan
+ * lines, an Apple-style hairline progress bar, and a quiet "Skip" capsule. It dissolves with opacity + transform only.
+ * The overlay is a sibling of the app (never an ancestor of glass), opaque, and only exists while Matrix is on, so it
+ * reads the Matrix tokens directly (with fallbacks).
+ */
+.boot {
+  position: fixed;
+  inset: 0;
+  z-index: 250;
+  display: grid;
+  place-items: center;
+  padding: max(24px, var(--safe-top, 0px)) max(20px, var(--safe-right, 0px)) max(24px, var(--safe-bottom, 0px))
+    max(20px, var(--safe-left, 0px));
+  background:
+    radial-gradient(90vmax 70vmax at 50% 46%, rgb(0 255 102 / 0.07), transparent 62%),
+    var(--wp-base, #020604);
+  color: var(--matrix-ink, #d9ffe6);
+  font-family: var(--font-mono);
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  contain: strict;
+}
+/* scan lines: 1px of shade every 3px, barely there */
+.boot::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(to bottom, rgb(0 0 0 / 0.22) 0 1px, transparent 1px 3px);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.boot-term {
+  position: relative;
+  z-index: 1;
+  width: min(34rem, 100%);
+  font-size: 15px;
+  line-height: 1.7;
+  letter-spacing: -0.005em;
+  transform-origin: 50% 45%;
+  /* its own layer: typing re-rasters only this small block, never the full-screen gradients behind it */
+  will-change: transform;
+}
+.boot-head {
+  margin: 0 0 14px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--label-2, rgb(170 238 195 / 0.74));
+  animation: boot-in 260ms var(--ease-out, ease-out) both;
+}
+.boot-line {
+  margin: 0;
+  min-height: 1.7em; /* the block never shifts as lines appear */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-shadow: var(--matrix-glow-soft, 0 0 8px rgb(0 255 102 / 0.22));
+}
+.boot-prompt {
+  color: var(--matrix-green, #00ff66);
+}
+.boot-status {
+  font-weight: 600;
+  animation: boot-in 160ms ease-out both;
+}
+.boot-status[data-tone='ok'] {
+  color: var(--status-ok, #2ee6b6);
+}
+.boot-status[data-tone='warn'] {
+  color: var(--status-warn, #ffb224);
+}
+.boot-status[data-tone='dim'] {
+  color: var(--label-2, rgb(170 238 195 / 0.74));
+}
+/* the caret: a phosphor block that follows the typing, then blinks */
+.boot-caret {
+  display: inline-block;
+  width: 0.6em;
+  height: 1.1em;
+  margin-left: 0.08em;
+  vertical-align: -0.18em;
+  background: var(--matrix-green, #00ff66);
+  box-shadow: 0 0 10px rgb(0 255 102 / 0.55);
+}
+.boot-caret[data-blink] {
+  animation: boot-blink 1s steps(1, end) infinite;
+}
+
+/* Apple-style boot progress: a hairline capsule track with a phosphor fill (transform only) */
+.boot-progress {
+  position: relative;
+  height: 2px;
+  margin-top: 22px;
+  border-radius: 1px;
+  background: rgb(0 255 102 / 0.12);
+  overflow: hidden;
+}
+.boot-progress i {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--matrix-green, #00ff66);
+  box-shadow: 0 0 8px rgb(0 255 102 / 0.6);
+  transform-origin: 0 50%;
+  transform: scaleX(0);
+  will-change: transform;
+}
+
+.boot-skip {
+  position: absolute;
+  z-index: 1;
+  left: 50%;
+  bottom: max(28px, calc(var(--safe-bottom, 0px) + 18px));
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transform: translateX(-50%);
+  font-size: 12px;
+  color: var(--label-2, rgb(170 238 195 / 0.74));
+  white-space: nowrap;
+  animation: boot-in 300ms 200ms var(--ease-out, ease-out) both;
+}
+.boot-skip-pill {
+  padding: 5px 14px;
+  border-radius: 999px;
+  border: 0.5px solid rgb(0 255 102 / 0.32);
+  background: rgb(0 255 102 / 0.06);
+  color: var(--matrix-ink, #d9ffe6);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+/* touch devices: the capsule says it all (any tap skips) */
+@media (hover: none) {
+  .boot-skip-hint {
+    display: none;
+  }
+}
+
+/*
+ * the dissolve: the overlay fades out while the text drifts up and grows a touch, as if the screen let go of it. It
+ * stays hit-testable until it unmounts (≤ 400 ms): the tap that skipped it must not land on a link underneath.
+ */
+.boot[data-phase='out'] {
+  opacity: 0;
+  transition: opacity var(--boot-out, 400ms) var(--ease-in, ease-in);
+}
+.boot[data-phase='out'] .boot-term {
+  transform: translateY(-10px) scale(1.03);
+  transition: transform var(--boot-out, 400ms) var(--ease-out, ease-out);
+}
+
+@keyframes boot-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes boot-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (max-width: 767.98px) {
+  .boot-term {
+    font-size: 13px;
+  }
+  .boot-head {
+    font-size: 10px;
+  }
+}
+@media (prefers-contrast: more) {
+  .boot::after {
+    display: none;
+  }
+  .boot-line {
+    text-shadow: none;
+  }
+}

@@ -146,6 +146,16 @@ export function pageRows(rows: readonly DepartureRow[], page: number, perPage: n
   return slice;
 }
 
+// ───────────────────────────────────────────────────────────── look
+
+/**
+ * Page colour behind the fullscreen board, per look (also the iOS status bar / Safari toolbar tint while the board is
+ * open). The standard board is a near-black station board; the Matrix board uses the Matrix status-bar colour
+ * (prefs THEME_COLOR.matrix, tokens.css --wp-base), so the bar doesn't change colour when the board opens. Keep in sync
+ * with the .bd-page backgrounds in boardPage.css (tests/web-board-theme.test.ts checks both).
+ */
+export const BOARD_BG = Object.freeze({ standard: '#060607', matrix: '#020604' });
+
 // ───────────────────────────────────────────────────────────── layout
 
 /** Font of the flaps (also set on the board as --flap-font, so measurement and rendering agree). */

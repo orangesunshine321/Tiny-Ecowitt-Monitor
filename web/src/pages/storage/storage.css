@@ -292,3 +292,8 @@
     padding-left: var(--s3);
   }
 }
+
+/* Matrix: mono figures sit a little tighter than the rounded face they replace */
+:root[data-theme='matrix'] .stor-figure-used {
+  letter-spacing: -0.04em;
+}

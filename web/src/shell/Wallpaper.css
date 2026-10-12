@@ -1,6 +1,10 @@
 /*
  * Animated wallpaper (research §1.6): a slow, blurred mesh of four colour blobs that animates only transform, on its
  * own layer. Paused when the page is hidden, still under reduced motion, a calm gradient under Reduce Transparency.
+ *
+ * Matrix ([data-matrix]): no blobs. A static deep-green depth gradient (two soft glows from the Matrix --wp-* tokens,
+ * so the glass has something to refract) under the digital rain canvas (MatrixRain.css). Nothing here animates: the
+ * rain is the only moving layer.
  */
 .wallpaper {
   position: fixed;
@@ -61,6 +65,16 @@
   background-size: 160px 160px;
   mix-blend-mode: overlay;
 }
+/* Matrix: static depth (top-left and bottom-right glows), film grain against banding, then the rain on top */
+.wallpaper-depth {
+  position: absolute;
+  inset: 0;
+  opacity: var(--wp-blob-opacity);
+  background:
+    radial-gradient(70vmax 52vmax at 8% -6%, var(--wp-1), transparent 70%),
+    radial-gradient(64vmax 50vmax at 96% 104%, var(--wp-3), transparent 70%),
+    radial-gradient(44vmax 36vmax at 78% 18%, var(--wp-2), transparent 72%);
+}
 .wallpaper[data-paused] i {
   animation-play-state: paused;
 }
@@ -73,6 +87,7 @@
   background: var(--wp-calm);
 }
 :root[data-reduce-transparency] .wallpaper i,
-:root[data-reduce-transparency] .wallpaper-noise {
+:root[data-reduce-transparency] .wallpaper-noise,
+:root[data-reduce-transparency] .wallpaper-depth {
   display: none;
 }

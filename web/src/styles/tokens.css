@@ -8,6 +8,12 @@
  *    (`:root[data-theme="dark"]`). The two dark blocks are intentionally identical: keep them in sync.
  *  - `prefers-contrast: more` swaps in the Increased Contrast system colours, stronger labels and opaque materials.
  *  - `data-reduce-transparency` (in-app toggle; Safari has no prefers-reduced-transparency) is handled in glass.css.
+ *  - Matrix (`:root[data-theme="matrix"]`) gets the full forced-dark set first (it shares the forced-dark selectors, so it
+ *    never depends on the OS appearance), then its own overrides at the END of this file (same specificity: later
+ *    wins over the light defaults, both dark blocks and the Increase Contrast blocks). Matrix-only component touches
+ *    (mono accents, phosphor glow) live in matrix.css.
+ *  - Component colours that differ per theme are tokens here (never a bare `@media (prefers-color-scheme: dark)` in
+ *    component CSS: that ignores forced Light/Dark/Matrix). See "per-theme component tokens" below.
  */
 
 :root {
@@ -116,6 +122,21 @@
   --wp-blob-opacity: 0.62;
   --wp-noise-opacity: 0.035;
   --wp-calm: linear-gradient(160deg, #e9eef6 0%, #dfe6f1 55%, #e8e3ef 100%);
+
+  /* ── per-theme component tokens (used instead of colour-scheme media queries in component CSS) */
+  --glass-rim-gradient: linear-gradient(
+    140deg,
+    rgb(255 255 255 / 0.7),
+    rgb(255 255 255 / 0.12) 35%,
+    rgb(255 255 255 / 0.04) 60%,
+    rgb(255 255 255 / 0.35)
+  ); /* glass.css ::before bevel */
+  --glass-rim-opacity: 0.8;
+  --glass-glow: rgb(255 255 255 / 0.22); /* pointer glow on [data-glow] glass */
+  --seg-thumb: #fff; /* SegmentedControl thumb */
+  --appicon-tile: linear-gradient(180deg, #ffffff, #f1f1f5); /* AppIcon tile behind brand logos */
+  --appicon-tile-shadow: 0 0 0 0.5px rgb(0 0 0 / 0.1), 0 1px 2px rgb(0 0 0 / 0.08), 0 2px 8px -2px rgb(0 0 0 / 0.08);
+  --spotlight-scrim: rgb(0 0 0 / 0.14);
 
   /* ── radii (concentric: inner = outer − padding) */
   --r-window: 26px;
@@ -270,7 +291,7 @@
     --card-inset: rgb(255 255 255 / 0.05);
     --row-selected: color-mix(in srgb, var(--accent) 24%, transparent);
     --row-hover: rgb(255 255 255 / 0.07);
-  --row-alt: rgb(255 255 255 / 0.028);
+    --row-alt: rgb(255 255 255 / 0.028);
     --focus-ring-color: color-mix(in srgb, var(--accent) 70%, transparent);
     --wp-base: #070a14;
     --wp-1: #0a5fd6;
@@ -280,11 +301,17 @@
     --wp-blob-opacity: 0.58;
     --wp-noise-opacity: 0.045;
     --wp-calm: linear-gradient(160deg, #10131c 0%, #0b0d14 55%, #141019 100%);
+    --glass-rim-opacity: 0.35;
+    --seg-thumb: rgb(255 255 255 / 0.2);
+    --appicon-tile: linear-gradient(180deg, #f2f2f6, #dedee4);
+    --appicon-tile-shadow: 0 0 0 0.5px rgb(255 255 255 / 0.12), 0 2px 8px -2px rgb(0 0 0 / 0.5);
+    --spotlight-scrim: rgb(0 0 0 / 0.36);
   }
 }
 
-/* ───────────────────────────── dark (forced) */
-:root[data-theme='dark'] {
+/* ───────────────────────────── dark (forced) — also the base of Matrix (its overrides are at the end of this file) */
+:root[data-theme='dark'],
+:root[data-theme='matrix'] {
   color-scheme: dark;
   --red: #ff4245;
   --orange: #ff9230;
@@ -355,6 +382,11 @@
   --wp-blob-opacity: 0.58;
   --wp-noise-opacity: 0.045;
   --wp-calm: linear-gradient(160deg, #10131c 0%, #0b0d14 55%, #141019 100%);
+  --glass-rim-opacity: 0.35;
+  --seg-thumb: rgb(255 255 255 / 0.2);
+  --appicon-tile: linear-gradient(180deg, #f2f2f6, #dedee4);
+  --appicon-tile-shadow: 0 0 0 0.5px rgb(255 255 255 / 0.12), 0 2px 8px -2px rgb(0 0 0 / 0.5);
+  --spotlight-scrim: rgb(0 0 0 / 0.36);
 }
 
 /* ───────────────────────────── Increase Contrast (research §2.1 IC columns; §1.6) */
@@ -417,7 +449,8 @@
   }
 }
 @media (prefers-contrast: more) {
-  :root[data-theme='dark'] {
+  :root[data-theme='dark'],
+  :root[data-theme='matrix'] {
     --red: #ff6165;
     --orange: #ffa056;
     --yellow: #fedf43;
@@ -443,5 +476,179 @@
     --glass-hairline: #fff;
     --card-fill: #141416;
     --card-hairline: rgb(255 255 255 / 0.5);
+  }
+}
+
+/* ═════════════════════════════ Matrix ═════════════════════════════
+ *
+ * Green phosphor on near-black Liquid Glass. Applies on top of the forced-dark set above (shared selectors), so it
+ * looks the same whatever the OS appearance is. Classy, not a hacker skin: near-black translucent glass, a
+ * green-tinted rim light, a soft green bloom, phosphor glow only on hero numbers and titles (matrix.css).
+ *
+ * Matrix-only tokens (use them for anything Matrix-specific; they are undefined in the other themes, so always read
+ * them under `:root[data-theme='matrix']` or with a fallback):
+ *   --matrix-green          #00ff66  the phosphor; also --accent and --green in Matrix
+ *   --matrix-green-dim      #00a845  dimmed phosphor (rain trails, inactive glyphs, the board's unlit flaps)
+ *   --matrix-green-deep     #04140b  the darkest green for fills behind phosphor ink (board flaps, tiles)
+ *   --matrix-ink            #d9ffe6  the hot white-mint of a fresh glyph (rain head, lit flap ink)
+ *   --matrix-glow           text-shadow value: the phosphor bloom. Hero numbers and titles only, never body text.
+ *   --matrix-glow-soft      a quieter text-shadow for secondary emphasis (eyebrows, small numbers)
+ *   --matrix-bloom          box-shadow value: soft green bloom around lit chrome (selected controls, focus)
+ *   --matrix-rain-color     glyph colour of the digital rain (wallpaper)
+ *   --matrix-rain-opacity   overall opacity of the rain layer = a head glyph's strength (0.3: the most it can be while
+ *                           --label-2-wp text over a head keeps 4.5:1; trails are drawn at 0.85 of it)
+ *   --font-mono             SF Mono stack (defined for every theme in :root); Matrix maps --font-rounded to it too,
+ *                           so every hero number that uses the rounded face turns mono.
+ *
+ * Status keeps its meaning and stays distinct from the interactive green (always with icon + label):
+ *   accent #00ff66 (phosphor, OKLCH h 148, C .26) · ok #2ee6b6 (mint, h 170, C .16) · warn #ffb224 (amber)
+ *   crit #ff4d5e (red) · info #45c8ff (cyan) · off #7e9787 (green-gray)
+ * Chart series (fixed order green → violet → cyan → amber) pass the dataviz validator in dark mode on --chart-surface.
+ */
+:root[data-theme='matrix'] {
+  color-scheme: dark;
+
+  /* ── Matrix-only */
+  --matrix-green: #00ff66;
+  --matrix-green-dim: #00a845;
+  --matrix-green-deep: #04140b;
+  --matrix-ink: #d9ffe6;
+  --matrix-glow: 0 0 1px rgb(0 255 102 / 0.35), 0 0 10px rgb(0 255 102 / 0.32), 0 0 26px rgb(0 255 102 / 0.12);
+  --matrix-glow-soft: 0 0 8px rgb(0 255 102 / 0.22);
+  --matrix-bloom: 0 0 0 0.5px rgb(0 255 102 / 0.35), 0 0 18px -4px rgb(0 255 102 / 0.45);
+  --matrix-rain-color: #00ff66;
+  --matrix-rain-opacity: 0.3; /* heads at full strength; >= 4.5:1 for --label-2-wp over a head (rain tests) */
+  --font-rounded: var(--font-mono);
+
+  /* ── system colours, phosphor-tuned (decorative tints keep their hue identity) */
+  --red: #ff4d5e;
+  --orange: #ffb224;
+  --yellow: #ffe14d;
+  --green: #00ff66;
+  --mint: #2ee6b6;
+  --teal: #2fd6d0;
+  --cyan: #45c8ff;
+  --blue: #3d9eff;
+  --indigo: #8c93ff;
+  --purple: #c387ff;
+  --pink: #ff6fa8;
+  --brown: #c79c6c;
+  --gray: #7e9787;
+  --gray-2: #566b5e;
+  --gray-3: #3a4b40;
+  --gray-4: #2b3a31;
+  --gray-5: #1c2921;
+  --gray-6: #101a14;
+
+  /* ── labels: mint-white primary, green-tinted secondaries (contrast in tests/web-theme.test.ts) */
+  --label: #e3ffec;
+  --label-2: rgb(170 238 195 / 0.74);
+  --label-3: rgb(150 225 178 / 0.44);
+  --label-4: rgb(150 225 178 / 0.2);
+  --label-2-wp: rgb(180 244 204 / 0.8);
+  --separator: rgb(70 160 105 / 0.4);
+  --separator-opaque: #183223;
+  --hairline: rgb(0 255 102 / 0.12);
+  --fill-1: rgb(70 160 105 / 0.32);
+  --fill-2: rgb(70 160 105 / 0.27);
+  --fill-3: rgb(70 160 105 / 0.2);
+  --fill-4: rgb(70 160 105 / 0.13);
+  --bg: #000;
+  --bg-elevated: #08130c;
+
+  /* ── accent & status */
+  --accent: var(--matrix-green);
+  --on-accent: #00170b;
+  --status-ok: var(--mint);
+  --status-warn: var(--orange);
+  --status-crit: var(--red);
+  --status-off: var(--gray);
+  --status-info: var(--cyan);
+  --meter-ok: var(--accent);
+
+  /* ── charts (validated: node validate_palette.js "<series>" --mode dark --surface <--chart-surface>) */
+  --series-1: #05b047;
+  --series-2: #906ae5;
+  --series-3: #01a2c5;
+  --series-4: #c8800d;
+  --chart-grid: rgb(0 255 102 / 0.08);
+  --chart-axis: rgb(0 255 102 / 0.2);
+  --chart-surface: #040e08; /* the card fill over the wallpaper, measured in a render */
+
+  /* ── Liquid Glass, translated: near-black translucent glass, green rim light, green bloom */
+  --glass-fill: rgb(10 24 15 / 0.52);
+  --glass-fill-chrome: rgb(7 19 12 / 0.6);
+  --glass-fill-thick: rgb(5 15 9 / 0.84);
+  --glass-fill-clear: rgb(0 255 102 / 0.04);
+  --glass-solid: #07120b;
+  --glass-rim-hi: rgb(140 255 185 / 0.26);
+  --glass-rim-lo: rgb(0 255 102 / 0.07);
+  --glass-hairline: rgb(0 255 102 / 0.16);
+  --glass-shadow: 0 12px 34px -8px rgb(0 0 0 / 0.7), 0 2px 6px rgb(0 0 0 / 0.5), 0 0 28px -8px rgb(0 255 102 / 0.2);
+  --glass-shadow-large: 0 28px 70px -12px rgb(0 0 0 / 0.85), 0 4px 14px rgb(0 0 0 / 0.5), 0 0 60px -14px rgb(0 255 102 / 0.22);
+  --glass-sheen-1: rgb(120 255 170 / 0.09);
+  --glass-sheen-2: rgb(0 255 102 / 0.025);
+  --glass-rim-gradient: linear-gradient(
+    140deg,
+    rgb(160 255 195 / 0.8),
+    rgb(0 255 102 / 0.18) 35%,
+    rgb(0 255 102 / 0.04) 60%,
+    rgb(0 255 102 / 0.45)
+  );
+  --glass-rim-opacity: 0.5;
+  --glass-glow: rgb(0 255 102 / 0.14);
+  --dim-clear: rgb(0 0 0 / 0.5);
+  --scrim: rgb(0 0 0 / 0.55);
+
+  /* ── content material: a touch more opaque than glass so text stays crisp */
+  --card-fill: rgb(5 13 8 / 0.84);
+  --card-solid: #06100a;
+  --card-hairline: rgb(0 255 102 / 0.13);
+  --card-shadow: 0 1px 2px rgb(0 0 0 / 0.5), 0 10px 26px -10px rgb(0 0 0 / 0.75), 0 0 22px -12px rgb(0 255 102 / 0.18);
+  --card-inset: rgb(0 255 102 / 0.045);
+
+  /* ── selection & focus */
+  --row-selected: rgb(0 255 102 / 0.15);
+  --row-hover: rgb(0 255 102 / 0.065);
+  --row-alt: rgb(0 255 102 / 0.025);
+  --focus-ring-color: rgb(0 255 102 / 0.72);
+
+  /* ── per-theme component tokens */
+  --seg-thumb: rgb(0 255 102 / 0.2);
+  --appicon-tile: linear-gradient(180deg, #dff7e8, #c2e2cd); /* brand logos need a light tile; dimmed mint */
+  --appicon-tile-shadow: 0 0 0 0.5px rgb(0 255 102 / 0.3), 0 2px 8px -2px rgb(0 0 0 / 0.6);
+  --spotlight-scrim: rgb(0 0 0 / 0.5);
+
+  /* ── wallpaper: solid near-black with a faint deep-green depth (the digital rain is drawn on top by Wallpaper) */
+  --wp-base: #020604;
+  --wp-1: #00431d;
+  --wp-2: #00301a;
+  --wp-3: #013a22;
+  --wp-4: #0b3214;
+  --wp-blob-opacity: 0.42;
+  --wp-noise-opacity: 0.04;
+  --wp-calm: linear-gradient(160deg, #04100a 0%, #020604 55%, #030a08 100%);
+}
+
+/* Matrix + Increase Contrast: brighter secondaries, opaque materials, solid phosphor hairlines. */
+@media (prefers-contrast: more) {
+  :root[data-theme='matrix'] {
+    --red: #ff7380;
+    --orange: #ffc457;
+    --mint: #6ef5d0;
+    --cyan: #7dd8ff;
+    --gray: #a3baa9;
+    --label-2: rgb(205 252 222 / 0.88);
+    --label-3: rgb(180 240 202 / 0.64);
+    --label-4: rgb(180 240 202 / 0.34);
+    --label-2-wp: rgb(210 252 225 / 0.92);
+    --separator: rgb(120 230 165 / 0.7);
+    --hairline: rgb(0 255 102 / 0.55);
+    --glass-fill: rgb(3 10 6 / 0.94);
+    --glass-fill-chrome: rgb(3 10 6 / 0.95);
+    --glass-fill-thick: rgb(3 10 6 / 0.97);
+    --glass-hairline: #00ff66;
+    --card-fill: #040c07;
+    --card-hairline: rgb(0 255 102 / 0.6);
   }
 }
