@@ -7,6 +7,7 @@ import {
   CloudOff,
   Container,
   Database,
+  FileExclamationPoint,
   HardDrive,
   ListX,
   MonitorOff,
@@ -20,7 +21,7 @@ import { useState, type CSSProperties } from 'react';
 import type { AlertSeverity } from '../../../../shared/types';
 import { Button, Card, EmptyState, ListGroup, ListRow, RelativeTime, TONE_COLOR, type Tone } from '../../components';
 import { attentionSummary, snoozeText, type AttentionItem, type AttentionKind } from './attention';
-import { useAttention } from './useAttention';
+import { useOverviewAttention } from './useAttention';
 
 const ICON: Record<AttentionKind, LucideIcon> = {
   node_unreachable: ServerCrash,
@@ -39,6 +40,7 @@ const ICON: Record<AttentionKind, LucideIcon> = {
   test: Bell,
   task_failed: ListX,
   host_service: ServerCog,
+  config_error: FileExclamationPoint,
 };
 
 const SEVERITY: Record<AlertSeverity, { tone: Tone; label: string }> = {
@@ -91,7 +93,7 @@ export interface AttentionCardProps {
 
 /** Everything that needs a look, worst first (snoozed alerts last, muted); each row opens the page that explains it. */
 export function AttentionCard({ style, limit = 6, id, hideWhenEmpty }: AttentionCardProps) {
-  const items = useAttention();
+  const { items, nodeErrorShown } = useOverviewAttention();
   const [expanded, setExpanded] = useState(false);
   const shown = expanded ? items : items.slice(0, limit);
   const hidden = items.slice(shown.length);
@@ -101,7 +103,7 @@ export function AttentionCard({ style, limit = 6, id, hideWhenEmpty }: Attention
   return (
     <Card
       title="Attention"
-      subtitle={attentionSummary(items)}
+      subtitle={nodeErrorShown && !items.length ? 'Nothing else needs a look' : attentionSummary(items)}
       padding="none"
       className="ov-list"
       style={style}
@@ -118,8 +120,12 @@ export function AttentionCard({ style, limit = 6, id, hideWhenEmpty }: Attention
             compact
             tone="ok"
             icon={<CircleCheckBig size={24} strokeWidth={2} />}
-            title="All systems nominal"
-            message="No alerts, and nothing in storage, backups, services or tasks needs your attention."
+            title={nodeErrorShown ? 'Nothing else needs a look' : 'All systems nominal'}
+            message={
+              nodeErrorShown
+                ? 'Apart from the Proxmox connection above. Everything here is from the last values Proxmox sent.'
+                : 'No alerts, and nothing in storage, backups, services or tasks needs your attention.'
+            }
           />
         </div>
       ) : (

@@ -116,7 +116,7 @@ export default function BackupsPage() {
           source={backups.source}
         />
 
-        <Section id="coverage" title="Coverage" subtitle={`Guests without a backup in the last ${plural(staleDays, 'day')} come first`}>
+        <Section id="coverage" title="Coverage" subtitle={`Problems first: failed backups, then guests without one in the last ${plural(staleDays, 'day')}`}>
           <Card padding="none" className="bk-coverage">
             {coverage.length ? (
               <CoverageTable rows={coverage} lookup={lookup} now={now} />

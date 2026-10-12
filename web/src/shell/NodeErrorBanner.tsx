@@ -69,6 +69,13 @@ function CopyCommand({ command }: { command: string }) {
  *
  * The page header shows it on every page (PageHeader `nodeBanner`); use it directly anywhere else.
  */
+/** Whether the banner is showing (the Overview then leaves the same error out of its own lists). */
+export function useNodeErrorBannerShown(): boolean {
+  const shown = useSnapshot((s) => s.meta.serverTime > 0 && !s.node.online);
+  const { connection } = useConnection();
+  return shown && connection !== 'offline' && connection !== 'connecting';
+}
+
 export function NodeErrorBanner({ className }: { className?: string }) {
   const node = useSnapshot((s) => ({
     online: s.node.online,

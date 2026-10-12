@@ -9,7 +9,7 @@ import { formatDuration } from '../../format';
 import { Link } from '../../router';
 import { useSnapshot } from '../../store';
 import { attentionCounts, countsTitle, nodeProblemTitle, type AttentionCounts } from './attention';
-import { useAttention } from './useAttention';
+import { useOverviewAttention } from './useAttention';
 
 const TONE: Record<NonNullable<AttentionCounts['worst']>, Tone> = { critical: 'crit', warning: 'warn', info: 'info' };
 
@@ -24,14 +24,19 @@ const selectNode = (s: Snapshot) => ({
 });
 
 export function StatusStrip() {
-  const items = useAttention();
+  const { items, nodeErrorShown } = useOverviewAttention();
   const node = useSnapshot(selectNode);
   const c = attentionCounts(items);
   const offline = !node.online;
   const tone: Tone = offline ? 'crit' : c.worst ? TONE[c.worst] : 'ok';
   const title = offline ? `${node.name} is offline` : countsTitle(c);
+  // offline: the error banner above already says why, so the strip says what else is going on
   const subtitle = offline
-    ? nodeProblemTitle({ node: node.name, errorKind: node.errorKind })
+    ? nodeErrorShown
+      ? c.worst
+        ? `Also ${countsTitle(c)}`
+        : 'Showing the last known values'
+      : nodeProblemTitle({ node: node.name, errorKind: node.errorKind })
     : [
         node.uptimeHours > 0 ? `${node.name} up ${formatDuration(node.uptimeHours * 3600)}` : `${node.name} online`,
         node.total ? `${node.running}/${node.total} guests running` : undefined,

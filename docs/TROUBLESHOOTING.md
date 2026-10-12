@@ -152,6 +152,19 @@ pve1-dash-config                       # proxmox → tls → fingerprint: "3F:9A
 (Re-running the installer does steps 1-2 for you. It keeps the branch or tag the container was installed from, so it
 doesn't switch your code; and it warns when the host serves a custom/ACME certificate, which renews often.)
 
+**The config trusts the cluster CA (`ca: /etc/pve1-dash/pve-root-ca.pem`) and it stopped verifying.** The pve1-dash
+doctor says "not trusted ... by the CA in proxmox.tls.ca". Usual cause: a custom or ACME certificate was uploaded to
+the node (it is not signed by the cluster CA), or `proxmox.url` uses an address that is not on the certificate. Do
+step 1, then replace the `ca:` line with the pin **(CT)** (do not add a second `tls:` section; the file would be
+invalid):
+
+```bash
+sed -i -E 's|^([[:space:]]+)ca:.*|\1fingerprint: "3F:9A:..."|' /etc/pve1-dash/config.yaml && systemctl restart pve1-dash
+```
+
+Re-running the installer does the same by itself when the cluster CA no longer verifies the certificate. For an ACME
+certificate, step 3 (no pin, check by host name) avoids re-pinning at every renewal.
+
 **Step 3, if this keeps happening** (ACME certificates renew often): stop pinning a single certificate.
 
 - **Publicly trusted ACME certificate:** remove `fingerprint:` and make `proxmox.url` use the host name on the
@@ -397,11 +410,11 @@ Turn on HTTP/2 in the proxy (NPM: SSL tab → HTTP/2 Support).
 Assets off**; elsewhere remove caching for this host. Then reload the page twice (or remove and re-add the Home
 Screen app).
 
-**Step 6.** The stream uses a lot of mobile data. Each change resends the whole section it belongs to (for example
-all guests with their last 120 CPU/memory samples on every 5 s status poll, or all services with their check history);
-there are no deltas. The `services` section is sent at most every 5 s while a check round runs, plus once at its end.
-With many guests, a raised `polling.status` (e.g. `15`) reduces the traffic proportionally. Close the app (swipe it
-away) rather than leaving it open in the background on cellular.
+**Step 6.** The stream uses a lot of mobile data. Each change resends the section it belongs to (for example all
+guests on every 5 s status poll), but without the chart histories: new samples arrive as small `history` events, and
+the full histories only come with the first snapshot. The `services` section is sent at most every 5 s while a check
+round runs, plus once at its end. With many guests, a raised `polling.status` (e.g. `15`) reduces the traffic
+proportionally. Close the app (swipe it away) rather than leaving it open in the background on cellular.
 
 ---
 

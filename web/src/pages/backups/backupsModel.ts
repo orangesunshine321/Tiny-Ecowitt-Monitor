@@ -51,10 +51,11 @@ export function coverageTone(s: CoverageSummary): 'ok' | 'warn' | 'crit' {
 /** Status pills for one guest (never colour alone: each has a label). */
 export function coverageBadges(c: BackupCoverage): StatusInfo[] {
   const out: StatusInfo[] = [];
-  if (lastBackupFailed(c)) out.push({ tone: 'crit', label: 'Last backup failed' });
+  const failed = lastBackupFailed(c);
+  if (failed) out.push({ tone: 'crit', label: 'Last backup failed' });
   if (c.lastBackup === undefined) out.push({ tone: 'crit', label: 'Never backed up' });
   else if (c.stale) out.push({ tone: 'warn', label: 'Stale' });
-  else out.push({ tone: 'ok', label: 'Recent' });
+  else if (!failed) out.push({ tone: 'ok', label: 'Recent' }); // "failed" next to "Recent" reads as a contradiction
   if (c.notInAnyJob) out.push({ tone: 'warn', label: 'Not in any job' });
   return out;
 }

@@ -263,10 +263,13 @@ describe('format + doctor CLI', () => {
   it('service down → system.service fail; text report', async () => {
     const path = writeConfig('c2.yaml', goodYaml(P_DOWN));
     const t = io();
-    const code = await runDoctor(['--quick', '--no-color'], { PVE1_DASH_CONFIG: path }, t.io);
+    const env = writeConfig('install.env', 'PVE1_DASH_REPO=https://github.com/o/r\nPVE1_DASH_REF=main\nPVE1_DASH_CTID=123\n');
+    const code = await runDoctor(['--quick', '--no-color'], { PVE1_DASH_CONFIG: path, PVE1_DASH_INSTALL_ENV: env }, t.io);
     expect(code).toBe(1);
     const text = t.out.join('');
     expect(text).toContain(`service: not answering on http://127.0.0.1:${P_DOWN}`);
+    // where the fixes run, with the container id the installer recorded
+    expect(text).toContain('fixes: run them in this container (from the Proxmox host: pct enter 123), except those under "# On the Proxmox host"');
     expect(text).toMatch(/✗ pve1-dash service — The service does not answer/);
   }, 30_000);
 

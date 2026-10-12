@@ -114,6 +114,22 @@ describe('reverse proxy checks', () => {
     expect(c.detail).toMatch(/Host header/);
   });
 
+  it('the dashboard refusing the proxy (listen.allowedSources) → fail, although /healthz passes', async () => {
+    await proxy((req, res) => {
+      if (req.url === '/healthz') return void res.writeHead(200, { 'Content-Type': 'application/json' }).end('{"ok":true}');
+      res
+        .writeHead(403, { 'Content-Type': 'application/json' })
+        .end('{"error":"Forbidden","detail":"connections from 10.10.20.5 are not allowed (listen.allowedSources in config.yaml)"}');
+    });
+    const c = byId(await proxyChecks(config({ listen: { allowedSources: ['10.10.10.0/24'] } }), 3000, trust()));
+    expect(c['proxy.reach']?.status).toBe('fail');
+    expect(c['proxy.reach']?.detail).toMatch(/connects from 10\.10\.20\.5 .*10\.10\.10\.0\/24/);
+    expect(c['proxy.reach']?.fix).toMatch(/pve1-dash-config/);
+    // nothing behind it can be judged
+    expect(c['proxy.cache']).toBeUndefined();
+    expect(c['proxy.stream']).toBeUndefined();
+  });
+
   it('no https publicUrl → no proxy checks', async () => {
     expect(await proxyChecks(config({ publicUrl: undefined }), 1000)).toEqual([]);
     expect(await proxyChecks(config({ publicUrl: 'http://dash.lan' }), 1000)).toEqual([]);

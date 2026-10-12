@@ -122,6 +122,23 @@ describe('set_fingerprint', () => {
   });
 });
 
+describe('ca_to_fingerprint', () => {
+  it('swaps the one tls.ca line for a pin, keeping the indentation and everything else', () => {
+    const file = sb.put('ca.yaml', 'proxmox:\n  url: https://10.10.10.2:8006\n  tls:\n    # cluster CA\n    ca: /etc/pve1-dash/pve-root-ca.pem\nlisten:\n  port: 8080\n');
+    expect(sb.call(SCRIPT, 'ca_to_fingerprint', [file, FP]).status).toBe(0);
+    expect(readFileSync(file, 'utf8')).toBe(`proxmox:\n  url: https://10.10.10.2:8006\n  tls:\n    # cluster CA\n    fingerprint: "${FP}"\nlisten:\n  port: 8080\n`);
+  });
+
+  it('leaves configs without a single ca line, or with a pin already, alone', () => {
+    const pinned = sb.put('pinned.yaml', `proxmox:\n  tls:\n    ca: /x.pem\n    fingerprint: "${FP2}"\n`);
+    expect(sb.call(SCRIPT, 'ca_to_fingerprint', [pinned, FP]).status).toBe(3);
+    expect(readFileSync(pinned, 'utf8')).toBe(`proxmox:\n  tls:\n    ca: /x.pem\n    fingerprint: "${FP2}"\n`);
+    const pub = sb.put('public.yaml', 'proxmox:\n  url: https://pve1.example.com:8006\n  tls:\n    insecure: false\n');
+    expect(sb.call(SCRIPT, 'ca_to_fingerprint', [pub, FP]).status).toBe(3);
+    expect(readFileSync(pub, 'utf8')).toBe('proxmox:\n  url: https://pve1.example.com:8006\n  tls:\n    insecure: false\n');
+  });
+});
+
 describe('write_known_hosts', () => {
   it('pins the host key and keeps learned guest keys and marker lines', () => {
     const file = sb.put(

@@ -320,6 +320,18 @@ set_fingerprint() {
   sed -i -E "s/^([[:space:]]+fingerprint:).*/\\1 \"$fp\"/" "$file"
 }
 
+# Switch a config that verifies with proxmox.tls.ca to pinning FP: for when the host's certificate no longer verifies
+# with the cluster CA (a custom or ACME certificate was uploaded, or the address is not on it any more). Replaces the
+# one "ca:" line in place (same indentation). Returns 0 when changed, 3 when there is no single "ca:" line or the
+# config already has a "fingerprint:" line.
+ca_to_fingerprint() {
+  local file=$1 fp=$2 n
+  ! grep -qE '^[[:space:]]+fingerprint:' "$file" || return 3
+  n=$(grep -cE '^[[:space:]]+ca:' "$file") || n=0
+  [[ $n == 1 ]] || return 3
+  sed -i -E "s|^([[:space:]]+)ca:.*|\\1fingerprint: \"$fp\"|" "$file"
+}
+
 # Keep an existing config pointed at the Proxmox host. proxmox.url and inventory.host.address are moved to IP only
 # when they hold an IPv4 address the host no longer has (not IP and not in HOST_IPS); host names, and other addresses
 # of the host, are left alone. Uses the yaml package of the release in APPDIR, which keeps comments and layout.
@@ -435,7 +447,14 @@ write_config() {
       case $rc in
         0) ok 'updated proxmox.tls.fingerprint (the Proxmox certificate changed)' ;;
         1) : ;;
-        3) ok 'the config pins no certificate (tls.ca or the public CAs): TLS settings left alone' ;;
+        3)
+          # tls.ca, but the host's certificate no longer verifies with the cluster CA: pin it, or every API call fails
+          if [[ -z ${P1D_TLS_CA-} ]] && ca_to_fingerprint "$CONFIG_FILE" "$P1D_TLS_FINGERPRINT"; then
+            ok "the Proxmox certificate no longer verifies with the cluster CA (custom or ACME certificate?): pinned it instead (proxmox.tls.fingerprint ${P1D_TLS_FINGERPRINT:0:23}...)"
+          else
+            ok 'the config pins no certificate (tls.ca or the public CAs): TLS settings left alone'
+          fi
+          ;;
         *) warn "could not update proxmox.tls.fingerprint automatically; set it to \"$P1D_TLS_FINGERPRINT\" if API calls fail" ;;
       esac
     fi

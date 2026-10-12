@@ -722,6 +722,9 @@ export const backupFailed: Rule = (c) => {
   if (!c.ready('tasks') || pveStale(c.data)) return CARRY;
   processBackupTasks(c.mem, c.data.tasks, c.now);
   const covReady = coverageReady(c);
+  // coverage not computed yet after a restart: task-based alerts wait for it, since it may attribute the failure
+  // per guest or show a newer good backup (otherwise an old failure fires, then resolves seconds later)
+  const coverageWait = !covReady && c.now - c.startedAt < COVERAGE_WAIT_MS;
   const coverage = new Map(c.data.backups.coverage.map((cv) => [cv.vmid, cv]));
   // positive evidence clears task-based issues: a newer backup of that guest, or the failure attributed per guest
   const attributed = new Set<string>();
@@ -772,7 +775,7 @@ export const backupFailed: Rule = (c) => {
       continue;
     }
     const vmid = /^\d+$/.test(issue.scope) ? Number(issue.scope) : undefined;
-    if (vmid === undefined || perGuest.has(vmid)) continue;
+    if (vmid === undefined || perGuest.has(vmid) || coverageWait) continue;
     const subject = `Backup of ${guestLabel(vmid, guests, coverage.get(vmid))}`;
     const failed = issue.severity === 'error';
     conditions.push({
@@ -786,7 +789,7 @@ export const backupFailed: Rule = (c) => {
   }
   // multi-guest runs nobody attributed to guests (job aborted, or its log unreadable): one job-level alert
   const jobKey = 'backup_failed:all';
-  const due = jobIssues.filter((i) => {
+  const due = coverageWait ? [] : jobIssues.filter((i) => {
     const ended = i.endTime ?? i.startTime;
     if (c.now - ended >= JOB_ATTRIBUTION_GRACE_MS) return true;
     c.wakeAt(ended + JOB_ATTRIBUTION_GRACE_MS);
@@ -809,7 +812,7 @@ export const backupFailed: Rule = (c) => {
   }
   const result: RuleResult = { conditions, carryKeys, silentResolve: goneGuestKeys(c, 'backup_failed') };
   // coverage not computed yet after a restart: per-guest alerts can't be judged (bounded, should listing keep failing)
-  if (!covReady && c.now - c.startedAt < COVERAGE_WAIT_MS) {
+  if (coverageWait) {
     result.carryPrefixes = ['backup_failed:'];
     c.wakeAt(c.startedAt + COVERAGE_WAIT_MS);
   }

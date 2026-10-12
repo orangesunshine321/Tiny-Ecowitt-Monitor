@@ -986,6 +986,37 @@ describe('backupFailed: per guest and per job', () => {
     expect(b.run(pending, restart + COVERAGE_WAIT_MS, () => true, restart).active).toEqual([]);
   });
 
+  it('at startup, a job failure waits for the coverage instead of firing and resolving seconds later', () => {
+    const { run } = harness();
+    const fail = task(8, 'error', T0 - 15 * HOUR);
+    const guests = [g(101, 'pihole'), g(102, 'docker-media')];
+    // the tasks are listed within seconds of a start; the coverage needs the slow backup listing
+    const pending = data({ guests, tasks: [fail], backups: { items: [], jobs: [], coverage: [] } });
+    const first = run(pending, T0 + 2_000, (k) => k !== 'backups', T0);
+    expect(first.emitted).toEqual([]);
+    expect(first.active).toEqual([]);
+    // the coverage attributes the run to one guest: only that guest's alert ever fires
+    const covered = data({
+      guests,
+      tasks: [fail],
+      backups: {
+        items: [],
+        jobs: [],
+        coverage: [
+          coverage(101, 'pihole', { lastBackup: T0 - 15 * HOUR }),
+          coverage(102, 'docker-media', { lastBackup: T0 - 39 * HOUR, lastFailure: { time: T0 - 15 * HOUR, upid: fail.upid } }),
+        ],
+      },
+    });
+    const later = run(covered, T0 + 5_000, () => true, T0);
+    expect(keys(later.active)).toEqual(['backup_failed:102']);
+    expect(later.emitted.map((e) => e.key)).toEqual(['backup_failed:102']);
+    // a listing that never comes does not hold the job alert back forever
+    const { run: run2 } = harness();
+    run2(pending, T0 + 2_000, (k) => k !== 'backups', T0);
+    expect(keys(run2(pending, T0 + COVERAGE_WAIT_MS, (k) => k !== 'backups', T0).active)).toEqual(['backup_failed:all']);
+  });
+
   it('a job failure clears once every guest in a backup job has a newer backup', () => {
     const { run } = harness();
     run(data(), T0 - DAY);

@@ -58,9 +58,10 @@ export interface CheckGroup {
 }
 
 /**
- * Checks by group in a fixed order (This device, Configuration, Proxmox VE, Inventory, Services, Push, Server);
- * groups the page doesn't know yet come last under their own name. Inside a group the server's order is kept (it is
- * logical: reachable → TLS → token → permissions). Empty groups are omitted.
+ * Checks by group, worst group first (so "Open Diagnostics" lands on the failing check), then in a fixed order (This
+ * device, Configuration, Proxmox VE, Inventory, Services, Push, Server); groups the page doesn't know yet come last
+ * under their own name. Inside a group the server's order is kept (it is logical: reachable → TLS → token →
+ * permissions). Empty groups are omitted.
  */
 export function groupChecks(checks: readonly UiCheck[]): CheckGroup[] {
   const map = new Map<string, UiCheck[]>();
@@ -72,10 +73,12 @@ export function groupChecks(checks: readonly UiCheck[]): CheckGroup[] {
   }
   const known = GROUP_ORDER.filter((g) => map.has(g));
   const unknown = [...map.keys()].filter((g) => !(GROUP_ORDER as readonly string[]).includes(g));
-  return [...known, ...unknown].map((g) => {
-    const list = map.get(g)!;
-    return { group: g, label: GROUP_LABEL[g as DiagGroup] ?? g.charAt(0).toUpperCase() + g.slice(1), checks: list, worst: worstStatus(list) };
-  });
+  return [...known, ...unknown]
+    .map((g) => {
+      const list = map.get(g)!;
+      return { group: g, label: GROUP_LABEL[g as DiagGroup] ?? g.charAt(0).toUpperCase() + g.slice(1), checks: list, worst: worstStatus(list) };
+    })
+    .sort((a, b) => RANK[a.worst] - RANK[b.worst]); // stable: the fixed order breaks ties
 }
 
 export interface CheckCounts {

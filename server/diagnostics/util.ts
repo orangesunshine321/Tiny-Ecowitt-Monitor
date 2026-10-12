@@ -104,6 +104,16 @@ export function installerCommand(args = '', opts: { installEnv?: string; env?: R
   return `${prefix}bash -c "$(curl -fsSL ${base}/deploy/install.sh)"${args ? ` -- ${args}` : ''}`;
 }
 
+/** This container's id as the installer recorded it in install.env (PVE1_DASH_CTID), when known. */
+export function installedCtid(installEnv = DEFAULT_INSTALL_ENV): string | undefined {
+  try {
+    const v = /^PVE1_DASH_CTID=["']?(\d{1,9})["']?$/m.exec(readFileSync(installEnv, 'utf8'))?.[1];
+    return v || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Run async tasks with at most `limit` in flight; results keep the input order. */
 export async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const out = new Array<R>(items.length);

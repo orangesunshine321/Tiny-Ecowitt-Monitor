@@ -2,8 +2,9 @@
 import { useMemo } from 'react';
 import type { Snapshot } from '../../../../shared/types';
 import { useServerNow } from '../../hooks';
+import { useNodeErrorBannerShown } from '../../shell/NodeErrorBanner';
 import { shallowEqual, useSnapshot } from '../../store';
-import { deriveAttention, type AttentionInput, type AttentionItem } from './attention';
+import { deriveAttention, withoutNodeError, type AttentionInput, type AttentionItem } from './attention';
 
 const select = (s: Snapshot): AttentionInput => ({
   node: s.node,
@@ -34,4 +35,12 @@ export function useAttention(): AttentionItem[] {
   const input = useSnapshot(select);
   const now = useServerNow(60_000);
   return useMemo(() => derive(input, now), [input, now]);
+}
+
+/** The Overview's items: without the node error while the error banner above them says it (see withoutNodeError). */
+export function useOverviewAttention(): { items: AttentionItem[]; nodeErrorShown: boolean } {
+  const all = useAttention();
+  const nodeErrorShown = useNodeErrorBannerShown();
+  const items = useMemo(() => withoutNodeError(all, nodeErrorShown), [all, nodeErrorShown]);
+  return { items, nodeErrorShown };
 }

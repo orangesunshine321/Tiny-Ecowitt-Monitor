@@ -11,7 +11,7 @@ import { readAppVersion } from '../version.js';
 import type { DiagnosticCheck, DiagnosticsReport } from '../../shared/types.js';
 import { formatReport, summarize } from './format.js';
 import { GROUP_ORDER, runDiagnostics } from './index.js';
-import { check, errCode, errText, shq } from './util.js';
+import { check, errCode, errText, installedCtid, shq } from './util.js';
 
 const RESTART = 'systemctl restart pve1-dash';
 
@@ -151,6 +151,12 @@ function configFailure(err: unknown, path: string, usingGood?: string): Diagnost
   });
 }
 
+/** How to get into this container from the host, for the "fixes:" header line. */
+function fixHint(env: NodeJS.ProcessEnv): string {
+  const ctid = installedCtid(env.PVE1_DASH_INSTALL_ENV || undefined);
+  return ctid ? ` (from the Proxmox host: pct enter ${ctid})` : ' (from the Proxmox host: pct enter <container id>)';
+}
+
 export async function runDoctor(argv: readonly string[], env: NodeJS.ProcessEnv, io: DoctorIo): Promise<number> {
   const args = parseArgs(argv);
   if (typeof args === 'string') {
@@ -230,6 +236,7 @@ export async function runDoctor(argv: readonly string[], env: NodeJS.ProcessEnv,
       `config: ${path}${loaded?.fallback ? ` (broken; using the last good copy ${loaded.fallback.goodPath})` : ''}`,
       live ? (live.report ? `live data: ${live.base}` : `service: not answering on ${live.base}`) : 'live data: not requested (--no-live)',
       ...(typeof process.getuid === 'function' && process.getuid() === 0 ? ['running as root: file checks reflect root, not the pve1dash service user'] : []),
+      `fixes: run them in this container${fixHint(env)}, except those under "# On the Proxmox host"`,
     ];
     io.out(formatReport(report, { colour, header, verbose: args.verbose }));
   }

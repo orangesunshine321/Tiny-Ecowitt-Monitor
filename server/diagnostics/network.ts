@@ -132,6 +132,29 @@ export async function proxyChecks(config: Config, timeoutMs: number, dispatcher?
   if (status !== 200) {
     return [check('proxy.reach', 'config', title, 'warn', `${base}/healthz answered HTTP ${status}.`, { fix: npmFix })];
   }
+  // /healthz is exempt from listen.allowedSources (for monitors), so ask for a page that is not
+  try {
+    const page = await fetch(`${base}/`, { ...d, redirect: 'manual', signal: AbortSignal.timeout(timeoutMs), headers: { Accept: 'application/json' } });
+    const text = await page.text();
+    if (page.status === 403 && /listen\.allowedSources/.test(text)) {
+      const from = /connections from (\S+) are not allowed/.exec(text)?.[1];
+      return [
+        check(
+          'proxy.reach',
+          'config',
+          title,
+          'fail',
+          `The proxy reaches the dashboard, but the dashboard refuses it: the proxy connects from ${from ?? 'an address'} that is not in listen.allowedSources (${(config.listen.allowedSources ?? []).join(', ')}). Every page through ${host} answers 403.`,
+          {
+            fix: `# In the dashboard container: add ${from ? `"${from}" (the proxy)` : "the proxy's address"} to listen.allowedSources, then save (it restarts the dashboard):\npve1-dash-config`,
+            docs: 'docs/SETUP.md',
+          },
+        ),
+      ];
+    }
+  } catch {
+    /* /healthz answered: judge by that */
+  }
   const checks: DiagnosticCheck[] = [check('proxy.reach', 'config', title, 'ok', `${base} reaches the dashboard with a trusted certificate (${ms(took)}).`)];
 
   try {
@@ -159,7 +182,10 @@ export async function proxyChecks(config: Config, timeoutMs: number, dispatcher?
         s.seen
           ? check('proxy.stream', 'config', 'Live updates through the proxy', 'ok', 'The live stream passes through the proxy without buffering.')
           : check('proxy.stream', 'config', 'Live updates through the proxy', 'fail', `The live stream sent nothing through the proxy within ${Math.round(Math.min(timeoutMs, 5000) / 1000)} s: the proxy buffers it, so the dashboard looks frozen.`, {
-              fix: `Nginx Proxy Manager → Proxy Hosts → ${host}: turn on Websockets Support; in Advanced add: proxy_buffering off;`,
+              fix:
+                `Nginx Proxy Manager → Proxy Hosts → ${host}: turn on Websockets Support. NPM honours the dashboard's X-Accel-Buffering: no, so ` +
+                'buffering usually means a second proxy or CDN in front of it. Keep the Advanced tab empty; if NPM itself must be told, add a ' +
+                'Custom Location for /api/stream (same forward host and port) with: proxy_buffering off; proxy_read_timeout 1h;',
               docs: DOC.sse,
             }),
       );

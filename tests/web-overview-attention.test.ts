@@ -14,6 +14,8 @@ import {
   nodeProblemTitle,
   snoozeText,
   taskLabel,
+  withoutNodeError,
+  type AttentionItem,
 } from '../web/src/pages/overview/attention';
 import { chipName, departureOrder, favouriteServices, groupTemps, hottest, openableUrl, tempTone, topByCpu, updatesLine } from '../web/src/pages/overview/overviewUtil';
 
@@ -153,7 +155,8 @@ describe('deriveProblems', () => {
     const items = deriveProblems(s, NOW);
     expect(items.map((i) => [i.key, i.severity, i.title, i.path])).toEqual([
       ['container_unhealthy:102:sick', 'warning', 'sick is unhealthy', '/guests/102?tab=apps'],
-      ['container_unhealthy:102:crashed', 'warning', 'crashed exited (code 137)', '/guests/102?tab=apps'],
+      // stopped without an alert: worth a look (the server alerts once it has seen the container running)
+      ['container_unhealthy:102:crashed', 'info', 'crashed exited (code 137)', '/guests/102?tab=apps'],
       ['container_unhealthy:102:oneshot', 'info', 'oneshot exited (code 0)', '/guests/102?tab=apps'],
     ]);
     expect(items[0]!.detail).toBe('Container on docker-media (102) · media');
@@ -177,6 +180,62 @@ describe('deriveProblems', () => {
     const items = deriveProblems(s, NOW);
     expect(items.map((i) => i.key)).toEqual(['service_down:docker-102-crashed', 'container_unhealthy:102:sick']);
     expect(items[0]!.detail).toBe('ECONNREFUSED · container exited (code 137) · on docker-media');
+  });
+
+  it('a down service that does not alert (a discovered guess) is not listed; its container speaks for itself', () => {
+    const containers: GuestInventory['containers'] = [
+      { id: '5', name: 'jellyseerr', image: 'x', state: 'running', status: 'Up (unhealthy)', health: 'unhealthy', ports: [] },
+    ];
+    const base = { source: 'docker' as const, check: { type: 'http' as const }, history: [], vmid: 102, guestName: 'docker-media' };
+    const s = snap({
+      guests: [guest({ vmid: 102, name: 'docker-media' })],
+      inventory: { '102': inventory(102, containers) },
+      services: [{ ...base, id: 'docker-102-jellyseerr', name: 'jellyseerr', status: 'down', alert: false }],
+      alerts: {
+        active: [alert({ key: 'container_unhealthy:102:jellyseerr', kind: 'container_unhealthy', severity: 'warning', title: 'jellyseerr is unhealthy' })],
+        recent: [],
+      },
+    });
+    expect(deriveAttention(s, NOW).map((i) => [i.key, i.severity, i.source])).toEqual([['container_unhealthy:102:jellyseerr', 'warning', 'alert']]);
+  });
+
+  it('a down Docker service also speaks for an active alert of its container', () => {
+    const containers: GuestInventory['containers'] = [{ id: '3', name: 'app', image: 'x', state: 'exited', status: 'Exited (1) 1 minute ago', ports: [] }];
+    const s = snap({
+      guests: [guest({ vmid: 102, name: 'docker-media' })],
+      inventory: { '102': inventory(102, containers) },
+      services: [
+        { source: 'docker', check: { type: 'http' }, history: [], alert: true, vmid: 102, id: 'docker-102-app', name: 'App', status: 'down' },
+      ],
+      alerts: { active: [alert({ key: 'container_unhealthy:102:app', kind: 'container_unhealthy', title: 'app exited' })], recent: [] },
+    });
+    expect(deriveAttention(s, NOW).map((i) => i.key)).toEqual(['service_down:docker-102-app']);
+  });
+
+  it('flags a config.yaml the server could not load (it runs on the last good copy)', () => {
+    const base = snap({});
+    const collectors = [
+      { name: 'config', intervalSec: 0, lastError: 'config.yaml is invalid, running with the last good configuration: line 7: bad indentation', lastErrorAt: NOW - HOUR },
+    ];
+    const items = deriveProblems({ ...base, meta: { ...base.meta, collectors } }, NOW);
+    expect(items).toEqual([
+      expect.objectContaining({
+        key: 'config_error',
+        severity: 'critical',
+        title: 'config.yaml has an error',
+        detail: 'Running on the last good copy, so the latest edit isn’t applied. line 7: bad indentation',
+        path: '/settings#diagnostics',
+      }),
+    ]);
+  });
+
+  it('leaves the node item out under the error banner, and only then', () => {
+    const items = [
+      { key: 'node_unreachable:pve1', kind: 'node_unreachable', severity: 'critical', title: 'x', path: '/', source: 'derived' },
+      { key: 'zfs_degraded:tank', kind: 'zfs_degraded', severity: 'warning', title: 'y', path: '/', source: 'derived' },
+    ] as const satisfies readonly AttentionItem[];
+    expect(withoutNodeError(items, true).map((i) => i.key)).toEqual(['zfs_degraded:tank']);
+    expect(withoutNodeError(items, false)).toHaveLength(2);
   });
 
   it('flags stale backups but not templates or guests deliberately left out of every job', () => {
@@ -532,8 +591,11 @@ describe('deriveAttention', () => {
     const items = deriveAttention(s, NOW);
     const keys = items.map((i) => i.key);
     expect(new Set(keys).size).toBe(keys.length);
-    // every active alert is present exactly once
-    for (const a of s.alerts.active) expect(keys.filter((k) => k === a.key)).toHaveLength(1);
+    // every active alert is present exactly once, except a container's whose Docker service is down (one app, one item)
+    for (const a of s.alerts.active) {
+      const spokenFor = a.key === 'container_unhealthy:102:jellyseerr' && keys.includes('service_down:docker-102-jellyseerr');
+      expect(keys.filter((k) => k === a.key)).toHaveLength(spokenFor ? 0 : 1);
+    }
     // derived extras the alerts don't cover: bazarr (down, its exited container folded into one item) and the worn SSD
     expect(keys).toContain('service_down:docker-102-bazarr');
     expect(keys).not.toContain('container_unhealthy:102:bazarr');

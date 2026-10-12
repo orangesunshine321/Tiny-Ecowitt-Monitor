@@ -137,7 +137,8 @@ export function DiagnosticsSection() {
         header="Diagnostics"
         footer={
           <>
-            The same checks run in a shell with <code>pve1-dash-doctor</code> in the dashboard container, even when the dashboard is down.
+            The same checks run in a shell with <code>pve1-dash-doctor</code> in the dashboard container, even when the dashboard is down. Fix
+            commands run in that container (from the Proxmox host: <code>pct enter</code> and its ID) unless they say “On the Proxmox host”.
           </>
         }
       >

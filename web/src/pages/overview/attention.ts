@@ -13,8 +13,8 @@
 import type { AlertEvent, AlertKind, AlertSeverity, BackupCoverage, DockerContainer, NodeSummary, ServiceEntry, Snapshot, TaskEntry } from '../../../../shared/types';
 import { containerProblem, exitCode, guestDisks } from '../guests/guestUtil';
 
-/** Alert kinds plus what only the UI derives: failed non-backup tasks and stopped Proxmox daemons. */
-export type AttentionKind = AlertKind | 'task_failed' | 'host_service';
+/** Alert kinds plus what only the UI derives: failed non-backup tasks, stopped Proxmox daemons, a broken config.yaml. */
+export type AttentionKind = AlertKind | 'task_failed' | 'host_service' | 'config_error';
 
 export interface AttentionItem {
   /** dedupe key (alert key format) */
@@ -63,6 +63,7 @@ const DEFAULT_PATH: Record<AttentionKind, string> = {
   test: '/alerts',
   task_failed: '/tasks',
   host_service: '/settings#data-sources',
+  config_error: '/settings#diagnostics',
 };
 
 /** Same rule as the server (engine.ts isAcknowledged): acknowledged, and the snooze hasn't run out. */
@@ -310,6 +311,20 @@ export function deriveProblems(s: AttentionInput, now: number): AttentionItem[] 
     });
   }
 
+  // config.yaml failed to load: the server runs on the last good copy, so an edit silently didn't apply
+  const cfg = s.meta.collectors.find((c) => c.name === 'config');
+  if (cfg?.lastError && (cfg.lastSuccess === undefined || (cfg.lastErrorAt ?? 0) >= cfg.lastSuccess)) {
+    push({
+      key: 'config_error',
+      kind: 'config_error',
+      severity: 'critical',
+      title: 'config.yaml has an error',
+      detail: `Running on the last good copy, so the latest edit isn’t applied. ${cfg.lastError.replace(/^config\.yaml is invalid, running with the last good configuration: /, '')}`,
+      path: '/settings#diagnostics',
+      time: cfg.lastErrorAt,
+    });
+  }
+
   for (const p of s.zfs) {
     const health = (p.health || 'UNKNOWN').toUpperCase();
     if (health === 'ONLINE') continue;
@@ -341,10 +356,12 @@ export function deriveProblems(s: AttentionInput, now: number): AttentionItem[] 
   }
 
   // One broken app, one item (same as the server's rules): a Docker service that is down speaks for its container, with
-  // the container's state in its text, and the container item is left out.
+  // the container's state in its text, and the container item is left out. A service that doesn't alert (a discovered
+  // port never seen answering: likely a wrong guess, grey on the Services page) isn't listed: its container speaks for
+  // itself, as on the server.
   const downBacked = new Set<string>();
   for (const sv of s.services) {
-    if (sv.status !== 'down') continue;
+    if (sv.status !== 'down' || sv.alert === false) continue;
     const ct = backingContainer(sv, s);
     const trouble = ct && containerProblem(ct) ? containerTroubleText(ct) : undefined;
     if (ct && sv.vmid !== undefined) downBacked.add(`${sv.vmid}:${ct.name}`);
@@ -379,8 +396,10 @@ export function deriveProblems(s: AttentionInput, now: number): AttentionItem[] 
       push({
         key: `container_unhealthy:${g.vmid}:${c.name}`,
         kind: 'container_unhealthy',
-        // a clean exit (code 0) is often a one-shot job: worth a look, not a warning
-        severity: c.state === 'exited' && code === 0 ? 'info' : 'warning',
+        // Running but unhealthy is a warning, as on the server. A stopped container without an alert is worth a look,
+        // not a warning: the server alerts once it has seen the container running (one that crashes later is an alert,
+        // which takes this item's place); one that was already stopped may well be stopped on purpose.
+        severity: c.state === 'running' ? 'warning' : 'info',
         title,
         detail: `Container on ${g.name} (${g.vmid})${c.composeProject ? ` · ${c.composeProject}` : ''}`,
         path: `/guests/${g.vmid}?tab=apps`,
@@ -566,6 +585,12 @@ export function deriveAttention(s: AttentionInput, now: number): AttentionItem[]
   for (const d of deriveProblems(s, now)) {
     if (!items.has(d.key)) items.set(d.key, d);
   }
+  // one broken app, one item: a Docker service that is down speaks for its container's alert too (the server resolves
+  // that alert in the same pass; this covers the moment in between, and a service_down rule that is switched off)
+  for (const i of [...items.values()]) {
+    const m = i.kind === 'service_down' ? /^service_down:docker-(\d+)-(.+)$/.exec(i.key) : null;
+    if (m) items.delete(`container_unhealthy:${m[1]}:${m[2]}`);
+  }
   return [...items.values()].sort(
     (a, b) =>
       Number(!!a.snoozed) - Number(!!b.snoozed) ||
@@ -573,6 +598,14 @@ export function deriveAttention(s: AttentionInput, now: number): AttentionItem[]
       (b.time ?? -Infinity) - (a.time ?? -Infinity) ||
       a.title.localeCompare(b.title),
   );
+}
+
+/**
+ * The Overview while the Proxmox error banner shows: the banner says what went wrong (with the fix), so the node item
+ * is left out of the lists under it instead of repeating it.
+ */
+export function withoutNodeError(items: readonly AttentionItem[], bannerShown: boolean): AttentionItem[] {
+  return bannerShown ? items.filter((i) => i.kind !== 'node_unreachable') : [...items];
 }
 
 export interface AttentionCounts {

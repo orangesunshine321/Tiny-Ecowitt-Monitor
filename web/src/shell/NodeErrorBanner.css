@@ -56,11 +56,12 @@
   line-height: var(--lh-subhead);
   overflow-wrap: anywhere;
 }
+/* on the red wash, secondary grey falls to ~3:1 in Light: keep the "what went wrong" line near full strength */
 .shell-nodeerr-text {
-  color: var(--label-2);
+  color: color-mix(in oklab, var(--label) 82%, transparent);
 }
 .shell-nodeerr-detail {
-  color: var(--label-2);
+  color: var(--label);
 }
 .shell-nodeerr-hint {
   color: var(--label);

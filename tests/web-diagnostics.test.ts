@@ -135,13 +135,16 @@ describe('server report', () => {
     ],
   };
 
-  it('groups in a fixed order with unknown groups last, keeping the server order inside', () => {
+  it('groups worst first, then in a fixed order with unknown groups last, keeping the server order inside', () => {
     const groups = groupChecks([...deviceChecks(base), ...report.checks]);
-    expect(groups.map((g) => g.label)).toEqual(['This device', 'Configuration', 'Proxmox VE', 'Dashboard server', 'Future']);
-    expect(groups[2]!.checks.map((c) => c.id)).toEqual(['pve.reach', 'pve.acl']);
-    expect(groups[2]!.worst).toBe('fail');
+    expect(groups.map((g) => g.label)).toEqual(['Proxmox VE', 'Configuration', 'This device', 'Dashboard server', 'Future']);
+    expect(groups[0]!.checks.map((c) => c.id)).toEqual(['pve.reach', 'pve.acl']);
+    expect(groups[0]!.worst).toBe('fail');
     expect(groups[1]!.worst).toBe('warn');
     expect(groups[4]!.worst).toBe('skip');
+    // all fine: the fixed order
+    const ok = report.checks.map((c) => ({ ...c, status: 'ok' as const }));
+    expect(groupChecks([...deviceChecks(base), ...ok]).map((g) => g.label)).toEqual(['This device', 'Configuration', 'Proxmox VE', 'Dashboard server', 'Future']);
   });
 
   it('counts and summarizes', () => {

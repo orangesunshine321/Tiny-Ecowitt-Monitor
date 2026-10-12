@@ -134,19 +134,59 @@ function reachFailure(err: unknown, host: string, port: number): { detail: strin
   };
 }
 
+/**
+ * A failed handshake in plain words. OpenSSL's own text is a one-line dump ending in a newline
+ * ("C0AC…:error:0A0000C6:SSL routines:tls_get_more_records:packet length too long:…:662:\n"); the common causes
+ * have a clear meaning.
+ */
+export function handshakeError(err: unknown): string {
+  const text = errText(err).trim();
+  if (/packet length too long|wrong version number|http request/i.test(text)) return 'this port answers plain HTTP, not HTTPS (proxmox.url must be https://<host>:8006)';
+  if (/ECONNRESET|socket hang up/i.test(text)) return 'the connection was closed during the handshake';
+  const reason = /:SSL routines:[^:]*:([^:]+):/.exec(text)?.[1];
+  return reason ? `${reason} (OpenSSL)` : text.replace(/\s+/g, ' ').replace(/\.$/, '');
+}
+
 const fpShort = (fp: string): string => (fp.length > 23 ? `${fp.slice(0, 11)}…${fp.slice(-11)}` : fp);
 const isoDay = (t: number): string => (Number.isFinite(t) ? new Date(t).toISOString().slice(0, 10) : 'unknown');
 
-/** Copy-paste steps that pin the certificate the host presents right now (after checking it on the host). */
-function repinFix(presented: string, port: number, configPath: string, hasPinLine: boolean, installEnv?: string): string {
-  const verify = `# 1. On the Proxmox host, print the fingerprint it serves (it should be ${presented}):\nopenssl s_client -connect 127.0.0.1:${port} </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256`;
-  const pin = hasPinLine
-    ? `# 2. If it matches, pin it in the dashboard container:\nsed -i -E 's/^([[:space:]]*fingerprint:).*/\\1 "${presented}"/' ${shq(configPath)} && ${RESTART}`
-    : `# 2. If it matches, set it in ${configPath} under proxmox: (then: ${RESTART})\n  tls:\n    fingerprint: "${presented}"`;
-  return `${verify}\n${pin}\n# Or re-run the installer on the host, which re-pins automatically:\n${installerCommand('', { installEnv })}`;
+/** How config.yaml sets up proxmox.tls today, as far as a pin fix needs to know (from the file's lines). */
+export type PinState = 'fingerprint' | 'ca' | 'none';
+
+export function pinStateOf(configText: string): PinState {
+  if (/^\s*fingerprint:/m.test(configText)) return 'fingerprint';
+  if (/^\s+ca:/m.test(configText)) return 'ca';
+  return 'none';
 }
 
-function evaluateTls(info: TlsInfo, o: PveCheckOptions, port: number, hasPinLine: boolean): DiagnosticCheck {
+/**
+ * Copy-paste steps that pin the certificate the host presents right now (after checking it on the host). The edit
+ * depends on what the config has: a pin is replaced, a "ca:" line becomes the pin (pasting a second "tls:" key would
+ * make the file invalid), otherwise the line is added with pve1-dash-config (which checks the file before saving).
+ */
+function repinFix(presented: string, port: number, configPath: string, pin: PinState, installEnv?: string): string {
+  const verify = `# 1. On the Proxmox host, print the fingerprint it serves (it should be ${presented}):\nopenssl s_client -connect 127.0.0.1:${port} </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256`;
+  const installer = installerCommand('', { installEnv });
+  if (pin === 'fingerprint') {
+    return (
+      `${verify}\n# 2. If it matches, pin it in the dashboard container:\nsed -i -E 's/^([[:space:]]*fingerprint:).*/\\1 "${presented}"/' ${shq(configPath)} && ${RESTART}\n` +
+      `# Or re-run the installer on the host, which re-pins automatically:\n${installer}`
+    );
+  }
+  if (pin === 'ca') {
+    return (
+      `${verify}\n# 2. If it matches, pin it in the dashboard container instead of the CA check (replaces the tls "ca:" line):\n` +
+      `sed -i -E 's|^([[:space:]]+)ca:.*|\\1fingerprint: "${presented}"|' ${shq(configPath)} && ${RESTART}\n` +
+      `# Or re-run the installer on the host, which pins it when the cluster CA no longer verifies it:\n${installer}`
+    );
+  }
+  return (
+    `${verify}\n# 2. If it matches, add the pin in the dashboard container: pve1-dash-config (checks the file before it saves and\n` +
+    `#    restarts). Under proxmox:, in its tls: section (add "tls:" only if proxmox: has none), set:\n    fingerprint: "${presented}"`
+  );
+}
+
+function evaluateTls(info: TlsInfo, o: PveCheckOptions, port: number, pin: PinState): DiagnosticCheck {
   const { config, configPath, installEnv } = o;
   const tls = config.proxmox.tls;
   const now = o.now();
@@ -159,7 +199,7 @@ function evaluateTls(info: TlsInfo, o: PveCheckOptions, port: number, hasPinLine
     const want = normalizeFingerprint(tls.fingerprint);
     if (!/^[0-9A-F]{64}$/.test(want)) {
       return check('pve.tls', G, title, 'fail', `proxmox.tls.fingerprint "${tls.fingerprint}" is not a SHA-256 fingerprint (64 hex digits). Proxmox presents ${presented}.`, {
-        fix: repinFix(presented, port, configPath, true, installEnv),
+        fix: repinFix(presented, port, configPath, pin, installEnv),
         docs,
       });
     }
@@ -170,7 +210,7 @@ function evaluateTls(info: TlsInfo, o: PveCheckOptions, port: number, hasPinLine
         title,
         'fail',
         `Proxmox presents ${presented}, but the config pins ${tls.fingerprint}. The certificate changed (renewed, replaced or a custom/ACME certificate was uploaded) — or something else answers on this address.`,
-        { fix: repinFix(presented, port, configPath, true, installEnv), docs },
+        { fix: repinFix(presented, port, configPath, pin, installEnv), docs },
       );
     }
     if (left < 0) {
@@ -194,7 +234,7 @@ function evaluateTls(info: TlsInfo, o: PveCheckOptions, port: number, hasPinLine
     }
     if (left < 30) {
       return check('pve.tls', G, title, 'warn', `The pin matches, but the certificate expires in ${left} days (${isoDay(info.validTo)}). When Proxmox renews it, the pin stops matching.`, {
-        fix: `After the renewal, re-pin:\n${repinFix('<new fingerprint>', port, configPath, true, installEnv)}`,
+        fix: `After the renewal, re-pin:\n${repinFix('<new fingerprint>', port, configPath, pin, installEnv)}`,
         docs,
       });
     }
@@ -207,14 +247,14 @@ function evaluateTls(info: TlsInfo, o: PveCheckOptions, port: number, hasPinLine
     : `not valid for "${new URL(config.proxmox.url).hostname}" (it covers ${info.san.join(', ') || 'no names'})`;
   if (tls.insecure && !tls.ca) {
     return check('pve.tls', G, title, 'warn', `proxmox.tls.insecure is on: the certificate is not verified at all (${certText}). Anyone on the path could read the API token.`, {
-      fix: repinFix(presented, port, configPath, false, installEnv),
+      fix: repinFix(presented, port, configPath, pin, installEnv),
       docs,
     });
   }
   const mode = tls.ca ? `the CA in proxmox.tls.ca (${tls.ca})` : 'the system certificate store';
   if (!trusted) {
     return check('pve.tls', G, title, 'fail', `The ${certText} is ${why} by ${mode}. Proxmox presents SHA-256 ${presented}.`, {
-      fix: repinFix(presented, port, configPath, false, installEnv),
+      fix: repinFix(presented, port, configPath, pin, installEnv),
       docs,
     });
   }
@@ -436,20 +476,20 @@ export async function proxmoxChecks(o: PveCheckOptions): Promise<PveCheckResult>
       info = await tlsProbe(host, port, o.stepTimeoutMs, ca);
     } catch (err) {
       checks.push(
-        check('pve.tls', G, 'Proxmox TLS certificate', 'fail', `TLS handshake with ${host}:${port} failed: ${errText(err)}. Is this really the Proxmox API port (8006)?`, {
+        check('pve.tls', G, 'Proxmox TLS certificate', 'fail', `TLS handshake with ${host}:${port} failed: ${handshakeError(err)}. Is this really the Proxmox API port (8006)?`, {
           fix: `# On the Proxmox host:\nss -ltnp | grep ${port}\nsystemctl status pveproxy --no-pager`,
         }),
       );
       skipRest('Skipped: no TLS connection.', later);
       return { checks };
     }
-    let hasPinLine = !!config.proxmox.tls.fingerprint;
+    let pin: PinState = config.proxmox.tls.fingerprint ? 'fingerprint' : config.proxmox.tls.ca ? 'ca' : 'none';
     try {
-      hasPinLine = /^\s*fingerprint:/m.test(readFileSync(o.configPath, 'utf8'));
+      pin = pinStateOf(readFileSync(o.configPath, 'utf8'));
     } catch {
       /* keep the guess */
     }
-    const tlsCheck = evaluateTls(info, o, port, hasPinLine);
+    const tlsCheck = evaluateTls(info, o, port, pin);
     checks.push(tlsCheck);
     if (tlsCheck.status === 'fail') {
       skipRest('Skipped: the dashboard refuses this TLS certificate (see "Proxmox TLS certificate").', later);

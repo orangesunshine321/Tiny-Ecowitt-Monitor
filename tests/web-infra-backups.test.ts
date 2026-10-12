@@ -113,10 +113,8 @@ describe('coverage', () => {
     expect(lastBackupFailed(failed)).toBe(true);
     expect(lastBackupFailed(recovered)).toBe(false);
     expect(lastBackupFailed(cov({ lastFailure: { time: NOW, upid: 'UPID:z' } }))).toBe(true);
-    expect(coverageBadges(failed)).toEqual([
-      { tone: 'crit', label: 'Last backup failed' },
-      { tone: 'ok', label: 'Recent' },
-    ]);
+    // the older good backup is still recent, but a "Recent" pill next to the failure would contradict it
+    expect(coverageBadges(failed)).toEqual([{ tone: 'crit', label: 'Last backup failed' }]);
     const s = summarizeCoverage([list[0]!, failed, recovered]);
     expect(s.failed).toBe(1);
     expect(coverageTone(s)).toBe('crit');

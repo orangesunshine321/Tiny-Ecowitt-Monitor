@@ -14,7 +14,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { type Config, ConfigSchema } from '../server/config.js';
 import { startMockProxmox, type MockProxmox } from '../server/demo/index.js';
 import { clockCheck } from '../server/diagnostics/local.js';
-import { proxmoxChecks, type PveCheckOptions } from '../server/diagnostics/pve.js';
+import { handshakeError, proxmoxChecks, type PveCheckOptions } from '../server/diagnostics/pve.js';
 import type { DiagnosticCheck } from '../shared/types.js';
 
 const TOKEN = 'pve1dash@pve!dashboard';
@@ -97,6 +97,17 @@ const pveLike =
         : path === '/access/permissions'
           ? { data: { '/': { 'Sys.Audit': 1, 'VM.Audit': 1, 'Datastore.Audit': 1 } } }
           : { data: [] });
+
+describe('handshakeError', () => {
+  it('turns OpenSSL dumps into plain words', () => {
+    const dump = new Error('C0ACCBB1E87F0000:error:0A0000C6:SSL routines:tls_get_more_records:packet length too long:../deps/openssl/openssl/ssl/record/methods/tls_common.c:662:\n');
+    expect(handshakeError(dump)).toBe('this port answers plain HTTP, not HTTPS (proxmox.url must be https://<host>:8006)');
+    const other = new Error('C0ACCBB1E87F0000:error:0A000410:SSL routines:ssl3_read_bytes:sslv3 alert handshake failure:../ssl/record/rec_layer_s3.c:1584:SSL alert number 40\n');
+    expect(handshakeError(other)).toBe('sslv3 alert handshake failure (OpenSSL)');
+    expect(handshakeError(new Error('socket hang up'))).toBe('the connection was closed during the handshake');
+    expect(handshakeError(new Error('something\nodd.'))).toBe('something odd');
+  });
+});
 
 describe('proxmox diagnostics — demo mock', () => {
   let mock: MockProxmox;
@@ -206,7 +217,29 @@ describe('proxmox diagnostics — fault injection', () => {
     const t = byId((await proxmoxChecks(opts(cfg(url)))).checks)['pve.tls']!;
     expect(t.status).toBe('fail');
     expect(t.detail).toMatch(/not trusted/);
-    expect(t.fix).toContain(`fingerprint: "${cert.fp}"`);
+    expect(t.fix).toContain(cert.fp);
+  });
+
+  it('the pin fix edits what the config file has: a pin, a "ca:" line, or neither', async () => {
+    const url = await stub(P_TLS, pveLike(), true);
+    const file = join(dir, 'pin-state.yaml');
+    const fixFor = async (text: string) => {
+      writeFileSync(file, text);
+      return byId((await proxmoxChecks(opts(cfg(url), { configPath: file }))).checks)['pve.tls']!.fix ?? '';
+    };
+    // a pin: replace its value (and the installer re-pins)
+    const pinned = await fixFor('proxmox:\n  tls:\n    fingerprint: "00"\n');
+    expect(pinned).toContain(`/\\1 "${cert.fp}"/'`);
+    expect(pinned).toMatch(/re-pins automatically/);
+    // tls.ca: replace that line, never paste a second "tls:" (a duplicate key makes the file invalid)
+    const ca = await fixFor('proxmox:\n  tls:\n    ca: /etc/pve1-dash/pve-root-ca.pem\n');
+    expect(ca).toContain(`sed -i -E 's|^([[:space:]]+)ca:.*|\\1fingerprint: "${cert.fp}"|'`);
+    expect(ca).not.toMatch(/^\s*tls:/m);
+    // neither (public CAs): add it with the checked editor; no claim that the installer does it
+    const none = await fixFor('proxmox:\n  url: https://pve1:8006\n');
+    expect(none).toContain('pve1-dash-config');
+    expect(none).toContain(`fingerprint: "${cert.fp}"`);
+    expect(none).not.toMatch(/installer/);
   });
 
   it('CA mode with the matching CA → ok', async () => {
