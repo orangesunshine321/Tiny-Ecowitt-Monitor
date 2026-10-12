@@ -9,9 +9,10 @@ export type HistoryTick = Omit<Extract<StreamEvent, { type: 'history' }>, 'type'
  * connect and then `patch` events per changed section.
  *
  * Events:
- *  - 'patch'  (key: SnapshotKey, value)   a section changed
- *  - 'alert'  (event: AlertEvent)         an alert fired or resolved (for live in-app toasts)
- *  - 'history' (tick: HistoryTick)        new history samples (node/guests/services) for the live stream
+ *  - 'patch'  (key: SnapshotKey, value, json)   a section changed; `json` is JSON.stringify(value), already computed
+ *                                              for change detection (the SSE hub reuses it instead of serializing again)
+ *  - 'alert'  (event: AlertEvent)               an alert fired or resolved (for live in-app toasts)
+ *  - 'history' (tick: HistoryTick)              new history samples (node/guests/services) for the live stream
  */
 export class Store extends EventEmitter {
   private snap: Snapshot;
@@ -60,13 +61,33 @@ export class Store extends EventEmitter {
     return this.snap[key];
   }
 
+  /**
+   * The full snapshot as JSON (what JSON.stringify(snapshot()) returns, key order aside). Sections are taken from the
+   * JSON already computed by set(), so only meta is serialized again: cheap enough for every SSE connect and for
+   * GET /api/snapshot.
+   */
+  snapshotJson(): string {
+    const snap = this.snapshot();
+    const parts: string[] = [];
+    for (const key of Object.keys(snap) as SnapshotKey[]) {
+      const value = snap[key];
+      if (value === undefined) continue;
+      // sections never set() still hold their initial (small) value; they are not cached, so the first set() of a
+      // section always emits a patch, as before
+      const json = (key === 'meta' ? undefined : this.hashes.get(key)) ?? JSON.stringify(value);
+      parts.push(`${JSON.stringify(key)}:${json}`);
+    }
+    return `{${parts.join(',')}}`;
+  }
+
   /** Replace a section. Emits 'patch' only if the JSON content actually changed. */
   set<K extends SnapshotKey>(key: K, value: Snapshot[K]): void {
     const json = JSON.stringify(value);
     if (this.hashes.get(key) === json) return;
-    this.hashes.set(key, json);
+    if (json === undefined) this.hashes.delete(key);
+    else this.hashes.set(key, json);
     this.snap[key] = value;
-    this.emit('patch', key, value);
+    this.emit('patch', key, value, json);
   }
 
   /** Read-modify-write helper for a section. */

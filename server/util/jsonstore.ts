@@ -45,10 +45,14 @@ export function readJson<T>(path: string, fallback: T, onError?: (err: Error) =>
  * secrets. On failure the temp file is removed and the error is thrown (the old file stays as it was).
  */
 export function writeJson(path: string, value: unknown, mode = 0o600): void {
+  writeFileAtomic(path, JSON.stringify(value, null, 2), mode);
+}
+
+/** Atomically and durably write text (see writeJson). */
+export function writeFileAtomic(path: string, data: string, mode = 0o600): void {
   const dir = dirname(path);
   mkdirSync(dir, { recursive: true });
   const tmp = `${path}.${process.pid}.tmp`;
-  const data = JSON.stringify(value, null, 2);
   try {
     const fd = openSync(tmp, 'w', mode);
     try {
