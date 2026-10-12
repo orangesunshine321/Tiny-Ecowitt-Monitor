@@ -1,5 +1,5 @@
 #!/bin/bash
-# pve1-dash-helper: read-only forced-command helper for pve1-dash on the Proxmox VE host (helper protocol v1,
+# pve1-dash-helper: read-only forced-command helper for pve1-dash on the Proxmox VE host (helper protocol v2,
 # docs/HELPER_PROTOCOL.md). Works on PVE 8.x and 9.x.
 #
 # Install at /usr/local/sbin/pve1-dash-helper (root:root, 0755) and authorize the dashboard key in
@@ -8,10 +8,14 @@
 #
 # sshd ignores the command the client asked for and passes it here as SSH_ORIGINAL_COMMAND. It is matched against a
 # strict allow-list and is never evaluated or handed to a shell:
-#   version              -> "pve1-dash-helper 1"
-#   inventory [vmid]     -> framed inventory of running LXCs (pct exec) and running agent-enabled VMs (qm guest exec)
+#   version              -> "pve1-dash-helper 2"
+#   inventory [vmid] [quick]
+#                        -> framed inventory of running LXCs (pct exec) and running agent-enabled VMs (qm guest exec);
+#                           "quick" skips counting package updates inside the guests (the one slow probe)
 #   sensors              -> raw `sensors -j` JSON (exit 3 when lm-sensors is not installed)
-#   pkgupdates           -> /var/lib/pve-manager/pkgupdates (JSON array; "[]" when missing)
+#   pkgupdates           -> pending package updates as a JSON array (the /var/lib/pve-manager/pkgupdates objects),
+#                           recomputed from the local apt cache when that file is stale, without already installed ones
+#   hostinfo             -> "key value" lines: running kernel, installed kernels, boot pins, package list timestamps
 #   backups <storage>    -> backup volumes of a storage as JSON (pvesh as root; the API hides them from PVEAuditor)
 # Anything else prints "denied" on stderr and exits 1. With no command, "inventory" runs.
 # Root can also run it by hand for testing: pve1-dash-helper inventory 101
@@ -21,13 +25,19 @@ export LC_ALL=C
 # Append the standard locations: sshd's PATH for root normally has them, but be explicit.
 export PATH="${PATH:+$PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-readonly PROTOCOL=1
+readonly PROTOCOL=2
 readonly GUEST_TIMEOUT=25        # seconds per guest (pct exec; qm guest exec --timeout)
 readonly QM_TIMEOUT=30           # outer bound for `qm guest exec` (its own --timeout is GUEST_TIMEOUT)
 readonly KILL_AFTER=5            # SIGKILL this long after timeout's SIGTERM
 readonly MAX_PARALLEL=4          # guests inspected at the same time
 readonly MAX_GUEST_BYTES=1048576 # per-guest output cap
 readonly PKGUPDATES_FILE=/var/lib/pve-manager/pkgupdates
+readonly DPKG_STATUS=/var/lib/dpkg/status
+readonly APT_PKGCACHE=/var/cache/apt/pkgcache.bin
+readonly APT_LISTS=/var/lib/apt/lists
+readonly BOOT_DIR=/boot
+readonly KERNEL_PIN=/etc/kernel/proxmox-boot-pin
+readonly KERNEL_NEXT_PIN=/etc/kernel/next-boot-pin
 
 # The command line comes from sshd (forced command) or, for manual runs, from the arguments.
 CMDLINE=${SSH_ORIGINAL_COMMAND:-$*}
@@ -38,11 +48,13 @@ unset SSH_ORIGINAL_COMMAND SSH_CLIENT SSH_CONNECTION SSH_TTY SSH_AUTH_SOCK
 # The inner guest script, run inside each guest. Identical to the body of pve1-dash-guest-inventory and to
 # server/inventory/innerScript.ts (tests/inventory-scripts.test.ts enforces this).
 IFS= read -r -d '' INNER <<'PVE1_DASH_INNER' || :
-# >>> pve1-dash inner v1 >>>
-# Inventory of this guest for pve1-dash (helper protocol v1). Read-only and POSIX sh, so it runs under dash, bash and
+# >>> pve1-dash inner v2 >>>
+# Inventory of this guest for pve1-dash (helper protocol v2). Read-only and POSIX sh, so it runs under dash, bash and
 # busybox. Every section is optional: a missing tool leaves its section empty. This exact text is also embedded in
 # pve1-dash-helper (run via pct exec / qm guest exec) and in server/inventory/innerScript.ts; keep all three identical.
-PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
+# The last two PATH entries are NixOS's: its tools are not in the FHS directories, and `pct exec --keep-env 0` does
+# not pass on the guest's own PATH.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin:/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin
 LC_ALL=C
 export PATH LC_ALL
 # Bound every probe so a hung daemon (docker, systemd, ...) cannot stall the whole inventory.
@@ -55,8 +67,21 @@ p1d_put() { if [ -n "$1" ]; then printf '%s\n' "$1"; fi; }
 # Run a probe (stderr dropped) and print its stdout.
 # shellcheck disable=SC2086 # $p1d_t is intentionally split into "timeout 15"
 p1d_run() { p1d_o=$($p1d_t "$@" 2>/dev/null) || :; p1d_put "$p1d_o"; }
+# Number of lines of text $1 that match the basic regex $2.
+p1d_count() { printf '%s\n' "$1" | grep -c -- "$2"; }
+# "stamp <epoch seconds>" with the modification time of a file or directory, nothing when it does not exist.
+p1d_stamp() {
+  if [ -e "$1" ]; then
+    p1d_s=$(stat -c %Y "$1" 2>/dev/null) || p1d_s=$(date -r "$1" +%s 2>/dev/null) || p1d_s=''
+    if [ -n "$p1d_s" ]; then printf 'stamp %s\n' "$p1d_s"; fi
+  fi
+}
 
-printf '##pve1-dash:inventory v1\n'
+# First argument "quick": skip counting package updates, the one slow probe (the dashboard asks for it hourly).
+p1d_quick=''
+if [ "${1:-}" = quick ]; then p1d_quick=1; fi
+
+printf '##pve1-dash:inventory v2\n'
 
 p1d_sec os-release
 for p1d_f in /etc/os-release /usr/lib/os-release; do
@@ -133,9 +158,114 @@ if [ -z "$p1d_o" ] && p1d_has netstat; then
 fi
 p1d_put "$p1d_o"
 
+p1d_sec df
+# Mounted filesystems in 1K blocks; the dashboard drops pseudo filesystems. -l (local only, so a hung network mount
+# cannot stall df) is GNU-only and very old busybox has no -T, hence the fallbacks. df exits 1 when one mount cannot
+# be read but still lists the others, so any output counts; a timeout ends the attempts.
+p1d_o=''
+if p1d_has df; then
+  for p1d_a in '-P -T -k -l' '-P -T -k' '-P -k'; do
+    # shellcheck disable=SC2086
+    p1d_o=$($p1d_t df $p1d_a 2>/dev/null)
+    p1d_rc=$?
+    if [ -n "$p1d_o" ] || [ "$p1d_rc" -ge 124 ]; then break; fi
+  done
+fi
+p1d_put "$p1d_o"
+
+p1d_sec updates
+# Pending package updates, from the local package cache only: nothing here refreshes it or uses the network.
+# "manager <name>", "count <n>", "security <n>" where cheap, and "stamp <epoch>" for the files whose modification time
+# tells when the package lists were last refreshed (the dashboard takes the newest). "skipped" in quick mode.
+if [ -n "$p1d_quick" ]; then
+  echo 'skipped'
+elif p1d_has apt-get; then
+  # dist-upgrade also counts what needs new packages (kernels); only upgrades of installed packages are counted:
+  # "Inst <package> [<installed version>] (<new version> <origin> [<arch>])". NoLocking: works while apt runs.
+  # shellcheck disable=SC2086
+  if p1d_o=$($p1d_t apt-get -s -o Debug::NoLocking=1 dist-upgrade 2>/dev/null); then
+    p1d_o=$(printf '%s\n' "$p1d_o" | grep '^Inst [^ ]* \[')
+    echo 'manager apt'
+    printf 'count %s\n' "$(p1d_count "$p1d_o" '^Inst ')"
+    printf 'security %s\n' "$(p1d_count "$p1d_o" '[Ss]ecurity')"
+    for p1d_f in /var/lib/apt/lists /var/lib/apt/lists/partial /var/lib/apt/periodic/update-success-stamp; do
+      p1d_stamp "$p1d_f"
+    done
+  fi
+elif p1d_has apk; then
+  # shellcheck disable=SC2086
+  if p1d_o=$($p1d_t apk --no-network version -l '<' 2>/dev/null); then
+    echo 'manager apk'
+    printf 'count %s\n' "$(p1d_count "$p1d_o" ' < ')"
+    for p1d_f in /var/cache/apk/APKINDEX.*; do p1d_stamp "$p1d_f"; done
+  fi
+elif p1d_has dnf || p1d_has yum; then
+  if p1d_has dnf; then p1d_m=dnf; else p1d_m=yum; fi
+  # -C: cache only. Exit 100 means updates are available. Package lines start with "<name>.<arch>" (a long name wraps
+  # and its version starts the next line with blanks); the obsoletes list at the end is not counted.
+  # shellcheck disable=SC2086
+  p1d_o=$($p1d_t "$p1d_m" -C -q check-update 2>/dev/null)
+  p1d_rc=$?
+  if [ "$p1d_rc" -eq 0 ] || [ "$p1d_rc" -eq 100 ]; then
+    p1d_o=$(printf '%s\n' "$p1d_o" | sed -n '/^Obsoleting/q;p')
+    echo "manager $p1d_m"
+    printf 'count %s\n' "$(p1d_count "$p1d_o" '^[^ ][^ ]*\.[^ ]')"
+    for p1d_f in /var/cache/dnf/*/repodata/repomd.xml /var/cache/yum/*/*/*/repomd.xml; do p1d_stamp "$p1d_f"; done
+  fi
+elif p1d_has pacman; then
+  # -Qu compares with the local sync databases (checkupdates would download new ones). Exit 1: nothing to update.
+  # shellcheck disable=SC2086
+  p1d_o=$($p1d_t pacman -Qu 2>/dev/null)
+  p1d_rc=$?
+  if [ "$p1d_rc" -le 1 ]; then
+    p1d_o=$(printf '%s\n' "$p1d_o" | grep -v '\[ignored\]')
+    echo 'manager pacman'
+    printf 'count %s\n' "$(p1d_count "$p1d_o" ' -> ')"
+    for p1d_f in /var/lib/pacman/sync/*.db; do p1d_stamp "$p1d_f"; done
+  fi
+fi
+
+p1d_sec reboot
+# "flag <source>" when the system says it needs a reboot: Debian/Ubuntu's reboot-required file, NixOS booted vs
+# current kernel, `needs-restarting -r` (RHEL family; exit 1 = reboot needed). Outside containers also the installed
+# kernels ("vmlinuz <version>"; the dashboard compares them with the running one) and "modules-missing" when the
+# running kernel's modules are gone (Alpine and Arch remove them on upgrade). Containers share the host's kernel.
+if [ -e /run/reboot-required ] || [ -e /var/run/reboot-required ]; then echo 'flag reboot-required'; fi
+if [ -e /run/booted-system/kernel ] && [ -e /run/current-system/kernel ] &&
+  [ "$(readlink -f /run/booted-system/kernel)" != "$(readlink -f /run/current-system/kernel)" ]; then
+  echo 'flag nixos'
+fi
+if p1d_has needs-restarting; then
+  # shellcheck disable=SC2086
+  $p1d_t needs-restarting -r >/dev/null 2>&1
+  p1d_rc=$?
+  if [ "$p1d_rc" -eq 1 ]; then echo 'flag needs-restarting'; fi
+fi
+p1d_ct=''
+if [ -n "${container:-}" ] || [ -e /run/.containerenv ] || [ -e /.dockerenv ]; then p1d_ct=1; fi
+if [ -z "$p1d_ct" ] && { tr '\000' '\n' </proc/1/environ; } 2>/dev/null | grep -q '^container='; then
+  p1d_ct=1
+fi
+if [ -n "$p1d_ct" ]; then
+  echo 'container'
+else
+  p1d_k=$(uname -r 2>/dev/null) || p1d_k=''
+  if [ -n "$p1d_k" ] && [ ! -d "/lib/modules/$p1d_k" ]; then
+    for p1d_f in /lib/modules/*; do
+      if [ -d "$p1d_f" ]; then
+        echo 'modules-missing'
+        break
+      fi
+    done
+  fi
+  for p1d_f in /boot/vmlinuz-*; do
+    if [ -e "$p1d_f" ]; then printf 'vmlinuz %s\n' "${p1d_f#/boot/vmlinuz-}"; fi
+  done
+fi
+
 printf '##pve1-dash:end\n'
 exit 0
-# <<< pve1-dash inner v1 <<<
+# <<< pve1-dash inner v2 <<<
 PVE1_DASH_INNER
 readonly INNER
 
@@ -159,6 +289,26 @@ for my $g (@$data) {
   $status =~ s/[^A-Za-z0-9_-]//g;
   print "$id $kind $status\n";
 }'
+
+# Reads "<package> <installed version>" lines, a "@@json" line, then a pkgupdates JSON array, and prints the array
+# without the entries whose candidate `Version` is already installed.
+# shellcheck disable=SC2016 # Perl code, not shell
+readonly PERL_FILTER_UPDATES='
+use strict; use warnings; use JSON::PP;
+my %inst;
+while (my $l = <STDIN>) {
+  chomp $l;
+  last if $l eq "\@\@json";
+  my ($p, $v) = split / /, $l, 2;
+  $inst{$p} = $v if defined($v) && $v ne "";
+}
+my $data = eval { JSON::PP->new->decode(do { local $/; <STDIN> }) };
+exit 1 unless ref($data) eq "ARRAY";
+my @keep = grep {
+  !(ref($_) eq "HASH" && defined($_->{Package}) && defined($_->{Version}) && !ref($_->{Package})
+    && defined($inst{$_->{Package}}) && $inst{$_->{Package}} eq $_->{Version})
+} @$data;
+print JSON::PP->new->canonical->encode(\@keep), "\n";'
 
 deny() {
   if command -v logger >/dev/null 2>&1; then
@@ -263,7 +413,9 @@ inspect_guest() { # <vmid> <lxc|qemu> <base path>
     # --keep-env 0: the CT gets a clean environment (only container=lxc), not root's host environment, which
     # includes whatever /root/.bashrc exports (pct exec defaults to --keep-env 1 on PVE 8 and 9). The inner script
     # sets its own PATH and LC_ALL, and /bin/sh is an absolute path.
-    timeout -k "$KILL_AFTER" "$GUEST_TIMEOUT" pct exec "$vmid" --keep-env 0 -- /bin/sh -c "$INNER" </dev/null 2>"$err" |
+    # The inner script gets $0 = pve1-dash-inner and, in quick mode, $1 = quick.
+    timeout -k "$KILL_AFTER" "$GUEST_TIMEOUT" pct exec "$vmid" --keep-env 0 -- \
+      /bin/sh -c "$INNER" pve1-dash-inner ${INNER_MODE:+"$INNER_MODE"} </dev/null 2>"$err" |
       head -c "$MAX_GUEST_BYTES" >"$out"
     rc=${PIPESTATUS[0]}
   else
@@ -276,8 +428,8 @@ inspect_guest() { # <vmid> <lxc|qemu> <base path>
         "$vmid" "$type" "$transport" "$vmid" >"$base.block"
       return 0
     fi
-    timeout -k "$KILL_AFTER" "$QM_TIMEOUT" qm guest exec "$vmid" --timeout "$GUEST_TIMEOUT" -- /bin/sh -c "$INNER" \
-      </dev/null 2>"$err" | head -c "$MAX_GUEST_BYTES" >"$out"
+    timeout -k "$KILL_AFTER" "$QM_TIMEOUT" qm guest exec "$vmid" --timeout "$GUEST_TIMEOUT" -- \
+      /bin/sh -c "$INNER" pve1-dash-inner ${INNER_MODE:+"$INNER_MODE"} </dev/null 2>"$err" | head -c "$MAX_GUEST_BYTES" >"$out"
     rc=${PIPESTATUS[0]}
   fi
   size=$(wc -c <"$out")
@@ -285,6 +437,12 @@ inspect_guest() { # <vmid> <lxc|qemu> <base path>
     printf '@@pve1-dash:guest %s %s %s\n' "$vmid" "$type" "$transport"
     if ((size >= MAX_GUEST_BYTES)); then
       printf '@@pve1-dash:error output exceeded %s bytes\n' "$MAX_GUEST_BYTES"
+    elif ((rc != 0)) && grep -q '^##pve1-dash:inventory ' "$out"; then
+      # The inner script started but did not finish (e.g. a slow probe ran into the time limit): pass on what it
+      # printed, then say why it stopped. Only pct exec streams like this; qm guest exec prints nothing on a timeout.
+      sed 's/^@@/ @@/' "$out"
+      [[ -z $(tail -c 1 "$out") ]] || echo
+      printf '@@pve1-dash:error %s\n' "$(error_text "$rc" "$err" "$limit")"
     elif ((rc != 0)); then
       printf '@@pve1-dash:error %s\n' "$(error_text "$rc" "$err" "$limit")"
     elif ((size == 0)); then
@@ -311,8 +469,10 @@ flush_blocks() {
   done
 }
 
-cmd_inventory() { # [vmid]
+INNER_MODE=''
+cmd_inventory() { # <vmid or ''> <'' | quick>
   local want=${1:-} node vmid kind status
+  INNER_MODE=${2:-}
   local -a running=()
   ORDER=()
   # Header first: anything a noisy .bashrc printed before it is ignored by the dashboard.
@@ -375,11 +535,65 @@ cmd_sensors() {
   exit $?
 }
 
-cmd_pkgupdates() {
-  if [[ -s $PKGUPDATES_FILE ]]; then
-    cat -- "$PKGUPDATES_FILE"
+# Print a pkgupdates JSON array (stdin) without the packages whose candidate version is already installed; unchanged
+# when dpkg-query or perl fail.
+filter_installed() {
+  local json installed filtered
+  json=$(cat)
+  # shellcheck disable=SC2016 # dpkg-query fields, not shell variables
+  installed=$(timeout -k "$KILL_AFTER" 30 dpkg-query -W -f='${Status} ${Package} ${Version}\n' 2>/dev/null |
+    awk '$3 == "installed" && NF == 5 { print $4, $5 }') || installed=''
+  if [[ -n $installed ]] &&
+    filtered=$(printf '%s\n@@json\n%s\n' "$installed" "$json" | perl -e "$PERL_FILTER_UPDATES" 2>/dev/null) &&
+    [[ $filtered == '['* ]]; then
+    printf '%s\n' "$filtered"
   else
-    echo '[]'
+    printf '%s\n' "$json"
+  fi
+}
+
+cmd_pkgupdates() {
+  local node json=''
+  # The cache file is written by the daily `pveupdate` only after `apt-get update` worked for every repository (one
+  # failing repository, e.g. the enterprise one without a subscription, leaves it stale or missing), and a manual
+  # `apt full-upgrade` does not touch it. When it is missing or older than the package database or the apt cache,
+  # recompute the list the way the web UI's Updates panel does: GET /nodes/<node>/apt/update as root reads the local
+  # apt cache only (no download) and rewrites the file.
+  if [[ ! -s $PKGUPDATES_FILE || $DPKG_STATUS -nt $PKGUPDATES_FILE || $APT_PKGCACHE -nt $PKGUPDATES_FILE ]]; then
+    node=$(node_name) || exit 2
+    json=$(timeout -k "$KILL_AFTER" 60 pvesh get "/nodes/$node/apt/update" --output-format json 2>/dev/null) || json=''
+    [[ $json == '['* ]] || json=''
+  fi
+  if [[ -z $json && -s $PKGUPDATES_FILE ]]; then json=$(<"$PKGUPDATES_FILE"); fi
+  filter_installed <<<"${json:-[]}"
+}
+
+# "<key> <value>" lines for the dashboard (helper protocol v2):
+#   running <uname -r>                 vmlinuz <version>  (one per /boot/vmlinuz-*)
+#   package <installed proxmox-kernel-* / pve-kernel-* package>
+#   pin <version> / next-boot-pin <version>   (proxmox-boot-tool kernel pin; it boots instead of the newest kernel)
+#   stamp-lists <epoch>  (apt package lists: when they were last refreshed)   stamp-pkgupdates <epoch>
+cmd_hostinfo() {
+  local f v re_ver='^[A-Za-z0-9._+~-]{1,100}$'
+  v=$(uname -r 2>/dev/null) || v=''
+  if [[ $v =~ $re_ver ]]; then printf 'running %s\n' "$v"; fi
+  for f in "$BOOT_DIR"/vmlinuz-*; do
+    v=${f##*/vmlinuz-}
+    if [[ -e $f && $v =~ $re_ver ]]; then printf 'vmlinuz %s\n' "$v"; fi
+  done
+  # shellcheck disable=SC2016 # dpkg-query fields, not shell variables
+  timeout -k "$KILL_AFTER" 30 dpkg-query -W -f='${Status} ${Package}\n' 'proxmox-kernel-*' 'pve-kernel-*' 2>/dev/null |
+    awk '$3 == "installed" && NF == 4 { print "package", $4 }'
+  for f in "$KERNEL_PIN:pin" "$KERNEL_NEXT_PIN:next-boot-pin"; do
+    v=''
+    if [[ -s ${f%:*} ]]; then v=$(head -n 1 -- "${f%:*}" 2>/dev/null | tr -d '[:space:]'); fi
+    if [[ $v =~ $re_ver ]]; then printf '%s %s\n' "${f##*:}" "$v"; fi
+  done
+  for f in "$APT_LISTS" "$APT_LISTS/partial"; do
+    if [[ -e $f ]] && v=$(stat -c %Y -- "$f" 2>/dev/null); then printf 'stamp-lists %s\n' "$v"; fi
+  done
+  if [[ -e $PKGUPDATES_FILE ]] && v=$(stat -c %Y -- "$PKGUPDATES_FILE" 2>/dev/null); then
+    printf 'stamp-pkgupdates %s\n' "$v"
   fi
 }
 
@@ -405,13 +619,18 @@ main() {
       echo "pve1-dash-helper $PROTOCOL"
       ;;
     inventory)
-      if ((n <= 1)); then
-        cmd_inventory ''
-      elif ((n == 2)) && [[ ${argv[1]} =~ $re_vmid ]]; then
-        cmd_inventory "${argv[1]}"
-      else
+      # inventory [vmid] [quick]
+      local want='' mode=''
+      if ((n >= 2)) && [[ ${argv[n - 1]} == quick ]]; then
+        mode=quick
+        n=$((n - 1))
+      fi
+      if ((n == 2)) && [[ ${argv[1]} =~ $re_vmid ]]; then
+        want=${argv[1]}
+      elif ((n > 1)); then
         deny
       fi
+      cmd_inventory "$want" "$mode"
       ;;
     sensors)
       ((n == 1)) || deny
@@ -420,6 +639,10 @@ main() {
     pkgupdates)
       ((n == 1)) || deny
       cmd_pkgupdates
+      ;;
+    hostinfo)
+      ((n == 1)) || deny
+      cmd_hostinfo
       ;;
     backups)
       ((n == 2)) && [[ ${argv[1]} =~ $re_storage ]] || deny

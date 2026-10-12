@@ -384,6 +384,8 @@ describe('host framing', () => {
       services: [],
       containers: [],
       ports: [],
+      // a fixable failure: the guest can be inspected once the agent runs
+      inspectable: 'yes',
     });
     expect(by[101]).toMatchObject({ ok: true, source: 'pct-exec', kernel: '6.14.11-2-pve', dockerPresent: false });
     expect(by[101]!.services.filter((s) => !s.system).map((s) => s.unit)).toEqual(['lighttpd', 'pihole-FTL', 'unbound']);
@@ -398,7 +400,7 @@ describe('host framing', () => {
     expect(by[105]!.ips).toEqual([{ iface: 'ens18', address: '10.10.20.50', family: 4, prefix: 24, source: 'inventory' }]);
     expect(by[105]!.services.filter((s) => !s.system).map((s) => s.unit)).toEqual(['containerd', 'docker', 'tailscaled']);
     expect(by[105]!.ports.find((p) => p.port === 22)).toEqual({ proto: 'tcp', address: '*', port: 22, process: 'sshd', pid: 1002 });
-    expect(by[106]).toMatchObject({ ok: false, error: 'unsupported OS (windows)' });
+    expect(by[106]).toMatchObject({ ok: false, error: 'unsupported OS (windows)', inspectable: 'unsupported' });
     expect(by[107]).toMatchObject({ ok: false, error: 'timeout after 25s' });
     expect(by[109]).toMatchObject({ ok: true, initSystem: 'openrc' });
     expect(by[110]).toMatchObject({ ok: false, error: 'guest command failed with exit code 127: sh: 1: /bin/sh: not found' });

@@ -1,0 +1,52 @@
+##pve1-dash:inventory v2
+##pve1-dash:section os-release
+PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"
+NAME="Debian GNU/Linux"
+VERSION_ID="12"
+ID=debian
+##pve1-dash:section kernel
+6.1.0-27-amd64
+##pve1-dash:section uptime
+86400.12 170000.00
+##pve1-dash:section loadavg
+0.12 0.10 0.08 1/180 4321
+##pve1-dash:section init
+systemd
+##pve1-dash:section services
+docker.service loaded active running Docker Application Container Engine
+##pve1-dash:section docker
+present
+##pve1-dash:section ip
+1: lo    inet 127.0.0.1/8 scope host lo\       valid_lft forever preferred_lft forever
+2: ens18    inet 10.10.10.42/24 brd 10.10.10.255 scope global ens18\       valid_lft forever preferred_lft forever
+3: docker0    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0\       valid_lft forever preferred_lft forever
+##pve1-dash:section listen
+LISTEN 0      4096         0.0.0.0:22        0.0.0.0:*    users:(("sshd",pid=600,fd=3))
+##pve1-dash:section df
+Filesystem                         Type     1024-blocks      Used Available Capacity Mounted on
+udev                               devtmpfs     4007420         0   4007420       0% /dev
+tmpfs                              tmpfs         805148       904    804244       1% /run
+/dev/sda1                          ext4        31861548  27450000   2766436      91% /
+tmpfs                              tmpfs        4025724         0   4025724       0% /dev/shm
+tmpfs                              tmpfs           5120         0      5120       0% /run/lock
+/dev/sda15                         vfat          126678     11840    114838      10% /boot/efi
+/dev/sdb1                          xfs       1952559104 976279552 976279552      50% /srv/my data
+/dev/sdb1                          xfs       1952559104 976279552 976279552      50% /srv/bind-of-data
+overlay                            overlay     31861548  27450000   2766436      91% /var/lib/docker/overlay2/3f0c1d/merged
+/dev/sdc1                          ext4        10255636   1203396   8511568      13% /var/lib/docker/volumes
+nas:/export/media                  nfs4      7811937280 5468356096 2343581184     71% /mnt/media
+lxcfs                              fuse.lxcfs         0         0         0       - /var/lib/lxcfs
+/dev/loop3                         squashfs       65024     65024         0     100% /snap/core22/1612
+tmpfs                              tmpfs         805144         4    805140       1% /run/user/0
+##pve1-dash:section updates
+manager apt
+count 12
+security 4
+stamp 1760000000
+stamp 1760003600
+stamp 99
+##pve1-dash:section reboot
+vmlinuz 6.1.0-26-amd64
+vmlinuz 6.1.0-27-amd64
+vmlinuz 6.1.0-28-amd64
+##pve1-dash:end

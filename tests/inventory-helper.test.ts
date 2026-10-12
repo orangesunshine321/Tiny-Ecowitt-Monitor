@@ -8,7 +8,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { parseHostFraming, parseHostInventory, parseJsonArray, parseSensors } from '../server/inventory/parse.js';
+import { parseHostFraming, parseHostInfo, parseHostInventory, parseJsonArray, parseSensors } from '../server/inventory/parse.js';
 
 const ROOT = join(import.meta.dirname, '..');
 const HELPER = join(ROOT, 'deploy/helpers/pve1-dash-helper');
@@ -125,10 +125,10 @@ describe('pve1-dash-helper: command validation', () => {
 
   it('prints the protocol version', () => {
     const r = env.run('version');
-    expect(r.stdout).toBe('pve1-dash-helper 1\n');
+    expect(r.stdout).toBe('pve1-dash-helper 2\n');
     expect(r.status).toBe(0);
     // manual invocation by root
-    expect(env.run(undefined, ['version']).stdout).toBe('pve1-dash-helper 1\n');
+    expect(env.run(undefined, ['version']).stdout).toBe('pve1-dash-helper 2\n');
   });
 
   const canary = join(env.dir, 'canary');
@@ -184,11 +184,12 @@ describe('pve1-dash-helper: command validation', () => {
 
 describe('pve1-dash-helper: inventory', () => {
   const env = setup(WORLD);
-  const r = env.run('inventory');
+  // quick: without the package-update count (apt-get -s takes seconds here); the full mode has its own tests below
+  const r = env.run('inventory quick');
 
   it('frames all running guests in vmid order and skips stopped/paused guests, templates and agent-less VMs', () => {
     expect(r.status).toBe(0);
-    expect(r.stdout.split('\n')[0]).toBe('@@pve1-dash:inventory v1');
+    expect(r.stdout.split('\n')[0]).toBe('@@pve1-dash:inventory v2');
     expect(r.stdout.endsWith('@@pve1-dash:done\n')).toBe(true);
     const f = parseHostFraming(r.stdout)!;
     expect(f.done).toBe(true);
@@ -250,7 +251,7 @@ describe('pve1-dash-helper: inventory', () => {
 
   it('starts containers with a clean environment (nothing from root\'s host environment)', () => {
     const e = setup({ lxc: [{ vmid: 101, status: 'running' }] });
-    const r = e.run('inventory', [], { PBS_PASSWORD: 's3cret', SSH_CLIENT: '10.10.20.8 50000 22', LC_TERMINAL: 'x' });
+    const r = e.run('inventory quick', [], { PBS_PASSWORD: 's3cret', SSH_CLIENT: '10.10.20.8 50000 22', LC_TERMINAL: 'x' });
     expect(parseHostInventory(r.stdout, 1)!.inventories[0]).toMatchObject({ vmid: 101, ok: true });
     expect(e.log().filter((l) => l.startsWith('pct-env '))).toEqual(['pct-env 101 container']);
   });
@@ -261,20 +262,63 @@ describe('pve1-dash-helper: inventory', () => {
   });
 
   it('inventories a single guest', () => {
-    const one = env.run('inventory 101');
+    const one = env.run('inventory 101 quick');
     const f = parseHostFraming(one.stdout)!;
     expect(f.done).toBe(true);
     expect(f.blocks.map((b) => b.vmid)).toEqual([101]);
     // a leading zero is still vmid 101 (no octal surprises)
-    expect(parseHostFraming(env.run('inventory 0101').stdout)!.blocks.map((b) => b.vmid)).toEqual([101]);
+    expect(parseHostFraming(env.run('inventory 0101 quick').stdout)!.blocks.map((b) => b.vmid)).toEqual([101]);
     // a stopped or unknown guest yields an empty, complete inventory
-    expect(env.run('inventory 102').stdout).toBe('@@pve1-dash:inventory v1\n@@pve1-dash:done\n');
-    expect(env.run('inventory 4242').stdout).toBe('@@pve1-dash:inventory v1\n@@pve1-dash:done\n');
+    expect(env.run('inventory 102').stdout).toBe('@@pve1-dash:inventory v2\n@@pve1-dash:done\n');
+    expect(env.run('inventory 4242').stdout).toBe('@@pve1-dash:inventory v2\n@@pve1-dash:done\n');
   });
 
-  it('runs inventory when no command is given', () => {
+  it('runs a full inventory when no command is given, with the package-update count', () => {
     const d = env.run(undefined);
     expect(parseHostFraming(d.stdout)!.blocks.length).toBe(10);
+    const by = Object.fromEntries(parseHostInventory(d.stdout, 1)!.inventories.map((i) => [i.vmid, i]));
+    // the real inner script ran in full mode: its updates section is not "skipped"
+    const updates = (vmid: number) => /##pve1-dash:section updates\n([^#]*)/.exec(d.stdout.split(`@@pve1-dash:guest ${vmid} `)[1] ?? '')?.[1];
+    expect(updates(101)).toBeDefined();
+    expect(updates(101)).not.toBe('skipped\n');
+    const hasApt = spawnSync('sh', ['-c', 'command -v apt-get'], { encoding: 'utf8' }).status === 0;
+    if (hasApt) expect(by[101]!.updates).toMatchObject({ manager: 'apt', count: expect.any(Number), security: expect.any(Number) });
+    expect(env.log().filter((l) => l.startsWith('inner-args 101'))).toContain('inner-args 101 pve1-dash-inner');
+  }, 120_000);
+
+  it('passes quick mode to the inner script (pct exec and qm guest exec) and skips only the update count', () => {
+    const calls = env.log();
+    expect(calls).toContain('inner-args 101 pve1-dash-inner quick');
+    expect(calls).toContain('inner-args 100 pve1-dash-inner quick');
+    const by = Object.fromEntries(parseHostInventory(r.stdout, 1)!.inventories.map((i) => [i.vmid, i]));
+    expect(by[101]!.updates).toBeUndefined();
+    expect(by[101]!.filesystems!.some((f) => f.mount === '/')).toBe(true);
+    expect(typeof by[101]!.rebootRequired).toBe('boolean');
+    expect(by[101]!.inspectable).toBe('yes');
+    expect(by[109]).toMatchObject({ ok: false, inspectable: 'unsupported' });
+    expect(by[105]).toMatchObject({ ok: false, inspectable: 'yes' });
+  });
+
+  it('rejects malformed quick requests', () => {
+    for (const bad of ['inventory quick quick', 'inventory quick 101', 'quick', 'inventory 101 quick x', 'inventory fast']) {
+      const x = env.run(bad);
+      expect(x.status, bad).toBe(1);
+      expect(x.stderr, bad).toBe('denied\n');
+    }
+  });
+});
+
+describe('pve1-dash-helper: partial output', () => {
+  it('passes on what a container printed before the time limit, then the reason', () => {
+    const env = setup({ lxc: [{ vmid: 120, status: 'running', mode: 'partial' }] });
+    const r = env.run('inventory quick');
+    expect(r.stdout).toContain('##pve1-dash:section kernel\n6.1.0-part\n##pve1-dash:section updates\n@@pve1-dash:error timeout after 25s\n');
+    expect(parseHostInventory(r.stdout, 1)!.inventories[0]).toMatchObject({
+      vmid: 120,
+      ok: true,
+      kernel: '6.1.0-part',
+      error: 'partial inventory: timeout after 25s',
+    });
   });
 });
 
@@ -283,7 +327,7 @@ describe('pve1-dash-helper: parallelism', () => {
     const vmids = [210, 202, 209, 201, 205, 203, 208, 204, 206, 207];
     const env = setup({ lxc: vmids.map((vmid) => ({ vmid, status: 'running', mode: 'slow', sleepMs: 400 })) });
     const started = Date.now();
-    const r = env.run('inventory');
+    const r = env.run('inventory quick');
     const elapsed = Date.now() - started;
     expect(r.status).toBe(0);
     expect(parseHostFraming(r.stdout)!.blocks.map((b) => b.vmid)).toEqual([...vmids].sort((a, b) => a - b));
@@ -331,7 +375,7 @@ describe('pve1-dash-helper: fallbacks', () => {
     const env = setup({ pveshFails: true, listFails: true, lxc: [{ vmid: 101, status: 'running' }] });
     const r = env.run('inventory');
     expect(r.status).toBe(2);
-    expect(r.stdout).toBe('@@pve1-dash:inventory v1\n');
+    expect(r.stdout).toBe('@@pve1-dash:inventory v2\n');
     expect(r.stderr).toBe('cannot list the guests of node pve1 (pvesh and pct/qm list failed)\n');
     expect(env.log().some((l) => l.startsWith('pct ["exec"'))).toBe(false);
   });
@@ -406,5 +450,143 @@ describe('pve1-dash-helper: sensors, pkgupdates, backups', () => {
     const r = env.run('backups nas-backups');
     expect(r.status).toBe(255);
     expect(r.stderr).toBe("storage 'nas-backups' does not exist\n");
+  });
+});
+
+/**
+ * `hostinfo` and the `pkgupdates` freshness logic read fixed host paths. They run here on a copy of the helper whose
+ * `readonly` path constants point into a temp dir, with sh stubs for hostname, uname, dpkg-query and pvesh.
+ */
+describe('pve1-dash-helper: hostinfo and pkgupdates (protocol v2)', () => {
+  function hostSetup() {
+    const dir = mkdtempSync(join(tmpdir(), 'pve1-dash-helper-v2-'));
+    dirs.push(dir);
+    const p = (...x: string[]) => join(dir, ...x);
+    spawnSync('mkdir', ['-p', p('bin'), p('boot'), p('lists', 'partial'), p('pve-manager'), p('kernel')]);
+    const paths: Record<string, string> = {
+      PKGUPDATES_FILE: p('pve-manager', 'pkgupdates'),
+      DPKG_STATUS: p('dpkg-status'),
+      APT_PKGCACHE: p('pkgcache.bin'),
+      APT_LISTS: p('lists'),
+      BOOT_DIR: p('boot'),
+      KERNEL_PIN: p('kernel', 'proxmox-boot-pin'),
+      KERNEL_NEXT_PIN: p('kernel', 'next-boot-pin'),
+    };
+    let text = readFileSync(HELPER, 'utf8');
+    for (const [k, v] of Object.entries(paths)) {
+      const re = new RegExp(`^readonly ${k}=.*$`, 'm');
+      expect(text, k).toMatch(re);
+      text = text.replace(re, `readonly ${k}=${v}`);
+    }
+    const helper = p('pve1-dash-helper');
+    writeFileSync(helper, text);
+    const stub = (name: string, body: string) => {
+      writeFileSync(p('bin', name), `#!/bin/sh\n${body}\n`);
+      chmodSync(p('bin', name), 0o755);
+    };
+    stub('hostname', 'echo pve1.home.lan');
+    stub('uname', 'echo 6.8.12-4-pve');
+    stub('logger', ':');
+    stub('dpkg-query', `case "$*" in *kernel*) cat '${p('dpkg-kernels.txt')}' ;; *) cat '${p('dpkg-all.txt')}' ;; esac`);
+    stub('pvesh', `echo "$*" >>'${p('pvesh.log')}'; if [ -f '${p('apt-update.json')}' ]; then cat '${p('apt-update.json')}'; else echo 'no such path' >&2; exit 255; fi`);
+    const run = (cmd: string) =>
+      spawnSync('bash', [helper], {
+        encoding: 'utf8',
+        timeout: 60_000,
+        env: { PATH: `${p('bin')}:${process.env.PATH}`, HOME: dir, TMPDIR: dir, SSH_ORIGINAL_COMMAND: cmd },
+      });
+    const touch = (file: string, iso: string) => spawnSync('touch', ['-d', iso, file]);
+    const pvesh = () => (existsSync(p('pvesh.log')) ? readFileSync(p('pvesh.log'), 'utf8') : '');
+    return { p, paths, run, touch, pvesh };
+  }
+
+  it('reports the running kernel, installed kernels, pins and the package-list time', () => {
+    const h = hostSetup();
+    for (const v of ['6.1.0-18-amd64', '6.8.12-4-pve', '6.8.12-9-pve']) writeFileSync(h.p('boot', `vmlinuz-${v}`), '');
+    writeFileSync(
+      h.p('dpkg-kernels.txt'),
+      [
+        'install ok installed proxmox-kernel-6.8.12-4-pve-signed',
+        'install ok installed proxmox-kernel-6.8.12-9-pve-signed',
+        'install ok installed proxmox-kernel-6.8',
+        'deinstall ok config-files pve-kernel-5.15.30-2-pve',
+        '',
+      ].join('\n'),
+    );
+    h.touch(h.paths.APT_LISTS!, '2025-10-01T08:00:00Z');
+    h.touch(h.p('lists', 'partial'), '2025-10-01T08:00:05Z');
+    const r = h.run('hostinfo');
+    expect(r.stderr).toBe('');
+    expect(r.status).toBe(0);
+    expect(r.stdout.split('\n')).toEqual([
+      'running 6.8.12-4-pve',
+      'vmlinuz 6.1.0-18-amd64',
+      'vmlinuz 6.8.12-4-pve',
+      'vmlinuz 6.8.12-9-pve',
+      'package proxmox-kernel-6.8.12-4-pve-signed',
+      'package proxmox-kernel-6.8.12-9-pve-signed',
+      'package proxmox-kernel-6.8',
+      `stamp-lists ${Date.parse('2025-10-01T08:00:00Z') / 1000}`,
+      `stamp-lists ${Date.parse('2025-10-01T08:00:05Z') / 1000}`,
+      '',
+    ]);
+    expect(parseHostInfo(r.stdout)).toEqual({
+      runningKernel: '6.8.12-4-pve',
+      newestKernel: '6.8.12-9-pve',
+      updatesCheckedAt: Date.parse('2025-10-01T08:00:05Z'),
+    });
+
+    writeFileSync(h.paths.KERNEL_PIN!, '6.8.12-4-pve\n');
+    writeFileSync(h.paths.KERNEL_NEXT_PIN!, '$(reboot)\n'); // not a version: ignored
+    const pinned = h.run('hostinfo');
+    expect(pinned.stdout).toContain('\npin 6.8.12-4-pve\n');
+    expect(pinned.stdout).not.toContain('next-boot-pin');
+    expect(parseHostInfo(pinned.stdout)!.newestKernel).toBe('6.8.12-4-pve');
+    expect(h.run('hostinfo now').stderr).toBe('denied\n');
+  });
+
+  const UPDATES = [
+    { Package: 'pve-manager', OldVersion: '8.2.2', Version: '8.2.4', Title: 'PVE manager' },
+    { Package: 'libc6', OldVersion: '2.36-9', Version: '2.36-9+deb12u7', Title: 'GNU C Library' },
+  ];
+
+  it('serves a fresh pkgupdates file without recomputing, minus packages already at the candidate version', () => {
+    const h = hostSetup();
+    writeFileSync(h.paths.PKGUPDATES_FILE!, JSON.stringify(UPDATES));
+    writeFileSync(h.paths.DPKG_STATUS!, '');
+    writeFileSync(h.paths.APT_PKGCACHE!, '');
+    h.touch(h.paths.DPKG_STATUS!, '2025-10-01T08:00:00Z');
+    h.touch(h.paths.APT_PKGCACHE!, '2025-10-01T08:00:00Z');
+    h.touch(h.paths.PKGUPDATES_FILE!, '2025-10-01T09:00:00Z');
+    // pve-manager was upgraded by hand already (the cache file still lists it)
+    writeFileSync(h.p('dpkg-all.txt'), 'install ok installed pve-manager 8.2.4\nhold ok installed libc6 2.36-9\n');
+    const r = h.run('pkgupdates');
+    expect(r.status).toBe(0);
+    expect(parseJsonArray(r.stdout)).toEqual([UPDATES[1]]);
+    expect(h.pvesh()).toBe('');
+  });
+
+  it('recomputes a stale or missing cache through the API (local apt cache only), else serves what it has', () => {
+    const h = hostSetup();
+    writeFileSync(h.p('dpkg-all.txt'), 'install ok installed pve-manager 8.2.2\n');
+    writeFileSync(h.paths.DPKG_STATUS!, '');
+    writeFileSync(h.paths.PKGUPDATES_FILE!, JSON.stringify(UPDATES));
+    h.touch(h.paths.PKGUPDATES_FILE!, '2025-10-01T08:00:00Z');
+    h.touch(h.paths.DPKG_STATUS!, '2025-10-02T08:00:00Z'); // apt ran after the file was written
+    writeFileSync(h.p('apt-update.json'), JSON.stringify([UPDATES[0]]));
+    let r = h.run('pkgupdates');
+    expect(parseJsonArray(r.stdout)).toEqual([UPDATES[0]]);
+    expect(h.pvesh()).toBe('get /nodes/pve1/apt/update --output-format json\n');
+
+    // the API call fails: the stale file is still better than nothing
+    rmSync(h.p('apt-update.json'));
+    r = h.run('pkgupdates');
+    expect(parseJsonArray(r.stdout)).toEqual(UPDATES);
+
+    // no file and no API: an empty list
+    rmSync(h.paths.PKGUPDATES_FILE!);
+    r = h.run('pkgupdates');
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe('[]\n');
   });
 });

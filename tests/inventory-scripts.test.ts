@@ -83,7 +83,7 @@ describe('guest helper runs under POSIX shells', () => {
         env: { ...process.env, ...(cmd === undefined ? {} : { SSH_ORIGINAL_COMMAND: cmd }) },
       });
 
-    const inv = run('inventory');
+    const inv = run('inventory quick');
     expect(inv.status).toBe(0);
     const parsed = parseInnerOutput(inv.stdout, { vmid: 1, source: 'ssh', collectedAt: 0 });
     expect(parsed.ok).toBe(true);
@@ -95,21 +95,29 @@ describe('guest helper runs under POSIX shells', () => {
     expect(typeof parsed.dockerPresent).toBe('boolean');
     // every section header is present, in protocol order
     const sections = [...inv.stdout.matchAll(/^##pve1-dash:section (\S+)$/gm)].map((m) => m[1]);
-    expect(sections).toEqual(['os-release', 'kernel', 'uptime', 'loadavg', 'init', 'services', 'docker', 'ip', 'listen']);
+    expect(sections).toEqual(['os-release', 'kernel', 'uptime', 'loadavg', 'init', 'services', 'docker', 'ip', 'listen', 'df', 'updates', 'reboot']);
     expect(inv.stdout.endsWith('##pve1-dash:end\n')).toBe(true);
 
-    // no command at all (plain `ssh host`) means inventory
-    expect(run().stdout).toContain('##pve1-dash:inventory v1\n');
+    expect(inv.stdout).toContain('##pve1-dash:section updates\nskipped\n');
+    expect(parsed.updates).toBeUndefined();
+    expect(parsed.filesystems!.some((f) => f.mount === '/')).toBe(true);
+    expect(typeof parsed.rebootRequired).toBe('boolean');
+
+    // no command at all (plain `ssh host`) means a full inventory, with the package-update count
+    const full = run();
+    expect(full.stdout).toContain('##pve1-dash:inventory v2\n');
+    expect(full.stdout).not.toContain('##pve1-dash:section updates\nskipped\n');
+    expect(run('inventory').stdout).toContain('##pve1-dash:section reboot\n');
 
     const ver = run('version');
-    expect(ver.stdout).toBe('pve1-dash-guest-inventory 1\n');
+    expect(ver.stdout).toBe('pve1-dash-guest-inventory 2\n');
     expect(ver.status).toBe(0);
 
-    for (const bad of ['inventory; id', 'inventory 1', 'version\ninventory', '$(id)', 'sh', ' inventory']) {
+    for (const bad of ['inventory; id', 'inventory 1', 'version\ninventory', '$(id)', 'sh', ' inventory', 'inventory quick x', 'quick']) {
       const r = run(bad);
       expect(r.status, bad).toBe(1);
       expect(r.stderr, bad).toBe('denied\n');
       expect(r.stdout, bad).toBe('');
     }
-  });
+  }, 120_000);
 });

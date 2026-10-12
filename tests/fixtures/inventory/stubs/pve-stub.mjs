@@ -16,11 +16,17 @@ const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 
 
 log(`${tool} ${JSON.stringify(args)} ssh_cmd=${process.env.SSH_ORIGINAL_COMMAND ?? '-'}`);
 
+/** What the helper may put after the inner script: "pve1-dash-inner" ($0), optionally followed by "quick". */
+const innerArgsOk = (a) => a[0] === 'pve1-dash-inner' && (a.length === 1 || (a.length === 2 && a[1] === 'quick'));
+
 const findGuest = (kind, vmid) => (scenario[kind] ?? []).find((g) => String(g.vmid) === String(vmid));
 
-/** Run the inner script for real with /bin/sh, like lxc-attach / qemu-ga would (optionally with a given environment). */
-function runInner(script, env) {
-  const r = spawnSync('/bin/sh', ['-c', script], { encoding: 'utf8', timeout: 20_000, ...(env ? { env } : {}) });
+/**
+ * Run the inner script for real with /bin/sh, like lxc-attach / qemu-ga would (optionally with a given environment).
+ * `argv` is what follows the script: $0 (pve1-dash-inner) and the optional mode ("quick").
+ */
+function runInner(script, env, argv = []) {
+  const r = spawnSync('/bin/sh', ['-c', script, ...argv], { encoding: 'utf8', timeout: 30_000, ...(env ? { env } : {}) });
   return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', code: r.status ?? 1 };
 }
 
@@ -117,7 +123,7 @@ function main() {
         for (const g of rows) out(f(String(g.vmid), g.status, g.lock ?? '', g.name));
         break;
       }
-      // pct exec <vmid> [--keep-env 0|1] -- /bin/sh -c <script>
+      // pct exec <vmid> [--keep-env 0|1] -- /bin/sh -c <script> pve1-dash-inner [quick]
       let keepEnv = true; // the default on PVE 8 and 9 (pve-perms-cli.md §5.2)
       let rest = args.slice(2);
       if (rest[0] === '--keep-env') {
@@ -125,11 +131,13 @@ function main() {
         keepEnv = rest[1] === '1';
         rest = rest.slice(2);
       }
-      if (args[0] !== 'exec' || rest[0] !== '--' || rest[1] !== '/bin/sh' || rest[2] !== '-c' || rest.length !== 4) {
+      if (args[0] !== 'exec' || rest[0] !== '--' || rest[1] !== '/bin/sh' || rest[2] !== '-c' || !innerArgsOk(rest.slice(4))) {
         err(`unexpected pct call ${JSON.stringify(args)}\n`);
         return 2;
       }
       const script = rest[3];
+      const innerArgs = rest.slice(4);
+      log(`inner-args ${args[1]} ${innerArgs.join(' ')}`);
       const g = findGuest('lxc', args[1]);
       if (!g || g.status !== 'running') {
         err(`container '${args[1]}' not running!\n`);
@@ -146,7 +154,7 @@ function main() {
           case 'real':
           case 'slow': {
             if (g.mode === 'slow') sleep(g.sleepMs ?? 300);
-            const r = runInner(script, guestEnv);
+            const r = runInner(script, guestEnv, innerArgs);
             out(r.stdout);
             err(r.stderr);
             return r.code;
@@ -168,6 +176,11 @@ function main() {
             out('##pve1-dash:inventory v1\n' + 'x'.repeat(1_100_000) + '\n');
             return 0;
           case 'timeout':
+            err('Terminated\n');
+            return 124;
+          case 'partial':
+            // the inner script was killed by `timeout` halfway through (a slow probe)
+            out('##pve1-dash:inventory v2\n##pve1-dash:section kernel\n6.1.0-part\n##pve1-dash:section updates\n');
             err('Terminated\n');
             return 124;
           case 'fail':
@@ -208,7 +221,7 @@ function main() {
       }
       if (
         args[0] !== 'guest' || args[1] !== 'exec' || args[3] !== '--timeout' || args[4] !== '25' || args[5] !== '--' ||
-        args[6] !== '/bin/sh' || args[7] !== '-c' || args.length !== 9
+        args[6] !== '/bin/sh' || args[7] !== '-c' || !innerArgsOk(args.slice(9))
       ) {
         err(`unexpected qm call ${JSON.stringify(args)}\n`);
         return 2;
@@ -222,7 +235,8 @@ function main() {
       const code = guestExecStep(args[2], () => {
         switch (g?.mode ?? 'real') {
           case 'real': {
-            const r = runInner(args[8]);
+            log(`inner-args ${args[2]} ${args.slice(9).join(' ')}`);
+            const r = runInner(args[8], undefined, args.slice(9));
             const res = { exitcode: r.code, exited: 1 };
             if (r.stdout) Object.assign(res, { 'out-data': r.stdout, 'out-truncated': 0 });
             if (r.stderr) Object.assign(res, { 'err-data': r.stderr, 'err-truncated': 0 });

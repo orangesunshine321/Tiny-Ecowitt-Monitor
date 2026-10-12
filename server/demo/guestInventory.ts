@@ -5,7 +5,7 @@
  */
 import type { DemoContainer, DemoGuest } from './world.js';
 import { DAY_S, HOUR_S, between, hashHex, hashInt, round, type DemoSim } from './sim.js';
-import { guestInterfaces, guestOs, type GuestIface } from './guestFacts.js';
+import { guestInterfaces, guestMounts, guestOs, guestUpdates, type DemoMount, type GuestIface } from './guestFacts.js';
 
 // ───────────────────────────────────────────────────────────── services
 
@@ -316,10 +316,79 @@ function netstatLines(g: DemoGuest): string {
   return ['Active Internet connections (only servers)', 'Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name    ', ...rows].join('\n');
 }
 
+// ───────────────────────────────────────────────────────────── df, updates, reboot (helper protocol v2)
+
+const KiB_PER_GiB = 1024 * 1024;
+
+/** One `df -P -T -k` row from KiB values; Use% rounds up like df does. */
+function dfRow(device: string, fstype: string, sizeK: number, usedK: number, mount: string, busybox: boolean): string {
+  const avail = Math.max(0, sizeK - usedK);
+  const pct = usedK + avail > 0 ? Math.ceil((usedK * 100) / (usedK + avail)) : 0;
+  const cols = busybox
+    ? [device.padEnd(20), fstype.padEnd(10), String(sizeK).padStart(11), String(usedK).padStart(9), String(avail).padStart(9), `${pct}%`.padStart(9)]
+    : [device.padEnd(34), fstype.padEnd(8), String(sizeK).padStart(11), String(usedK).padStart(9), String(avail).padStart(9), `${pct}%`.padStart(8)];
+  return `${cols.join(' ')} ${mount}`;
+}
+
+/**
+ * `df -P -T -k -l` as the guest prints it (busybox has no -l, so Alpine shows the `-P -T -k` fallback's layout), with
+ * the runtime tmpfs/overlay/squashfs mounts the dashboard has to filter out.
+ */
+function dfLines(sim: DemoSim, g: DemoGuest, tMs: number, alpine: boolean): string {
+  const rows: string[] = [];
+  const mounts: DemoMount[] = [...guestMounts(g)];
+  const memK = g.memoryMiB * 1024;
+  const growth = (m: DemoMount) => Math.min(0.99, m.used + 0.00004 * ((tMs / 3_600_000) % 24)); // logs creep up during a day
+  if (g.type === 'lxc') {
+    const sizeK = g.diskGiB * KiB_PER_GiB;
+    // the rootfs exactly as Proxmox reports it for the container
+    const usedK = Math.round(sim.guestDiskUsed(g, tMs) / 1024);
+    rows.push(dfRow(`rpool/data/subvol-${g.vmid}-disk-0`, 'zfs', sizeK, usedK, '/', alpine));
+    rows.push(dfRow('none', 'tmpfs', 492, 4, '/dev', alpine));
+  }
+  for (const m of mounts) rows.push(dfRow(m.device, m.fstype, Math.round(m.sizeGiB * KiB_PER_GiB), Math.round(m.sizeGiB * KiB_PER_GiB * growth(m)), m.mount, alpine));
+  rows.push(dfRow('tmpfs', 'tmpfs', Math.round(memK / 2), 0, '/dev/shm', alpine));
+  rows.push(dfRow('tmpfs', 'tmpfs', Math.round(memK / 5), 120 + hashInt(900, 'run', g.vmid), '/run', alpine));
+  if (!alpine) rows.push(dfRow('tmpfs', 'tmpfs', 5120, 0, '/run/lock', alpine));
+  if (g.osPretty?.startsWith('Ubuntu') && g.type === 'qemu') rows.push(dfRow('/dev/loop0', 'squashfs', 75776, 75776, '/snap/core22/2045', alpine));
+  for (const c of (g.containers ?? []).filter((x) => x.state === 'running').slice(0, 3)) {
+    const id = hashHex(64, 'overlay', g.vmid, c.name);
+    rows.push(dfRow('overlay', 'overlay', Math.round(g.diskGiB * KiB_PER_GiB), Math.round(g.diskGiB * KiB_PER_GiB * 0.5), `/var/lib/docker/overlay2/${id}/merged`, alpine));
+  }
+  const header = alpine
+    ? 'Filesystem           Type       1024-blocks      Used Available Capacity Mounted on'
+    : 'Filesystem                         Type     1024-blocks      Used Available Capacity Mounted on';
+  return [header, ...rows].join('\n');
+}
+
+/** The `updates` section: counts from the local package cache plus the package-list timestamps. */
+function updatesLines(g: DemoGuest, tMs: number): string {
+  const u = guestUpdates(g);
+  if (!u) return '';
+  const stamp = Math.floor(tMs / 1000 - u.listsAgeH * 3600);
+  const lines = [`manager ${u.manager}`, `count ${u.count}`];
+  if (u.manager === 'apt') {
+    lines.push(`security ${u.security ?? 0}`, `stamp ${stamp}`, `stamp ${stamp - 2}`);
+  } else {
+    lines.push(`stamp ${stamp}`, `stamp ${stamp - 40}`);
+  }
+  return lines.join('\n');
+}
+
+/** The `reboot` section. */
+function rebootLines(g: DemoGuest): string {
+  const u = guestUpdates(g);
+  const lines: string[] = [];
+  if (u?.rebootFlag) lines.push('flag reboot-required');
+  if (g.type === 'lxc') lines.push('container');
+  else for (const v of u?.vmlinuz ?? []) lines.push(`vmlinuz ${v}`);
+  return lines.join('\n');
+}
+
 // ───────────────────────────────────────────────────────────── the whole inner output
 
-/** Raw stdout of the inner inventory script inside a running guest at tMs. */
-export function innerInventory(sim: DemoSim, g: DemoGuest, tMs: number): string {
+/** Raw stdout of the inner inventory script inside a running guest at tMs ("quick" skips the update count). */
+export function innerInventory(sim: DemoSim, g: DemoGuest, tMs: number, opts: { quick?: boolean } = {}): string {
   const os = guestOs(g);
   const uptime = sim.guestUptime(g, tMs) + (tMs % 1000) / 1000;
   const cpu = sim.guestCpu(g, tMs);
@@ -339,8 +408,11 @@ export function innerInventory(sim: DemoSim, g: DemoGuest, tMs: number): string 
     ['docker', docker ? ['present', ...dockerJsonLines(sim, g, tMs)].join('\n') : 'absent'],
     ['ip', ipLines(guestInterfaces(g))],
     ['listen', os?.id === 'alpine' ? netstatLines(g) : ssLines(g)],
+    ['df', dfLines(sim, g, tMs, os?.id === 'alpine')],
+    ['updates', opts.quick ? 'skipped' : updatesLines(g, tMs)],
+    ['reboot', rebootLines(g)],
   ];
-  const lines = ['##pve1-dash:inventory v1'];
+  const lines = ['##pve1-dash:inventory v2'];
   for (const [name, body] of sections) {
     lines.push(`##pve1-dash:section ${name}`);
     if (body) lines.push(body);
