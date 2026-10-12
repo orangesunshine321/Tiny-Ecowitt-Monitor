@@ -1,11 +1,11 @@
 /**
  * Mock SSH CommandRunner for demo mode: plays the two forced-command helpers of docs/HELPER_PROTOCOL.md.
  *
- *  - pve1 host (10.10.20.10): /usr/local/sbin/pve1-dash-helper — version | inventory [vmid] | sensors | pkgupdates |
- *    backups <storage>, with the helper's allow-list ("denied" + exit 1 otherwise). Root's chatty .bashrc prints one
+ *  - pve1 host (10.10.20.10): /usr/local/sbin/pve1-dash-helper — version | inventory [vmid] [quick] | sensors | pkgupdates |
+ *    hostinfo | backups <storage>, with the helper's allow-list ("denied" + exit 1 otherwise). Root's chatty .bashrc prints one
  *    line before every output, as on real hosts.
  *  - guests reached directly (world `inventoryVia: 'ssh'`, e.g. PBS at 10.10.20.60): pve1-dash-guest-inventory —
- *    inventory | version, raw inner script output.
+ *    inventory [quick] | version, raw inner script output.
  *  - anything else: OpenSSH-style "Connection refused", exit 255.
  *
  * Commands take a plausible amount of time; when that exceeds the caller's timeout the result mirrors the real runner
@@ -17,6 +17,7 @@ import { DEMO_GUESTS, DEMO_NODE, DEMO_STORAGE, DEMO_UPDATES, DEMO_DISKS, type De
 import { DemoSim, between, waveAt, makeWave } from './sim.js';
 import { backupsOnStorage, contentItem } from './history.js';
 import { innerInventory } from './guestInventory.js';
+import { DEMO_HOST_KERNELS } from './guestFacts.js';
 import { agentEnabled } from './pveGuests.js';
 import { diskTempC } from './pveStorage.js';
 
@@ -27,7 +28,7 @@ export interface MockRunnerOptions {
   delays?: boolean;
 }
 
-const HELPER_PROTOCOL = 1;
+const HELPER_PROTOCOL = 2;
 const RE_LINE = /^[A-Za-z0-9._ -]*$/;
 const RE_VMID = /^[0-9]{1,9}$/;
 const RE_STORAGE = /^[A-Za-z][A-Za-z0-9._-]{0,63}$/;
@@ -131,15 +132,21 @@ export function hostHelper(sim: DemoSim, cmdline: string, now: number): Simulate
   switch (argv[0] ?? 'inventory') {
     case 'version':
       return n === 1 ? ok(`pve1-dash-helper ${HELPER_PROTOCOL}\n`, 20) : denied();
-    case 'inventory':
-      if (n <= 1) return hostInventory(sim, undefined, now);
-      if (n === 2 && RE_VMID.test(argv[1]!)) return hostInventory(sim, Number(argv[1]), now);
+    case 'inventory': {
+      // inventory [vmid] [quick]
+      const quick = n >= 2 && argv[n - 1] === 'quick';
+      const m = quick ? n - 1 : n;
+      if (m <= 1) return hostInventory(sim, undefined, now, quick);
+      if (m === 2 && RE_VMID.test(argv[1]!)) return hostInventory(sim, Number(argv[1]), now, quick);
       return denied();
+    }
     case 'sensors':
       return n === 1 ? ok(sensorsJson(sim, now), 70) : denied();
     case 'pkgupdates':
       // /var/lib/pve-manager/pkgupdates: encode_json output, a single line without trailing newline
       return n === 1 ? ok(JSON.stringify(DEMO_UPDATES), 25) : denied();
+    case 'hostinfo':
+      return n === 1 ? ok(hostInfo(now), 180) : denied();
     case 'backups':
       if (n !== 2 || !RE_STORAGE.test(argv[1]!)) return denied();
       return pveshBackups(sim, argv[1]!, now);
@@ -179,11 +186,11 @@ export function perlPrettyJson(obj: Record<string, unknown>): string {
   return `{\n${body}\n}\n`;
 }
 
-function guestBlock(sim: DemoSim, g: DemoGuest, now: number): { text: string; ms: number } {
+function guestBlock(sim: DemoSim, g: DemoGuest, now: number, quick: boolean): { text: string; ms: number } {
   const head = `@@pve1-dash:guest ${g.vmid} ${g.type} ${g.type === 'lxc' ? 'pct-exec' : 'qm-guest-exec'}\n`;
   if (g.type === 'lxc') {
     // a guest must not forge framing lines: the helper prefixes "@@" lines with a space
-    const inner = innerInventory(sim, g, now).replace(/^@@/gm, ' @@');
+    const inner = innerInventory(sim, g, now, { quick }).replace(/^@@/gm, ' @@');
     return { text: `${head}${inner}@@pve1-dash:end ${g.vmid} 0\n`, ms: 350 + between(0, 500, 'pct', g.vmid) };
   }
   if (g.inventoryVia !== 'qm-guest-exec') {
@@ -194,18 +201,18 @@ function guestBlock(sim: DemoSim, g: DemoGuest, now: number): { text: string; ms
       ms: 400,
     };
   }
-  const wrapped = perlPrettyJson({ exitcode: 0, exited: 1, 'out-data': innerInventory(sim, g, now), 'out-truncated': 0 });
+  const wrapped = perlPrettyJson({ exitcode: 0, exited: 1, 'out-data': innerInventory(sim, g, now, { quick }), 'out-truncated': 0 });
   return { text: `${head}${wrapped}@@pve1-dash:end ${g.vmid} 0\n`, ms: 1_200 + between(0, 800, 'qga', g.vmid) };
 }
 
-function hostInventory(sim: DemoSim, vmid: number | undefined, now: number): Simulated {
+function hostInventory(sim: DemoSim, vmid: number | undefined, now: number, quick = false): Simulated {
   const guests = inspectable(sim, now).filter((g) => vmid === undefined || g.vmid === vmid);
   let out = `@@pve1-dash:inventory v${HELPER_PROTOCOL}\n`;
   // `pvesh get /nodes/pve1/{lxc,qemu}` first, then at most 4 guests in parallel
   let ms = 1_100;
   const lanes = [0, 0, 0, 0];
   for (const g of guests) {
-    const b = guestBlock(sim, g, now);
+    const b = guestBlock(sim, g, now, quick);
     out += b.text;
     const lane = lanes.indexOf(Math.min(...lanes));
     lanes[lane]! += b.ms;
@@ -213,6 +220,20 @@ function hostInventory(sim: DemoSim, vmid: number | undefined, now: number): Sim
   ms += Math.max(...lanes);
   out += '@@pve1-dash:done\n';
   return ok(out, ms);
+}
+
+/** `pve1-dash-helper hostinfo`: kernels and the package-list timestamps (helper protocol v2). */
+function hostInfo(now: number): string {
+  const lists = Math.floor(now / 1000 - DEMO_HOST_KERNELS.listsAgeH * 3600);
+  return [
+    `running ${DEMO_NODE.kernel}`,
+    ...DEMO_HOST_KERNELS.vmlinuz.map((v) => `vmlinuz ${v}`),
+    ...DEMO_HOST_KERNELS.packages.map((p) => `package ${p}`),
+    `stamp-lists ${lists}`,
+    `stamp-lists ${lists - 3}`,
+    `stamp-pkgupdates ${lists + 9}`,
+    '',
+  ].join('\n');
 }
 
 // ───────────────────────────────────────────────────────────── sensors -j
@@ -286,7 +307,7 @@ export function sensorsJson(sim: DemoSim, now: number): string {
 
 export function guestHelper(sim: DemoSim, g: DemoGuest, cmdline: string, now: number): Simulated {
   const cmd = cmdline.trim() || 'inventory';
-  if (cmd === 'version') return ok('pve1-dash-guest-inventory 1\n', 20);
-  if (cmd !== 'inventory') return denied();
-  return ok(innerInventory(sim, g, now), 420);
+  if (cmd === 'version') return ok(`pve1-dash-guest-inventory ${HELPER_PROTOCOL}\n`, 20);
+  if (cmd !== 'inventory' && cmd !== 'inventory quick') return denied();
+  return ok(innerInventory(sim, g, now, { quick: cmd === 'inventory quick' }), 420);
 }

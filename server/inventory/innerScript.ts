@@ -1,5 +1,5 @@
 /**
- * The inner guest inventory script (helper protocol v1, docs/HELPER_PROTOCOL.md) as TypeScript constants.
+ * The inner guest inventory script (helper protocol v2, docs/HELPER_PROTOCOL.md) as TypeScript constants.
  *
  * The same text lives in three places and must stay byte-identical (tests/inventory-scripts.test.ts checks it):
  *  - deploy/helpers/pve1-dash-guest-inventory  (GUEST_WRAPPER + INNER_SCRIPT, installed in VMs without the agent)
@@ -8,16 +8,23 @@
  * Edit deploy/helpers/pve1-dash-guest-inventory first, then copy the changes here and into pve1-dash-helper.
  */
 
-export const HELPER_PROTOCOL_VERSION = 1;
-export const INNER_BEGIN_MARKER = '# >>> pve1-dash inner v1 >>>';
-export const INNER_END_MARKER = '# <<< pve1-dash inner v1 <<<';
+/**
+ * Helper protocol version: `pve1-dash-helper version` prints "pve1-dash-helper 2", the guest helper
+ * "pve1-dash-guest-inventory 2". v2 added the df, updates and reboot sections and the host command `hostinfo`;
+ * v1 output (an older helper) still parses, without those fields.
+ */
+export const HELPER_PROTOCOL_VERSION = 2;
+export const INNER_BEGIN_MARKER = '# >>> pve1-dash inner v2 >>>';
+export const INNER_END_MARKER = '# <<< pve1-dash inner v2 <<<';
 
 /** POSIX sh; prints the ##pve1-dash: sections. Runs as `sh -c "$INNER"` or inline after GUEST_WRAPPER. */
-export const INNER_SCRIPT = `# >>> pve1-dash inner v1 >>>
-# Inventory of this guest for pve1-dash (helper protocol v1). Read-only and POSIX sh, so it runs under dash, bash and
+export const INNER_SCRIPT = `# >>> pve1-dash inner v2 >>>
+# Inventory of this guest for pve1-dash (helper protocol v2). Read-only and POSIX sh, so it runs under dash, bash and
 # busybox. Every section is optional: a missing tool leaves its section empty. This exact text is also embedded in
 # pve1-dash-helper (run via pct exec / qm guest exec) and in server/inventory/innerScript.ts; keep all three identical.
-PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
+# The last two PATH entries are NixOS's: its tools are not in the FHS directories, and \`pct exec --keep-env 0\` does
+# not pass on the guest's own PATH.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin:/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin
 LC_ALL=C
 export PATH LC_ALL
 # Bound every probe so a hung daemon (docker, systemd, ...) cannot stall the whole inventory.
@@ -30,8 +37,21 @@ p1d_put() { if [ -n "$1" ]; then printf '%s\\n' "$1"; fi; }
 # Run a probe (stderr dropped) and print its stdout.
 # shellcheck disable=SC2086 # $p1d_t is intentionally split into "timeout 15"
 p1d_run() { p1d_o=$($p1d_t "$@" 2>/dev/null) || :; p1d_put "$p1d_o"; }
+# Number of lines of text $1 that match the basic regex $2.
+p1d_count() { printf '%s\\n' "$1" | grep -c -- "$2"; }
+# "stamp <epoch seconds>" with the modification time of a file or directory, nothing when it does not exist.
+p1d_stamp() {
+  if [ -e "$1" ]; then
+    p1d_s=$(stat -c %Y "$1" 2>/dev/null) || p1d_s=$(date -r "$1" +%s 2>/dev/null) || p1d_s=''
+    if [ -n "$p1d_s" ]; then printf 'stamp %s\\n' "$p1d_s"; fi
+  fi
+}
 
-printf '##pve1-dash:inventory v1\\n'
+# First argument "quick": skip counting package updates, the one slow probe (the dashboard asks for it hourly).
+p1d_quick=''
+if [ "\${1:-}" = quick ]; then p1d_quick=1; fi
+
+printf '##pve1-dash:inventory v2\\n'
 
 p1d_sec os-release
 for p1d_f in /etc/os-release /usr/lib/os-release; do
@@ -108,14 +128,119 @@ if [ -z "$p1d_o" ] && p1d_has netstat; then
 fi
 p1d_put "$p1d_o"
 
+p1d_sec df
+# Mounted filesystems in 1K blocks; the dashboard drops pseudo filesystems. -l (local only, so a hung network mount
+# cannot stall df) is GNU-only and very old busybox has no -T, hence the fallbacks. df exits 1 when one mount cannot
+# be read but still lists the others, so any output counts; a timeout ends the attempts.
+p1d_o=''
+if p1d_has df; then
+  for p1d_a in '-P -T -k -l' '-P -T -k' '-P -k'; do
+    # shellcheck disable=SC2086
+    p1d_o=$($p1d_t df $p1d_a 2>/dev/null)
+    p1d_rc=$?
+    if [ -n "$p1d_o" ] || [ "$p1d_rc" -ge 124 ]; then break; fi
+  done
+fi
+p1d_put "$p1d_o"
+
+p1d_sec updates
+# Pending package updates, from the local package cache only: nothing here refreshes it or uses the network.
+# "manager <name>", "count <n>", "security <n>" where cheap, and "stamp <epoch>" for the files whose modification time
+# tells when the package lists were last refreshed (the dashboard takes the newest). "skipped" in quick mode.
+if [ -n "$p1d_quick" ]; then
+  echo 'skipped'
+elif p1d_has apt-get; then
+  # dist-upgrade also counts what needs new packages (kernels); only upgrades of installed packages are counted:
+  # "Inst <package> [<installed version>] (<new version> <origin> [<arch>])". NoLocking: works while apt runs.
+  # shellcheck disable=SC2086
+  if p1d_o=$($p1d_t apt-get -s -o Debug::NoLocking=1 dist-upgrade 2>/dev/null); then
+    p1d_o=$(printf '%s\\n' "$p1d_o" | grep '^Inst [^ ]* \\[')
+    echo 'manager apt'
+    printf 'count %s\\n' "$(p1d_count "$p1d_o" '^Inst ')"
+    printf 'security %s\\n' "$(p1d_count "$p1d_o" '[Ss]ecurity')"
+    for p1d_f in /var/lib/apt/lists /var/lib/apt/lists/partial /var/lib/apt/periodic/update-success-stamp; do
+      p1d_stamp "$p1d_f"
+    done
+  fi
+elif p1d_has apk; then
+  # shellcheck disable=SC2086
+  if p1d_o=$($p1d_t apk --no-network version -l '<' 2>/dev/null); then
+    echo 'manager apk'
+    printf 'count %s\\n' "$(p1d_count "$p1d_o" ' < ')"
+    for p1d_f in /var/cache/apk/APKINDEX.*; do p1d_stamp "$p1d_f"; done
+  fi
+elif p1d_has dnf || p1d_has yum; then
+  if p1d_has dnf; then p1d_m=dnf; else p1d_m=yum; fi
+  # -C: cache only. Exit 100 means updates are available. Package lines start with "<name>.<arch>" (a long name wraps
+  # and its version starts the next line with blanks); the obsoletes list at the end is not counted.
+  # shellcheck disable=SC2086
+  p1d_o=$($p1d_t "$p1d_m" -C -q check-update 2>/dev/null)
+  p1d_rc=$?
+  if [ "$p1d_rc" -eq 0 ] || [ "$p1d_rc" -eq 100 ]; then
+    p1d_o=$(printf '%s\\n' "$p1d_o" | sed -n '/^Obsoleting/q;p')
+    echo "manager $p1d_m"
+    printf 'count %s\\n' "$(p1d_count "$p1d_o" '^[^ ][^ ]*\\.[^ ]')"
+    for p1d_f in /var/cache/dnf/*/repodata/repomd.xml /var/cache/yum/*/*/*/repomd.xml; do p1d_stamp "$p1d_f"; done
+  fi
+elif p1d_has pacman; then
+  # -Qu compares with the local sync databases (checkupdates would download new ones). Exit 1: nothing to update.
+  # shellcheck disable=SC2086
+  p1d_o=$($p1d_t pacman -Qu 2>/dev/null)
+  p1d_rc=$?
+  if [ "$p1d_rc" -le 1 ]; then
+    p1d_o=$(printf '%s\\n' "$p1d_o" | grep -v '\\[ignored\\]')
+    echo 'manager pacman'
+    printf 'count %s\\n' "$(p1d_count "$p1d_o" ' -> ')"
+    for p1d_f in /var/lib/pacman/sync/*.db; do p1d_stamp "$p1d_f"; done
+  fi
+fi
+
+p1d_sec reboot
+# "flag <source>" when the system says it needs a reboot: Debian/Ubuntu's reboot-required file, NixOS booted vs
+# current kernel, \`needs-restarting -r\` (RHEL family; exit 1 = reboot needed). Outside containers also the installed
+# kernels ("vmlinuz <version>"; the dashboard compares them with the running one) and "modules-missing" when the
+# running kernel's modules are gone (Alpine and Arch remove them on upgrade). Containers share the host's kernel.
+if [ -e /run/reboot-required ] || [ -e /var/run/reboot-required ]; then echo 'flag reboot-required'; fi
+if [ -e /run/booted-system/kernel ] && [ -e /run/current-system/kernel ] &&
+  [ "$(readlink -f /run/booted-system/kernel)" != "$(readlink -f /run/current-system/kernel)" ]; then
+  echo 'flag nixos'
+fi
+if p1d_has needs-restarting; then
+  # shellcheck disable=SC2086
+  $p1d_t needs-restarting -r >/dev/null 2>&1
+  p1d_rc=$?
+  if [ "$p1d_rc" -eq 1 ]; then echo 'flag needs-restarting'; fi
+fi
+p1d_ct=''
+if [ -n "\${container:-}" ] || [ -e /run/.containerenv ] || [ -e /.dockerenv ]; then p1d_ct=1; fi
+if [ -z "$p1d_ct" ] && { tr '\\000' '\\n' </proc/1/environ; } 2>/dev/null | grep -q '^container='; then
+  p1d_ct=1
+fi
+if [ -n "$p1d_ct" ]; then
+  echo 'container'
+else
+  p1d_k=$(uname -r 2>/dev/null) || p1d_k=''
+  if [ -n "$p1d_k" ] && [ ! -d "/lib/modules/$p1d_k" ]; then
+    for p1d_f in /lib/modules/*; do
+      if [ -d "$p1d_f" ]; then
+        echo 'modules-missing'
+        break
+      fi
+    done
+  fi
+  for p1d_f in /boot/vmlinuz-*; do
+    if [ -e "$p1d_f" ]; then printf 'vmlinuz %s\\n' "\${p1d_f#/boot/vmlinuz-}"; fi
+  done
+fi
+
 printf '##pve1-dash:end\\n'
 exit 0
-# <<< pve1-dash inner v1 <<<
+# <<< pve1-dash inner v2 <<<
 `;
 
 /** Header of pve1-dash-guest-inventory: validates SSH_ORIGINAL_COMMAND ("inventory" | "version"). */
 export const GUEST_WRAPPER = `#!/bin/sh
-# pve1-dash-guest-inventory: read-only forced-command helper for pve1-dash (helper protocol v1, docs/HELPER_PROTOCOL.md).
+# pve1-dash-guest-inventory: read-only forced-command helper for pve1-dash (helper protocol v2, docs/HELPER_PROTOCOL.md).
 #
 # Install at /usr/local/sbin/pve1-dash-guest-inventory (root:root, 0755) inside a VM WITHOUT the QEMU guest agent and
 # authorize the dashboard key for root, pinned to this script:
@@ -123,15 +248,17 @@ export const GUEST_WRAPPER = `#!/bin/sh
 # The dashboard serves an installer that does both: curl -fsSL https://<dashboard>/setup/guest.sh | sh
 #
 # sshd ignores the command the client asked for and passes it here as SSH_ORIGINAL_COMMAND (never evaluated).
-# Allowed: "inventory" (the default) and "version". Anything else prints "denied" on stderr and exits 1.
-# Root can also run it by hand: pve1-dash-guest-inventory [inventory|version]
+# Allowed: "inventory" (the default), "inventory quick" (without the package-update count) and "version". Anything
+# else prints "denied" on stderr and exits 1. Root can also run it by hand: pve1-dash-guest-inventory [inventory|version]
 set -u
 
-p1d_cmd=\${SSH_ORIGINAL_COMMAND:-\${1:-inventory}}
+p1d_cmd=\${SSH_ORIGINAL_COMMAND:-\${*:-inventory}}
+# The positional parameters become the inner script's arguments.
 case $p1d_cmd in
-  inventory) ;;
+  inventory) set -- ;;
+  'inventory quick') set -- quick ;;
   version)
-    echo 'pve1-dash-guest-inventory 1'
+    echo 'pve1-dash-guest-inventory 2'
     exit 0
     ;;
   *)

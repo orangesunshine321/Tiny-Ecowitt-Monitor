@@ -14,7 +14,7 @@
 import { readFileSync } from 'node:fs';
 import type { GuestInventory, HostInventory } from '../../shared/types.js';
 import type { AppContext, CommandRunner, HostHelper, InventoryService } from '../context.js';
-import { createFailureLog } from './hostHelper.js';
+import { createFailureLog, type GuestsOptions } from './hostHelper.js';
 import { cleanMessage, failedInventory, inventoryFromSshResult } from './parse.js';
 
 const PER_VMID_REFRESH_MS = 10_000;
@@ -25,6 +25,11 @@ const DIRECT_SSH_CONCURRENCY = 4;
 const DIRECT_SSH_TIMEOUT_MS = 60_000;
 const PRUNE_AFTER_MS = 60 * 60_000;
 const FIRST_SWEEP_DELAY_MS = 1500;
+/**
+ * Counting pending package updates (apt-get -s & co.) is the one inventory probe that costs real CPU in every guest,
+ * and the package lists change about daily: full sweeps run this often, the ones in between are "quick".
+ */
+export const UPDATES_EVERY_MS = 60 * 60_000;
 
 type DirectGuest = AppContext['config']['inventory']['guests'][number];
 
@@ -34,14 +39,22 @@ function hasData(inv: GuestInventory): boolean {
   );
 }
 
-/** Merge fresh results into the stored map. A failed collection keeps the previous data and records the error. */
+/**
+ * Merge fresh results into the stored map. A failed collection keeps the previous data and records the error (and
+ * whether the guest can be inspected at all).
+ */
 export function mergeInventory(prev: Record<string, GuestInventory>, fresh: GuestInventory[]): Record<string, GuestInventory> {
   const next = { ...prev };
   for (const inv of fresh) {
     const key = String(inv.vmid);
     const old = prev[key];
-    if (inv.ok || !old || !hasData(old)) next[key] = inv;
-    else next[key] = { ...old, ok: false, error: inv.error ?? 'inventory collection failed' };
+    if (inv.ok || !old || !hasData(old)) {
+      // a quick inventory (or an older helper) does not count updates: keep the last count
+      next[key] = inv.ok && inv.updates === undefined && old?.updates ? { ...inv, updates: old.updates } : inv;
+    } else {
+      next[key] = { ...old, ok: false, error: inv.error ?? 'inventory collection failed' };
+      if (inv.inspectable) next[key].inspectable = inv.inspectable;
+    }
   }
   return next;
 }
@@ -127,15 +140,15 @@ export function createInventoryService(
     store.update('inventory', (cur) => pruneInventory(mergeInventory(cur, fresh), knownVmids(), Date.now()));
   }
 
-  async function collectDirect(g: DirectGuest): Promise<GuestInventory> {
+  async function collectDirect(g: DirectGuest, quick = false): Promise<GuestInventory> {
     const startedAt = Date.now();
     const key = `ssh:${g.vmid}`;
     try {
-      const r = await deps.runner.run(
-        { address: g.address, port: g.port, user: g.user },
-        'inventory',
-        Math.min(cfg.timeoutMs, DIRECT_SSH_TIMEOUT_MS),
-      );
+      const target = { address: g.address, port: g.port, user: g.user };
+      const timeoutMs = Math.min(cfg.timeoutMs, DIRECT_SSH_TIMEOUT_MS);
+      let r = await deps.runner.run(target, quick ? 'inventory quick' : 'inventory', timeoutMs);
+      // a v1 guest helper denies "inventory quick"; its full inventory has no update count, so it is just as cheap
+      if (quick && r.code === 1 && /^denied$/m.test(r.stderr)) r = await deps.runner.run(target, 'inventory', timeoutMs);
       const inv = inventoryFromSshResult(r, g.vmid, startedAt);
       if (inv.ok) failures.ok(key, `inventory of guest ${g.vmid} over SSH is working again`);
       else failures.fail(key, `inventory of guest ${g.vmid} over SSH failed`, { address: g.address, error: inv.error });
@@ -164,14 +177,23 @@ export function createInventoryService(
     store.collectorError('sensors', intervalSec, error);
   }
 
+  // HostHelper.guests() takes GuestsOptions in the real helper (hostHelper.ts); other implementations ignore it.
+  const helperGuests = deps.hostHelper.guests.bind(deps.hostHelper) as (
+    vmid?: number,
+    opts?: GuestsOptions,
+  ) => Promise<GuestInventory[] | null>;
+  let lastUpdatesSweep = -Infinity;
+
   async function sweep(): Promise<void> {
     lastFullSweep = Date.now();
+    const withUpdates = lastFullSweep - lastUpdatesSweep >= UPDATES_EVERY_MS;
     const [hostGuests, directGuests, hostInv] = await Promise.all([
-      useHost ? deps.hostHelper.guests() : Promise.resolve(null),
-      mapLimit(direct, DIRECT_SSH_CONCURRENCY, collectDirect),
+      useHost ? helperGuests(undefined, { quick: !withUpdates }) : Promise.resolve(null),
+      mapLimit(direct, DIRECT_SSH_CONCURRENCY, (g) => collectDirect(g, !withUpdates)),
       useHost ? deps.hostHelper.host() : Promise.resolve(null),
     ]);
     if (stopped) return;
+    if (withUpdates && (hostGuests || directGuests.some((d) => d.ok))) lastUpdatesSweep = lastFullSweep;
 
     const fresh: GuestInventory[] = hostGuests ? [...hostGuests] : [];
     for (const d of directGuests) {

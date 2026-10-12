@@ -5,7 +5,7 @@
  */
 import type { GuestInventory, HostInventory } from '../../shared/types.js';
 import type { AppContext, CommandResult, CommandRunner, HostHelper, Logger } from '../context.js';
-import { extractJson, lastLine, parseHostInventory, parseJsonArray, parseSensors } from './parse.js';
+import { extractJson, lastLine, parseHostInfo, parseHostInventory, parseJsonArray, parseSensors, type HostInfo } from './parse.js';
 
 /** Same rule as the helper: ^[A-Za-z][A-Za-z0-9._-]{0,63}$ */
 export const STORAGE_ID_RE = /^[A-Za-z][A-Za-z0-9._-]{0,63}$/;
@@ -41,11 +41,24 @@ export function createFailureLog(log: Logger, windowMs = 10 * 60_000) {
   };
 }
 
+export interface GuestsOptions {
+  /**
+   * Skip counting package updates inside the guests ("inventory … quick", helper protocol v2): the one probe that
+   * costs real CPU in every guest. Falls back to a full inventory when the helper is older and denies it.
+   */
+  quick?: boolean;
+}
+
 /** HostHelper plus a way to learn why the last call of a command failed (for collector status). */
 export interface HostHelperWithDiagnostics extends HostHelper {
+  guests(vmid?: number, opts?: GuestsOptions): Promise<GuestInventory[] | null>;
   /** e.g. lastError('inventory') / lastError('sensors'); undefined when the last call succeeded */
   lastError(command: string): string | undefined;
 }
+
+/** How long to stop asking an older (v1) helper for "quick" inventories after it denied one. */
+const QUICK_RETRY_MS = 60 * 60_000;
+const DENIED_HINT = 'denied by /usr/local/sbin/pve1-dash-helper (outdated helper? run install.sh --update-helper on the Proxmox host)';
 
 export function createHostHelper(ctx: AppContext, runner: CommandRunner): HostHelperWithDiagnostics {
   const log = ctx.log.child('host-helper');
@@ -55,7 +68,8 @@ export function createHostHelper(ctx: AppContext, runner: CommandRunner): HostHe
   const failures = createFailureLog(log);
   const capped = (ms: number) => Math.min(inv.timeoutMs, ms);
 
-  async function call(key: string, command: string, timeoutMs: number): Promise<CommandResult | null> {
+  /** Run a helper command; 'denied' when the helper refused it (logged by the caller), null on transport failure. */
+  async function run(key: string, command: string, timeoutMs: number): Promise<CommandResult | 'denied' | null> {
     if (!target) return null;
     let r: CommandResult;
     try {
@@ -64,23 +78,40 @@ export function createHostHelper(ctx: AppContext, runner: CommandRunner): HostHe
       failures.fail(key, `host helper "${command}" failed`, { error: (e as Error).message });
       return null;
     }
-    if (r.code === 1 && /^denied$/m.test(r.stderr)) {
-      failures.fail(key, `host helper denied "${command}"`, {
-        error: 'denied by /usr/local/sbin/pve1-dash-helper (outdated helper? re-run the installer)',
-      });
+    return r.code === 1 && /^denied$/m.test(r.stderr) ? 'denied' : r;
+  }
+
+  async function call(key: string, command: string, timeoutMs: number): Promise<CommandResult | null> {
+    const r = await run(key, command, timeoutMs);
+    if (r === 'denied') {
+      failures.fail(key, `host helper denied "${command}"`, { error: DENIED_HINT });
       return null;
     }
     return r;
   }
 
-  async function guests(vmid?: number): Promise<GuestInventory[] | null> {
+  let quickDeniedAt = -Infinity;
+
+  async function guests(vmid?: number, opts: GuestsOptions = {}): Promise<GuestInventory[] | null> {
     if (vmid !== undefined && !isVmid(vmid)) {
       log.warn('refusing inventory for an invalid vmid', { vmid });
       return null;
     }
-    const command = vmid === undefined ? 'inventory' : `inventory ${vmid}`;
+    const base = vmid === undefined ? 'inventory' : `inventory ${vmid}`;
     // A full sweep visits every guest (25 s each, 4 at a time); a single guest needs listing + one exec.
-    const r = await call('inventory', command, vmid === undefined ? inv.timeoutMs : capped(90_000));
+    const timeoutMs = vmid === undefined ? inv.timeoutMs : capped(90_000);
+    const quick = opts.quick === true && Date.now() - quickDeniedAt >= QUICK_RETRY_MS;
+    let r = await run('inventory', quick ? `${base} quick` : base, timeoutMs);
+    if (r === 'denied' && quick) {
+      // a v1 helper knows no "quick": its inventory has no update counts anyway, so the full one is just as cheap
+      quickDeniedAt = Date.now();
+      log.info('the host helper predates protocol v2 (no "quick" inventory); run install.sh --update-helper on the host');
+      r = await run('inventory', base, timeoutMs);
+    }
+    if (r === 'denied') {
+      failures.fail('inventory', `host helper denied "${base}"`, { error: DENIED_HINT });
+      return null;
+    }
     if (!r) return null;
     const parsed = parseHostInventory(r.stdout, Date.now());
     if (!parsed) {
@@ -148,11 +179,28 @@ export function createHostHelper(ctx: AppContext, runner: CommandRunner): HostHe
     return arr;
   }
 
+  async function hostInfo(): Promise<HostInfo | null> {
+    // A v1 helper denies "hostinfo"; call() records that (with the update hint) and returns null.
+    const r = await call('hostinfo', 'hostinfo', capped(45_000));
+    if (!r) return null;
+    const info = r.code === 0 ? parseHostInfo(r.stdout) : null;
+    if (!info) {
+      failures.fail('hostinfo', 'host helper "hostinfo" returned nothing usable', {
+        error: lastLine(r.stderr) || `exit code ${r.code ?? 'none (timeout)'}`,
+      });
+      return null;
+    }
+    failures.ok('hostinfo', 'host helper "hostinfo" is working again');
+    return info;
+  }
+
   return {
     available: () => target !== undefined,
     guests,
     host,
-    pkgUpdates: () => jsonArray('pkgupdates', 'pkgupdates', capped(30_000)),
+    hostInfo,
+    // a stale pkgupdates cache is recomputed on the host (pvesh, up to 60 s), then filtered against dpkg
+    pkgUpdates: () => jsonArray('pkgupdates', 'pkgupdates', capped(90_000)),
     async backups(storage: string) {
       if (typeof storage !== 'string' || !STORAGE_ID_RE.test(storage)) {
         log.warn('refusing backups for an invalid storage id', { storage });

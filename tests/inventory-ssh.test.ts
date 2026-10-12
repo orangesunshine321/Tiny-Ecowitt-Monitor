@@ -218,9 +218,9 @@ describe.skipIf(!canRunSshd)('ssh runner against a real sshd with forced-command
     setKnown(`# pinned by the installer\n${hostLine}\n`);
     const r = runner();
     const ver = await r.run(target(), 'version', 10_000);
-    expect(ver).toEqual({ stdout: 'pve1-dash-guest-inventory 1\n', stderr: '', code: 0 });
+    expect(ver).toEqual({ stdout: 'pve1-dash-guest-inventory 2\n', stderr: '', code: 0 });
 
-    const inv = await r.run(target(), 'inventory', 30_000);
+    const inv = await r.run(target(), 'inventory quick', 30_000);
     expect(inv.code).toBe(0);
     const parsed = inventoryFromSshResult(inv, 108, Date.now());
     expect(parsed).toMatchObject({ ok: true, source: 'ssh', vmid: 108 });
@@ -313,13 +313,15 @@ describe.skipIf(!canRunSshd)('ssh runner against a real sshd with forced-command
     const r = runner({ key: 'pve' });
     const helper = createHostHelper(ctx, r);
 
-    const guests = await helper.guests();
+    // quick: the update count (apt-get -s) would make this slow; the full mode is covered in inventory-helper.test.ts
+    const guests = await helper.guests(undefined, { quick: true });
     expect(guests!.map((g) => [g.vmid, g.source, g.ok])).toEqual([
       [100, 'qm-guest-exec', true],
       [101, 'pct-exec', true],
     ]);
     expect(guests![1]!.kernel).toBe(spawnSync('uname', ['-r'], { encoding: 'utf8' }).stdout.trim());
-    expect((await helper.guests(101))!.map((g) => g.vmid)).toEqual([101]);
+    expect((await helper.guests(101, { quick: true }))!.map((g) => g.vmid)).toEqual([101]);
+    expect(await helper.hostInfo!()).toMatchObject({ runningKernel: spawnSync('uname', ['-r'], { encoding: 'utf8' }).stdout.trim() });
     expect(await helper.host()).toMatchObject({ ok: true, sensorsAvailable: true, temps: [{ label: 'Tctl', celsius: 45.5, kind: 'cpu' }] });
     expect(await helper.backups('local')).toEqual([{ volid: 'local:backup/vzdump-lxc-101-2025_10_05-02_04_01.tar.zst', vmid: 101, ctime: 1759629841 }]);
     expect(await helper.pkgUpdates()).toEqual(existsSync('/var/lib/pve-manager/pkgupdates') ? expect.any(Array) : []);
