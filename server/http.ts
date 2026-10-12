@@ -102,6 +102,9 @@ const ALERT_KINDS = [
   'disk_health',
   'zfs_degraded',
   'updates_available',
+  'guest_disk',
+  'cert_expiry',
+  'temperature',
   'test',
 ] as const satisfies readonly AlertKind[];
 // Compile-time guard: fails if shared/types.ts gains an AlertKind that is missing above.

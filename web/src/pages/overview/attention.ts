@@ -47,6 +47,9 @@ const DEFAULT_PATH: Record<AttentionKind, string> = {
   disk_health: '/storage',
   zfs_degraded: '/storage',
   updates_available: '/',
+  guest_disk: '/guests',
+  cert_expiry: '/services',
+  temperature: '/',
   test: '/alerts',
   task_failed: '/tasks',
 };

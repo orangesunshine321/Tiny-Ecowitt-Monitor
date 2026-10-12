@@ -1,4 +1,6 @@
 import {
+  ShieldAlert,
+  Thermometer,
   Archive,
   ArchiveX,
   Bell,
@@ -31,6 +33,9 @@ const ICON: Record<AttentionKind, LucideIcon> = {
   disk_health: HardDrive,
   zfs_degraded: Database,
   updates_available: CircleArrowDown,
+  guest_disk: HardDrive,
+  cert_expiry: ShieldAlert,
+  temperature: Thermometer,
   test: Bell,
   task_failed: ListX,
 };

@@ -80,6 +80,9 @@ const KINDS: ReadonlySet<string> = new Set<AlertKind>([
   'disk_health',
   'zfs_degraded',
   'updates_available',
+  'guest_disk',
+  'cert_expiry',
+  'temperature',
   'test',
 ]);
 const SEVERITIES: ReadonlySet<string> = new Set<AlertSeverity>(['info', 'warning', 'critical']);

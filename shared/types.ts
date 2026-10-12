@@ -617,6 +617,9 @@ export type AlertKind =
   | 'disk_health'
   | 'zfs_degraded'
   | 'updates_available'
+  | 'guest_disk'
+  | 'cert_expiry'
+  | 'temperature'
   | 'test';
 
 export type AlertSeverity = 'info' | 'warning' | 'critical';

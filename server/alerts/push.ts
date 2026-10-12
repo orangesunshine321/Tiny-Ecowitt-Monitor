@@ -54,6 +54,9 @@ export const ALERT_KINDS: readonly Exclude<AlertKind, 'test'>[] = [
   'disk_health',
   'zfs_degraded',
   'updates_available',
+  'guest_disk',
+  'cert_expiry',
+  'temperature',
 ];
 
 export function defaultPrefs(): PushPrefs {
