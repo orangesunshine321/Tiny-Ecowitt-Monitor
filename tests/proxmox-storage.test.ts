@@ -3,47 +3,105 @@ import {
   computeCoverage,
   describeSelection,
   healthStatus,
+  clusterStorageEntries,
   lastBackups,
   mapBackupContent,
   mapBackupJobs,
   mapDisks,
   mapNotBackedUp,
   mapPruneBackups,
+  mapLvmThin,
   mapSmart,
-  mapStorage,
   mapTaskLog,
   mapTasks,
   mapZfsDetail,
   mapZfsPools,
+  mergeStorage,
   parseUpid,
   sortBackups,
   taskSeverity,
 } from '../server/proxmox/storageMapping.js';
 import {
+  compareKernels,
+  installedKernels,
   mapAptVersions,
   mapHostServices,
   mapNetwork,
   mapPkgUpdates,
   mapSubscription,
   mapVersion,
+  newestKernel,
   pickCertificate,
 } from '../server/proxmox/hostMapping.js';
 
 // Fixtures follow docs/research/pve-api-storage.md and pve-api-node.md (constructed from the PVE source, §-referenced).
 
 describe('storage & ZFS', () => {
-  it('maps /nodes/{node}/storage including inactive storages without used_fraction', () => {
-    const s = mapStorage([
-      { storage: 'pbs-main', type: 'pbs', content: 'backup', enabled: 1, active: 1, shared: 1, total: 3985729650688, used: 1288490188800, avail: 2697239461888, used_fraction: 0.323275862068966 },
-      { storage: 'local', type: 'dir', content: 'vztmpl,iso,backup', enabled: 1, active: 1, shared: 0, total: 100, used: 25, avail: 70 },
-      { storage: 'nas-nfs', type: 'nfs', content: 'backup,iso', enabled: 1, active: 0, shared: 1, total: 0, used: 0, avail: 0 },
-      { storage: 'old', type: 'dir', content: 'none', enabled: 0, active: 0, shared: 0, total: 0, used: 0, avail: 0 },
-    ]);
+  // GET /nodes/{node}/storage rows (pve-api-storage.md §1a)
+  const NODE_ROWS = [
+    { storage: 'pbs-main', type: 'pbs', content: 'backup', enabled: 1, active: 1, shared: 1, total: 3985729650688, used: 1288490188800, avail: 2697239461888, used_fraction: 0.323275862068966 },
+    { storage: 'local', type: 'dir', content: 'vztmpl,iso,backup', enabled: 1, active: 1, shared: 0, total: 100, used: 25, avail: 70 },
+    { storage: 'nas-nfs', type: 'nfs', content: 'backup,iso', enabled: 1, active: 0, shared: 1, total: 0, used: 0, avail: 0 },
+    { storage: 'old', type: 'dir', content: 'none', enabled: 0, active: 0, shared: 0, total: 0, used: 0, avail: 0 },
+  ];
+  // /cluster/resources type=storage entries of the same node (pve-api-node.md §5.3): enabled storages only,
+  // disk/maxdisk only while pvestatd can read the storage
+  const CLUSTER_ROWS = [
+    { id: 'storage/pve1/pbs-main', type: 'storage', storage: 'pbs-main', node: 'pve1', plugintype: 'pbs', status: 'available', shared: 1, content: 'backup', disk: 1288490188800, maxdisk: 3985729650688 },
+    { id: 'storage/pve1/local', type: 'storage', storage: 'local', node: 'pve1', plugintype: 'dir', status: 'available', shared: 0, content: 'iso,backup,vztmpl', disk: 26, maxdisk: 100 },
+    { id: 'storage/pve1/nas-nfs', type: 'storage', storage: 'nas-nfs', node: 'pve1', plugintype: 'nfs', status: 'unknown', shared: 1, content: 'backup,iso' },
+    { id: 'storage/pve2/local', type: 'storage', storage: 'local', node: 'pve2', plugintype: 'dir', status: 'available', disk: 1, maxdisk: 2 },
+    { id: 'qemu/100', type: 'qemu', vmid: 100, node: 'pve1' },
+  ];
+
+  it('maps the node listing alone (inactive and disabled storages included)', () => {
+    const s = mergeStorage({ cluster: [], node: NODE_ROWS, nodeFresh: true });
     expect(s.map((x) => x.id)).toEqual(['local', 'nas-nfs', 'old', 'pbs-main']);
     expect(s[0]).toEqual({ id: 'local', type: 'dir', content: ['backup', 'iso', 'vztmpl'], active: true, enabled: true, shared: false, total: 100, used: 25, avail: 70, usedFraction: 0.25 });
-    expect(s[1]).toMatchObject({ active: false, shared: true, usedFraction: 0 });
-    expect(s[2]!.content).toEqual([]);
+    expect(s[1]).toMatchObject({ active: false, shared: true, usedFraction: 0, total: 0 });
+    expect(s[2]).toMatchObject({ content: [], enabled: false, active: false });
     expect(s[3]!.usedFraction).toBeCloseTo(0.3233, 4);
+  });
+
+  it('takes sizes and states from /cluster/resources and only avail/disabled storages from the node listing', () => {
+    const cluster = clusterStorageEntries(CLUSTER_ROWS, 'pve1');
+    expect(cluster.map((r) => r.storage)).toEqual(['pbs-main', 'local', 'nas-nfs']);
+    const s = mergeStorage({ cluster, node: NODE_ROWS, nodeFresh: true });
+    expect(s.map((x) => [x.id, x.enabled, x.active])).toEqual([
+      ['local', true, true],
+      ['nas-nfs', true, false],
+      ['old', false, false],
+      ['pbs-main', true, true],
+    ]);
+    // used/total from pvestatd (fresher), avail from the listing
+    expect(s[0]).toEqual({ id: 'local', type: 'dir', content: ['backup', 'iso', 'vztmpl'], active: true, enabled: true, shared: false, total: 100, used: 26, avail: 70, usedFraction: 0.26 });
+
+    // the slow listing timed out or never ran: the cluster data alone still describes every enabled storage
+    const alone = mergeStorage({ cluster, nodeFresh: false });
+    expect(alone.map((x) => x.id)).toEqual(['local', 'nas-nfs', 'pbs-main']);
+    expect(alone[0]).toMatchObject({ total: 100, used: 26, avail: 74, active: true });
+    expect(alone[1]).toMatchObject({ active: false, total: 0 });
+  });
+
+  it('trusts a fresh "inactive" from the node listing over pvestatd data kept for 5 minutes, and vice versa', () => {
+    const cluster = clusterStorageEntries(CLUSTER_ROWS, 'pve1');
+    const pbsDown = NODE_ROWS.map((r) => (r.storage === 'pbs-main' ? { ...r, active: 0, total: 0, used: 0, avail: 0 } : r));
+    expect(mergeStorage({ cluster, node: pbsDown, nodeFresh: true }).find((x) => x.id === 'pbs-main')).toMatchObject({ active: false, total: 0 });
+    // a stale listing is not trusted for that
+    expect(mergeStorage({ cluster, node: pbsDown, nodeFresh: false }).find((x) => x.id === 'pbs-main')).toMatchObject({ active: true });
+    // pvestatd has no data yet, the listing says it answers
+    const nfsUp = NODE_ROWS.map((r) => (r.storage === 'nas-nfs' ? { ...r, active: 1, total: 1000, used: 400, avail: 600 } : r));
+    expect(mergeStorage({ cluster, node: nfsUp, nodeFresh: true }).find((x) => x.id === 'nas-nfs')).toMatchObject({ active: true, total: 1000, used: 400, avail: 600, usedFraction: 0.4 });
+  });
+
+  it('maps LVM-thin pools with metadata usage', () => {
+    expect(
+      mapLvmThin([
+        { lv: 'data', vg: 'pve', lv_size: 857619677184, used: 120065754317, metadata_size: 8749318144, metadata_used: 227481272, lv_state: 'a', lv_type: 't', ctime: '1700000000' },
+        { lv: 'broken' },
+      ]),
+    ).toEqual([{ name: 'data', vg: 'pve', size: 857619677184, used: 120065754317, metadataSize: 8749318144, metadataUsed: 227481272 }]);
+    expect(mapLvmThin(null)).toEqual([]);
   });
 
   it('maps zpool list and detail (vdev tree, optional status lines)', () => {
@@ -231,14 +289,37 @@ describe('backups', () => {
     items.push({ volid: 'local:backup/vzdump-lxc-103-x.tar.zst', storage: 'local', vmid: 103, ctime: NOW - 1000, protected: false, guestType: 'lxc' });
     const cov = computeCoverage({ guests, items, notBackedUp: mapNotBackedUp([{ vmid: 102, type: 'lxc', name: 'never' }]), staleDays: 1, now: NOW });
     expect(cov.map((c) => c.vmid)).toEqual([100, 101, 102, 103]);
-    expect(cov[0]).toEqual({ vmid: 100, name: 'haos', type: 'qemu', notInAnyJob: false, stale: true, lastBackup: 1759629603000, lastBackupStorage: 'local', ageDays: 1.42 });
+    expect(cov[0]).toEqual({ vmid: 100, name: 'haos', type: 'qemu', notInAnyJob: false, stale: true, staleAfterDays: 1, lastBackup: 1759629603000, lastBackupStorage: 'local', ageDays: 1.42 });
     expect(cov[1]).toMatchObject({ lastBackupStorage: 'pbs-main', stale: false, ageDays: 0.41 });
-    expect(cov[2]).toEqual({ vmid: 102, name: 'never', type: 'lxc', notInAnyJob: true, stale: true });
+    expect(cov[2]).toEqual({ vmid: 102, name: 'never', type: 'lxc', notInAnyJob: true, stale: true, staleAfterDays: 1 });
     expect(cov[3]!.lastBackup).toBeUndefined();
 
     const lb = lastBackups(items, guests);
     expect(lb.get(101)).toEqual({ time: 1759716241000, storage: 'pbs-main', volid: CONTENT_PBS[0]!.volid, size: 1567285248, verification: 'ok' });
     expect(lb.get(100)).toMatchObject({ storage: 'local', protected: true });
+  });
+
+  it('applies per-guest thresholds and reports failures only while no newer good backup exists', () => {
+    const items = sortBackups(mapBackupContent(CONTENT_DIR, 'local'));
+    const guests = [
+      { vmid: 100, name: 'haos', type: 'qemu' as const },
+      { vmid: 101, name: 'pihole', type: 'lxc' as const },
+    ];
+    const lastOf100 = 1759629603000; // 1.42 days before NOW
+    const cov = computeCoverage({
+      guests,
+      items,
+      staleDays: 1,
+      now: NOW,
+      thresholds: new Map([[100, 8]]), // weekly job
+      failures: new Map([
+        [100, { time: lastOf100 + 3_600_000, upid: 'UPID:pve1:1:1:1:vzdump::root@pam:', message: 'backup connect failed' }],
+        [101, { time: lastOf100 - 86_400_000, upid: 'UPID:pve1:2:2:2:vzdump::root@pam:' }], // older than its last backup
+      ]),
+    });
+    expect(cov[0]).toMatchObject({ vmid: 100, staleAfterDays: 8, stale: false, lastFailure: { message: 'backup connect failed' } });
+    expect(cov[1]).toMatchObject({ vmid: 101, staleAfterDays: 1, stale: true });
+    expect(cov[1]!.lastFailure).toBeUndefined();
   });
 
   it('maps backup jobs with next-run and selection text', () => {
@@ -283,6 +364,27 @@ describe('host info', () => {
       { Package: 'ceph', Version: '19.2', CurrentState: 'NotInstalled' },
     ]);
     expect(av).toEqual([{ name: 'pve-manager', newVersion: '9.1.5', oldVersion: '9.1.4' }]);
+  });
+
+  it('finds installed kernels in apt/versions and compares kernel releases', () => {
+    const raw = [
+      { Package: 'proxmox-ve', Version: '9.1.0', OldVersion: '9.1.0', CurrentState: 'Installed', RunningKernel: '6.14.11-4-pve' },
+      { Package: 'proxmox-kernel-6.14', Version: '6.14.11-5', OldVersion: '6.14.11-5', CurrentState: 'Installed' },
+      { Package: 'proxmox-kernel-6.14.11-4-pve-signed', Version: '6.14.11-4', OldVersion: '6.14.11-4', CurrentState: 'Installed' },
+      { Package: 'proxmox-kernel-6.14.11-5-pve-signed', Version: '6.14.11-5', OldVersion: '6.14.11-5', CurrentState: 'Installed' },
+      { Package: 'proxmox-kernel-6.8.12-9-pve', Version: '6.8.12-9', OldVersion: '6.8.12-9', CurrentState: 'Installed' },
+      { Package: 'pve-kernel-5.15.158-2-pve', Version: '5.15.158-2', OldVersion: '5.15.158-2' },
+      { Package: 'proxmox-kernel-6.14.8-2-bpo12-pve-signed', Version: '6.14.8-2', OldVersion: '6.14.8-2', CurrentState: 'Installed' },
+      { Package: 'proxmox-kernel-6.11.0-1-pve-signed', Version: '6.11.0-1', CurrentState: 'ConfigFiles', OldVersion: '6.11.0-1' },
+      { Package: 'proxmox-kernel-helper', Version: '9.0.4', OldVersion: '9.0.4', CurrentState: 'Installed' },
+    ];
+    expect(installedKernels(raw).sort()).toEqual(['5.15.158-2-pve', '6.14.11-4-pve', '6.14.11-5-pve', '6.14.8-2-bpo12-pve', '6.8.12-9-pve']);
+    expect(newestKernel(installedKernels(raw))).toBe('6.14.11-5-pve');
+    expect(compareKernels('6.8.12-10-pve', '6.8.12-9-pve')).toBeGreaterThan(0);
+    expect(compareKernels('6.8.12-9-pve', '6.14.0-1-pve')).toBeLessThan(0);
+    expect(compareKernels('6.8.12-9-pve', '6.8.12-9-pve')).toBe(0);
+    expect(newestKernel([undefined, '6.8.12-1-pve', undefined])).toBe('6.8.12-1-pve');
+    expect(newestKernel([])).toBeUndefined();
   });
 
   it('maps version, subscription (no key), certificate pick and services', () => {

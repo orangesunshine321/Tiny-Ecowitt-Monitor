@@ -1,7 +1,7 @@
 /**
  * Proxmox VE service: polls the read-only API (PVEAuditor token) into the Store sections
- * node, guests, storage, zfs, disks, backups, tasks, network — and answers on-demand queries
- * (RRD history, task logs, SMART, ZFS pool detail) for the HTTP layer.
+ * node, guests, storage, zfs, lvmThin, disks, backups, tasks, network — and answers on-demand queries
+ * (RRD history, downsampled to a point budget; task logs, SMART, ZFS pool detail) for the HTTP layer.
  *
  * On-demand queries are driven by browsers (any LAN client), so they are kept away from the pollers: they use their
  * own small connection pool, at most ON_DEMAND_CONCURRENCY run at once (the rest wait in a short queue), and identical
@@ -18,7 +18,7 @@ import type { GuestType, RrdPoint, SmartReport, TaskLog, Timeframe, ZfsPoolDetai
 import { PveApiError, PveClient, pvePath } from './client.js';
 import { createCollectors } from './collectors.js';
 import { GuestState, NodeState } from './live.js';
-import { mapRrd, uiBase, vmResources } from './mapping.js';
+import { downsampleRrd, mapRrd, RRD_DEFAULT_MAX_POINTS, RRD_MAX_POINTS, RRD_MIN_POINTS, uiBase, vmResources } from './mapping.js';
 import { num } from './parse.js';
 import { Poller } from './poller.js';
 import { mapSmart, mapTaskLog, mapZfsDetail, parseUpid } from './storageMapping.js';
@@ -132,14 +132,20 @@ export function createProxmoxService(ctx: AppContext, deps: { hostHelper: HostHe
   }
 
   const nodeState = new NodeState(ctx.store);
-  const guestState = new GuestState({ store: ctx.store, node, uiBaseUrl: uiBase(cfg.uiUrl ?? cfg.url) });
+  // Slow contributions (configs, pressure, backups, inventory) ride along with the next status poll's publish.
+  const guestState = new GuestState({
+    store: ctx.store,
+    node,
+    uiBaseUrl: uiBase(cfg.uiUrl ?? cfg.url),
+    deferMs: ctx.config.polling.status * 1000 + 1000,
+  });
   const pollers = createCollectors({ ctx, client, hostHelper: deps.hostHelper, nodeState, guestState, log }).map(
     (spec) => new Poller({ name: spec.name, intervalSec: spec.intervalSec, store: ctx.store, log, run: spec.run }),
   );
 
   // Inventory (written by the inventory module) contributes guest IPs and OS names: re-merge when it changes.
   const onPatch = (key: string) => {
-    if (key === 'inventory') guestState.publish();
+    if (key === 'inventory') guestState.schedulePublish();
   };
   let started = false;
 
@@ -165,22 +171,30 @@ export function createProxmoxService(ctx: AppContext, deps: { hostHelper: HostHe
       started = false;
       ctx.store.off('patch', onPatch);
       for (const p of pollers) p.stop();
+      guestState.dispose();
       void client.close();
       void onDemand.close();
     },
 
-    async getRrd(target: RrdTarget, timeframe: Timeframe): Promise<RrdPoint[]> {
+    async getRrd(target: RrdTarget, timeframe: Timeframe, opts: { maxPoints?: number } = {}): Promise<RrdPoint[]> {
       if (!TIMEFRAMES.includes(timeframe)) throw badInput(`invalid timeframe "${String(timeframe)}" (hour|day|week|month|year)`);
+      const requested = opts.maxPoints ?? RRD_DEFAULT_MAX_POINTS;
+      if (!Number.isFinite(requested)) throw badInput(`invalid maxPoints "${String(opts.maxPoints)}" (${RRD_MIN_POINTS}..${RRD_MAX_POINTS})`);
+      const maxPoints = Math.min(RRD_MAX_POINTS, Math.max(RRD_MIN_POINTS, Math.floor(requested)));
       const query = { timeframe, cf: 'AVERAGE' };
+      // the full series is fetched (and shared between identical requests in flight), then reduced per request
+      let points: RrdPoint[];
       if (target.kind === 'node') {
-        return shared(`rrd|node|${timeframe}`, async () => mapRrd(await onDemand.get(pvePath`/nodes/${node}/rrddata`, query), 'node'));
+        points = await shared(`rrd|node|${timeframe}`, async () => mapRrd(await onDemand.get(pvePath`/nodes/${node}/rrddata`, query), 'node'));
+      } else {
+        const vmid = target.vmid;
+        if (!Number.isInteger(vmid) || vmid <= 0) throw badInput(`invalid vmid "${String(vmid)}"`);
+        points = await shared(`rrd|${vmid}|${timeframe}`, async () => {
+          const type = await guestType(vmid);
+          return mapRrd(await onDemand.get(pvePath`/nodes/${node}/${type}/${vmid}/rrddata`, query), type);
+        });
       }
-      const vmid = target.vmid;
-      if (!Number.isInteger(vmid) || vmid <= 0) throw badInput(`invalid vmid "${String(vmid)}"`);
-      return shared(`rrd|${vmid}|${timeframe}`, async () => {
-        const type = await guestType(vmid);
-        return mapRrd(await onDemand.get(pvePath`/nodes/${node}/${type}/${vmid}/rrddata`, query), type);
-      });
+      return downsampleRrd(points, maxPoints);
     },
 
     async getTaskLog(upid: string, limit = 500): Promise<TaskLog> {

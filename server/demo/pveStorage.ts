@@ -466,6 +466,14 @@ export function diskSmart(sim: DemoSim, q: URLSearchParams, tMs: number): Obj {
 
 // ───────────────────────────────────────────────────────────── ZFS
 
+
+/**
+ * GET /nodes/{node}/disks/lvmthin (pve-api-storage.md §6): `lvs` thin pools with data and metadata usage. The demo
+ * host is a ZFS install (rpool), which has no volume groups, so the list is empty, as on a real ZFS-only node.
+ */
+export function lvmThinList(): Obj[] {
+  return [];
+}
 export function zfsList(): Obj[] {
   return DEMO_ZFS.map((z) => {
     const size = Math.round(z.sizeGiB * GiB);

@@ -6,6 +6,7 @@ import {
   buildPveUrl,
   configStaticIps,
   counterSample,
+  downsampleRrd,
   findNodeResource,
   latestNodeRrd,
   mapAgentInterfaces,
@@ -472,5 +473,58 @@ describe('buildGuest', () => {
     expect(g.maxmem).toBe(8589934592);
     expect(g.netInRate).toBe(0);
     expect(g.tags).toEqual(['x']);
+  });
+});
+
+describe('absent config keys mean the schema default (D70)', () => {
+  it('reads a CT without `unprivileged`/`onboot` as privileged and not started at boot', () => {
+    const ct = mapLxcConfig({ arch: 'amd64', hostname: 'old', memory: 512, ostype: 'debian', rootfs: 'local:101/vm-101-disk-0.raw,size=8G' });
+    expect(ct.config.unprivileged).toBe(false);
+    expect(ct.config.onboot).toBe(false);
+    expect(mapQemuConfig({ name: 'vm', memory: '2048' }).config.onboot).toBe(false);
+  });
+});
+
+describe('node status "unknown"', () => {
+  it('classifies expired pvestatd data with a fix', () => {
+    const base = mapNodeStatus('pve1', { uptime: 1, memory: { total: 1, used: 1 } }, { id: 'node/pve1', type: 'node', node: 'pve1', status: 'unknown' }, 0);
+    expect(base).toMatchObject({ errorKind: 'proxmox', errorHint: expect.stringContaining('systemctl restart pvestatd') });
+  });
+});
+
+describe('downsampleRrd (D31)', () => {
+  const day = (n: number, f: (i: number) => Record<string, number | undefined>) =>
+    Array.from({ length: n }, (_, i) => {
+      const p: Record<string, number> = { time: 1_760_000_000_000 + i * 60_000 };
+      for (const [k, v] of Object.entries(f(i))) if (v !== undefined) p[k] = v;
+      return p as { time: number };
+    });
+
+  it('returns short series untouched', () => {
+    const pts = day(300, (i) => ({ cpu: i / 300 }));
+    expect(downsampleRrd(pts, 400)).toBe(pts);
+  });
+
+  it('reduces 1440 points to the budget and keeps the peaks of every field', () => {
+    const pts = day(1440, (i) => ({ cpu: i === 777 ? 0.99 : 0.1, netin: i === 1000 ? 5e6 : 1000, memused: 2e9 }));
+    const out = downsampleRrd(pts, 400);
+    expect(out.length).toBeLessThanOrEqual(400);
+    expect(out.length).toBeGreaterThan(300);
+    expect(Math.max(...out.map((p) => (p as { cpu?: number }).cpu ?? 0))).toBe(0.99);
+    expect(Math.max(...out.map((p) => (p as { netin?: number }).netin ?? 0))).toBe(5e6);
+    expect(Math.min(...out.map((p) => (p as { cpu?: number }).cpu ?? 1))).toBe(0.1);
+    // ordered by time, first and last sample times kept
+    expect(out[0]!.time).toBe(pts[0]!.time);
+    expect(out[out.length - 1]!.time).toBe(pts[pts.length - 1]!.time);
+    expect(out.every((p, i) => i === 0 || p.time >= out[i - 1]!.time)).toBe(true);
+  });
+
+  it('keeps gaps: a field without values in a bucket stays absent', () => {
+    // a 2-hour outage (no data) in the middle of the day
+    const pts = day(1440, (i) => (i >= 600 && i < 720 ? {} : { cpu: 0.2 }));
+    const out = downsampleRrd(pts, 200);
+    const gapPoints = out.filter((p) => p.time >= pts[610]!.time && p.time < pts[710]!.time);
+    expect(gapPoints.length).toBeGreaterThan(0);
+    expect(gapPoints.every((p) => !('cpu' in p))).toBe(true);
   });
 });
