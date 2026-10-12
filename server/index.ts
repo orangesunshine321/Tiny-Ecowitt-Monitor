@@ -4,15 +4,21 @@
  *
  * Run with `tsx server/index.ts` in development or `node dist/server/index.js` after `npm run build`.
  * PVE1_DASH_DEMO=1 starts the built-in mock Proxmox API and mock SSH inventory instead of talking to a real node.
+ *
+ * Command line (besides starting the server):
+ *   --check-config [file]   validate config.yaml (default: PVE1_DASH_CONFIG or /etc/pve1-dash/config.yaml) and exit
+ *                           0 when it is usable, 1 when not; warnings are printed either way
+ *   --version               print the version and exit
  */
 import { mkdirSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { resolve } from 'node:path';
-import type { SnapshotMeta } from '../shared/types.js';
+import type { DiagnosticsReport, SnapshotMeta } from '../shared/types.js';
 import { createAlertService } from './alerts/index.js';
-import { type Config, loadConfig } from './config.js';
+import { type Config, ConfigError, configCheck, configWarnings, type LoadedConfig, loadConfigWithFallback, readConfig, saveGoodConfig } from './config.js';
 import type { AppContext, CommandRunner, HealthChecker, Logger } from './context.js';
 import { startDemo } from './demo/index.js';
+import { runDiagnostics } from './diagnostics/index.js';
 import { createHealthService } from './health/index.js';
 import { createHttpServer } from './http.js';
 import { createHostHelper } from './inventory/hostHelper.js';
@@ -66,19 +72,46 @@ async function step(log: Logger, name: string, fn: () => unknown): Promise<void>
   }
 }
 
-async function main(): Promise<void> {
-  let config: Config;
+/** `--check-config [file]`: print the verdict and warnings; exit code 0 = usable, 1 = not. */
+function checkConfig(file: string | undefined): never {
   try {
-    config = loadConfig();
+    const loaded = readConfig(process.env, file);
+    const warnings = configWarnings(loaded.config);
+    process.stdout.write(`config OK: ${loaded.path}\n`);
+    for (const w of warnings) process.stdout.write(`  warning: ${w}\n`);
+    process.exit(0);
   } catch (err) {
-    process.stderr.write(`[error] pve1-dash: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.stderr.write(`config INVALID: ${err instanceof Error ? err.message : String(err)}\n`);
     process.exit(1);
   }
+}
+
+async function main(): Promise<void> {
+  let loaded: LoadedConfig;
+  try {
+    loaded = loadConfigWithFallback();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[error] pve1-dash: ${msg}\n`);
+    if (err instanceof ConfigError && err.kind !== 'missing') {
+      process.stderr.write('[error] pve1-dash: fix the file, then: systemctl restart pve1-dash   (pve1-dash-doctor shows more)\n');
+    }
+    process.exit(1);
+  }
+  const config = loaded.config;
 
   const log = createLogger(config.logLevel);
   const appVersion = readAppVersion();
   const dataDir = resolve(config.dataDir);
   mkdirSync(dataDir, { recursive: true, mode: 0o750 });
+
+  if (loaded.fallback) {
+    log.error(`${loaded.fallback.error.replace(/\n/g, '\n    ')}`);
+    log.error(`running with the last good configuration from ${loaded.fallback.goodPath} until ${loaded.path} is fixed`);
+  }
+  for (const w of configWarnings(config)) {
+    if (!loaded.fallback || !w.includes(loaded.fallback.goodPath)) log.warn(`config: ${w}`);
+  }
 
   process.on('unhandledRejection', (reason) => {
     log.error('unhandled promise rejection', { error: reason instanceof Error ? reason.message : String(reason) });
@@ -93,6 +126,13 @@ async function main(): Promise<void> {
   if (demo) config.proxmox.url = demo.proxmoxUrl;
 
   const store = new Store(initialMeta(config, appVersion), config.proxmox.node);
+  if (loaded.fallback) {
+    // Shown under Settings → Data sources and in the freshness popover (no config collector ever succeeds).
+    // first line, plus the first problem of a schema error ("Invalid config …:\n  - listen.port (line 6): …")
+    const [first = '', second] = loaded.fallback.error.split('\n');
+    const summary = first.endsWith(':') && second ? `${first} ${second.trim()}` : first;
+    store.collectorError('config', 0, `config.yaml is invalid, running with the last good configuration: ${summary}`);
+  }
   const ctx: AppContext = { config, store, log, dataDir, appVersion };
   const runner: CommandRunner = demo ? demo.runner : createSshRunner(ctx);
   const checker: HealthChecker | undefined = demo?.checker;
@@ -103,7 +143,15 @@ async function main(): Promise<void> {
   const inventory = createInventoryService(ctx, { runner, hostHelper });
   const health = createHealthService(ctx, checker ? { checker } : {});
   const alerts = createAlertService(ctx);
-  const http = await createHttpServer(ctx, { proxmox, inventory, alerts });
+  const diagnostics = async (): Promise<DiagnosticsReport> => {
+    const report = await runDiagnostics({ config, appVersion, store, runner, live: true });
+    return { ...report, checks: [configCheck(loaded), ...report.checks.filter((c) => c.id !== 'config.file')] };
+  };
+  const http = await createHttpServer(
+    ctx,
+    { proxmox, inventory, alerts, diagnostics },
+    { configPath: loaded.path, ...(loaded.fallback ? { configFallback: loaded.fallback.error } : {}) },
+  );
 
   let shuttingDown = false;
   const shutdown = async (reason: string, exitCode = 0): Promise<void> => {
@@ -137,6 +185,7 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
 
   // The alerts module subscribes to Store patches, so it starts before the collectors write their first data.
+  // Inventory starts (and restores its last sweep) before health, which builds the discovered services from it.
   alerts.start();
   proxmox.start();
   inventory.start();
@@ -161,7 +210,16 @@ async function main(): Promise<void> {
     node: config.proxmox.node,
     timezone: config.timezone,
     ...(config.publicUrl ? { publicUrl: config.publicUrl } : {}),
+    ...(config.listen.allowedSources.length ? { allowedSources: config.listen.allowedSources } : {}),
   });
+
+  // This config works: keep a copy to fall back to if a later edit breaks config.yaml.
+  try {
+    if (saveGoodConfig(loaded)) log.debug('saved the configuration as the last good copy');
+  } catch (err) {
+    log.warn('could not save the last good copy of the configuration', { error: err instanceof Error ? err.message : String(err) });
+  }
+
   if (demo) {
     log.info('──────────────────────────────────────────────────────────────');
     log.info('  DEMO MODE: mock Proxmox VE API and mock SSH inventory.');
@@ -171,7 +229,15 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err: unknown) => {
-  process.stderr.write(`[error] pve1-dash: startup failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
-  process.exit(1);
-});
+const args = process.argv.slice(2);
+if (args[0] === '--check-config') {
+  checkConfig(args[1]);
+} else if (args[0] === '--version' || args[0] === '-v') {
+  process.stdout.write(`${readAppVersion()}\n`);
+  process.exit(0);
+} else {
+  main().catch((err: unknown) => {
+    process.stderr.write(`[error] pve1-dash: startup failed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
+    process.exit(1);
+  });
+}
