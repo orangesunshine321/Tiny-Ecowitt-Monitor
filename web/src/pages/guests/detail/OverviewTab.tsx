@@ -1,7 +1,20 @@
-/** Guest detail → Overview: resource rings, RRD charts, addresses and facts. */
+/** Guest detail → Overview: resource rings, RRD charts, filesystems, addresses and facts. */
+import { HardDrive, RotateCw } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
-import type { Guest, GuestInventory, Timeframe } from '../../../../../shared/types';
-import { Card, ListGroup, ListRow, SegmentedControl, StatusBadge, TimeSeriesChart, toneOf, type SegmentOption } from '../../../components';
+import type { Guest, GuestInventory, Snapshot, Timeframe } from '../../../../../shared/types';
+import {
+  Card,
+  ListGroup,
+  ListRow,
+  Meter,
+  RelativeTime,
+  SegmentedControl,
+  StatusBadge,
+  TimeSeriesChart,
+  toneOf,
+  type SegmentOption,
+  type Thresholds,
+} from '../../../components';
 import {
   formatBitRate,
   formatByteRate,
@@ -13,10 +26,11 @@ import {
   plural,
 } from '../../../format';
 import { useBreakpoint, useRrd } from '../../../hooks';
+import { useSnapshot } from '../../../store';
 import { chartEmpty } from '../../overview/charts';
 import { Ring } from '../../overview/Ring';
 import { StatTile } from '../../overview/StatTile';
-import { fraction, guestAddresses, primaryIp, typeName } from '../guestUtil';
+import { fraction, guestAddresses, guestDisks, guestUpdates, primaryIp, typeName, type GuestDiskUsage } from '../guestUtil';
 
 const TIMEFRAMES: SegmentOption<Timeframe>[] = [
   { value: 'hour', label: 'Hour' },
@@ -52,6 +66,46 @@ const SOURCE: Record<string, string> = {
   config: 'Static config',
 };
 
+const selectThresholds = (s: Snapshot) => s.meta.thresholds;
+
+/** Every filesystem of the guest that counts as its own disk, with a meter each. */
+function FilesystemsCard({ disks, thresholds, collectedAt }: { disks: GuestDiskUsage[]; thresholds: Thresholds; collectedAt?: number }) {
+  return (
+    <Card
+      title="Filesystems"
+      subtitle={
+        collectedAt !== undefined ? (
+          <>
+            Inside the guest (df) · <RelativeTime time={collectedAt} />
+          </>
+        ) : (
+          'Inside the guest'
+        )
+      }
+      icon={<HardDrive size={16} strokeWidth={2.2} />}
+      iconColor="var(--teal)"
+      className="gd-span"
+    >
+      <ul className="gd-fs">
+        {disks.map((d) => (
+          <li key={d.mount}>
+            <Meter
+              label={<span className="t-mono gd-fs-mount">{d.mount}</span>}
+              ariaLabel={`${d.mount} used`}
+              value={d.fraction}
+              valueLabel={`${formatBytesOf(d.used, d.size)} · ${formatPercent(d.fraction)}`}
+              thresholds={thresholds}
+            />
+            <span className="gd-fs-meta">
+              {[d.fstype, d.device, d.source === 'proxmox' ? 'as Proxmox reports it' : undefined].filter(Boolean).join(' · ')}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
 const pct = (v: number) => formatPercent(v);
 const bps = (v: number) => formatBitRate(v / 8);
 const Bps = (v: number) => formatByteRate(v);
@@ -60,6 +114,8 @@ const bits = (v: number | undefined) => (typeof v === 'number' && Number.isFinit
 export function OverviewTab({ guest: g, inv }: { guest: Guest; inv?: GuestInventory }) {
   const bp = useBreakpoint();
   const compact = bp === 'iphone';
+  const t = useSnapshot(selectThresholds, Object.is);
+  const diskThresholds = useMemo(() => ({ warn: t.storageWarnPercent / 100, crit: t.storageCritPercent / 100 }), [t]);
   const ringSize = compact ? 84 : 104;
   const running = g.status === 'running';
   const [tf, setTfState] = useState<Timeframe>(loadTf);
@@ -93,6 +149,11 @@ export function OverviewTab({ guest: g, inv }: { guest: Guest; inv?: GuestInvent
   const psi = g.pressure;
   const chartEmptyMsg = chartEmpty(rrd);
   const caption = TF_TEXT[tf].toLowerCase();
+  // what the guest itself sees (df); stopped guests show their last reading in the list only
+  const disks = guestDisks(g, inv);
+  const root = running ? disks.find((d) => d.mount === '/') : undefined;
+  const measured = disks.some((d) => d.source === 'guest');
+  const updates = g.template ? undefined : guestUpdates(inv);
 
   return (
     <div className="gd-grid">
@@ -110,13 +171,15 @@ export function OverviewTab({ guest: g, inv }: { guest: Guest; inv?: GuestInvent
             label="Memory"
             sublabel={running ? formatBytesOf(g.mem, g.maxmem) : `${formatBytes(g.maxmem)} allocated`}
           />
-          {g.type === 'lxc' && (
+          {(g.type === 'lxc' || root) && (
             <Ring
               compact={false}
               size={ringSize}
-              value={running ? fraction(g.disk, g.maxdisk) : null}
+              value={root ? root.fraction : null}
               label="Disk"
-              sublabel={running ? formatBytesOf(g.disk, g.maxdisk) : `${formatBytes(g.maxdisk)} allocated`}
+              sublabel={root ? formatBytesOf(root.used, root.size) : `${formatBytes(g.maxdisk)} allocated`}
+              ariaLabel={root?.source === 'guest' ? 'Root filesystem used (inside the guest)' : 'Disk used'}
+              thresholds={diskThresholds}
             />
           )}
           <div className="gd-stats">
@@ -133,7 +196,15 @@ export function OverviewTab({ guest: g, inv }: { guest: Guest; inv?: GuestInvent
             />
           </div>
         </div>
+        {updates?.rebootRequired && (
+          <p className="gd-banner gd-banner-inset" data-tone="info">
+            <RotateCw size={15} strokeWidth={2.2} aria-hidden="true" />
+            <span>A reboot is pending inside {g.name}: a new kernel or system libraries were installed.</span>
+          </p>
+        )}
       </Card>
+
+      {measured && (disks.length > 1 || g.type === 'qemu') && <FilesystemsCard disks={disks} thresholds={diskThresholds} collectedAt={inv?.collectedAt} />}
 
       <Card
         title="Performance"
@@ -230,6 +301,34 @@ export function OverviewTab({ guest: g, inv }: { guest: Guest; inv?: GuestInvent
           <ListRow dense title="Node" value={val(g.node)} />
           {os && <ListRow dense title="Operating system" value={val(os)} />}
           {running && <ListRow dense title="Uptime" value={formatDuration(g.uptime)} />}
+          {inv?.kernel && <ListRow dense title="Kernel" value={val(inv.kernel)} />}
+          {updates?.count !== undefined && (
+            <ListRow
+              dense
+              title="Package updates"
+              subtitle={
+                updates.checkedAt !== undefined ? (
+                  <>
+                    {updates.manager ? `${updates.manager} · ` : ''}lists from <RelativeTime time={updates.checkedAt} format="long" />
+                  </>
+                ) : (
+                  updates.manager
+                )
+              }
+              value={
+                updates.count > 0 ? (
+                  <StatusBadge
+                    tone={updates.security ? 'warn' : 'info'}
+                    size="small"
+                    label={`${updates.count} pending${updates.security ? ` · ${updates.security} security` : ''}`}
+                  />
+                ) : (
+                  <StatusBadge tone="ok" size="small" label="Up to date" />
+                )
+              }
+            />
+          )}
+          {updates?.rebootRequired && <ListRow dense title="Reboot" value={<StatusBadge tone="info" size="small" label="Required" />} />}
           {g.config?.onboot !== undefined && <ListRow dense title="Start at boot" value={g.config.onboot ? 'Yes' : 'No'} />}
           {g.lock && <ListRow dense title="Lock" value={<StatusBadge tone="warn" size="small" label={g.lock} />} />}
           {g.haState && <ListRow dense title="High availability" value={val(g.haState)} />}

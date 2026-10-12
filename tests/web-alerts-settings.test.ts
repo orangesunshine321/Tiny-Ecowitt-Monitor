@@ -1,9 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import type { AlertEvent, Guest, GuestInventory, PushDevice } from '../shared/types';
-import { activeSummary, countBySeverity, groupByDay, groupBySeverity, resolvedAfterSec, safeAppPath } from '../web/src/pages/alerts/alertsModel';
 import {
+  SNOOZE_OPTIONS,
+  activeSummary,
+  countBySeverity,
+  groupByDay,
+  groupBySeverity,
+  isSnoozed,
+  lastVisitDividerId,
+  pageSummary,
+  resolvedAfterSec,
+  safeAppPath,
+  snoozeLabel,
+  splitSnoozed,
+} from '../web/src/pages/alerts/alertsModel';
+import {
+  DEFAULT_QUIET_HOURS,
   agentlessCandidates,
   cleanDeviceName,
+  inQuietHours,
+  isClockTime,
+  quietHoursPatch,
   guestYamlSnippet,
   inventoryStatus,
   pushUiState,
@@ -109,6 +126,17 @@ describe('notification state', () => {
     expect(pushUiState(base)).toBe('on');
     expect(pushUiState({ ...base, devices: [device('dev1')] })).toBe('on');
     expect(pushUiState({ ...base, devices: [device('other')] })).toBe('lost');
+  });
+
+  it('sends plain-HTTP pages to HTTPS before any other advice (D10/D19)', () => {
+    // iPhone Safari on http://10.10.10.60:8080: not "Add to Home Screen" (that app could never get push)
+    expect(pushUiState({ ...base, secure: false, needsInstall: true, supported: false, permission: 'unsupported' })).toBe('insecure');
+    // Mac Safari on the http address: not "this browser can't receive push"
+    expect(pushUiState({ ...base, secure: false, supported: false, permission: 'unsupported' })).toBe('insecure');
+    expect(pushUiState({ ...base, secure: false, storedId: null })).toBe('insecure');
+    // the server switch still wins (nothing the device can do)
+    expect(pushUiState({ ...base, secure: false, serverEnabled: false })).toBe('server-off');
+    expect(pushUiState({ ...base, secure: true })).toBe('on');
   });
 
   it('toggles kinds in a stable order', () => {
@@ -223,5 +251,91 @@ describe('inventory status and agentless VMs', () => {
     // placeholders, and nothing unexpected is interpolated
     expect(guestYamlSnippet()).toContain('address: 192.168.1.60');
     expect(guestYamlSnippet({ vmid: 5, address: 'x; rm -rf /' })).toContain('address: 192.168.1.60');
+  });
+});
+
+describe('quiet hours', () => {
+  it('validates clock times', () => {
+    expect(isClockTime('22:00')).toBe(true);
+    expect(isClockTime('07:05')).toBe(true);
+    expect(isClockTime('7:05')).toBe(false);
+    expect(isClockTime('24:00')).toBe(false);
+    expect(isClockTime('')).toBe(false);
+  });
+
+  it('builds the prefs patch: defaults when switched on, null when off, the device zone attached', () => {
+    expect(quietHoursPatch(undefined, { enabled: true }, 'Europe/Berlin')).toEqual({
+      quietHours: { ...DEFAULT_QUIET_HOURS, timeZone: 'Europe/Berlin' },
+    });
+    expect(quietHoursPatch({ start: '23:00', end: '06:30', allowCritical: true }, { enabled: false }, 'UTC')).toEqual({ quietHours: null });
+    expect(quietHoursPatch({ start: '23:00', end: '06:30', allowCritical: true }, { start: '21:15', allowCritical: false }, null)).toEqual({
+      quietHours: { start: '21:15', end: '06:30', allowCritical: false },
+    });
+    // an invalid time keeps the old one; equal start and end is refused
+    expect(quietHoursPatch({ start: '23:00', end: '06:30', allowCritical: true }, { end: '' }, null)!.quietHours!.end).toBe('06:30');
+    expect(quietHoursPatch({ start: '23:00', end: '06:30', allowCritical: true }, { end: '23:00' }, null)).toBeNull();
+  });
+
+  it('evaluates the window like the server, across midnight and in the given zone', () => {
+    const at = (hhmm: string) => Date.UTC(2026, 9, 12, Number(hhmm.slice(0, 2)), Number(hhmm.slice(3)));
+    const q = { start: '22:00', end: '07:00', allowCritical: true, timeZone: 'UTC' };
+    expect(inQuietHours(q, at('23:30'))).toBe(true);
+    expect(inQuietHours(q, at('06:59'))).toBe(true);
+    expect(inQuietHours(q, at('07:00'))).toBe(false);
+    expect(inQuietHours(q, at('12:00'))).toBe(false);
+    expect(inQuietHours({ ...q, start: '13:00', end: '14:00' }, at('13:30'))).toBe(true);
+    // 12:00 UTC is 14:00 in Berlin (CEST)
+    expect(inQuietHours({ ...q, start: '13:30', end: '14:30', timeZone: 'Europe/Berlin' }, at('12:00'))).toBe(true);
+    expect(inQuietHours(undefined, at('23:00'))).toBe(false);
+    expect(inQuietHours({ ...q, end: '22:00' }, at('23:00'))).toBe(false);
+  });
+});
+
+describe('snooze (acknowledge, D51)', () => {
+  const a = (id: string, over: Partial<AlertEvent> = {}) => ev({ id, severity: 'warning', time: NOW - H, ...over });
+
+  it('tells snoozed from live alerts on the server clock', () => {
+    expect(isSnoozed(a('x'), NOW)).toBe(false);
+    expect(isSnoozed(a('x', { acknowledged: { at: NOW - H } }), NOW)).toBe(true);
+    expect(isSnoozed(a('x', { acknowledged: { at: NOW - H, until: NOW + 1 } }), NOW)).toBe(true);
+    expect(isSnoozed(a('x', { acknowledged: { at: NOW - H, until: NOW } }), NOW)).toBe(false);
+    const { live, snoozed } = splitSnoozed(
+      [a('l1'), a('s-old', { time: NOW - 5 * H, acknowledged: { at: NOW } }), a('s-new', { time: NOW - H, acknowledged: { at: NOW } }), a('expired', { acknowledged: { at: NOW - 2 * H, until: NOW - H } })],
+      NOW,
+    );
+    expect(live.map((x) => x.id)).toEqual(['l1', 'expired']);
+    expect(snoozed.map((x) => x.id)).toEqual(['s-new', 's-old']);
+  });
+
+  it('summarizes live alerts by severity plus a snoozed count', () => {
+    const list = [a('c', { severity: 'critical' }), a('w'), a('s', { severity: 'critical', acknowledged: { at: NOW } })];
+    expect(pageSummary(list, NOW)).toBe('1 critical · 1 warning · 1 snoozed');
+    expect(pageSummary([a('s', { acknowledged: { at: NOW } })], NOW)).toBe('1 snoozed');
+    expect(pageSummary([], NOW)).toBe('');
+  });
+
+  it('offers 1 hour to until-resolved and labels the snooze', () => {
+    expect(SNOOZE_OPTIONS.map((o) => o.hours)).toEqual([1, 8, 24, 168, undefined]);
+    const fmt = { time: (t: number) => new Date(t).toISOString().slice(11, 16), day: () => 'Tue' };
+    expect(snoozeLabel(undefined, NOW, fmt)).toBe('');
+    expect(snoozeLabel({ at: NOW }, NOW, fmt)).toBe('Snoozed until it resolves');
+    expect(snoozeLabel({ at: NOW, until: NOW + H }, NOW, fmt)).toBe(`Snoozed until ${fmt.time(NOW + H)}`);
+    expect(snoozeLabel({ at: NOW, until: NOW + 30 * H }, NOW, fmt)).toBe(`Snoozed until Tue ${fmt.time(NOW + 30 * H)}`);
+  });
+});
+
+describe('since your last visit (D68)', () => {
+  const days = (times: number[]) => groupByDay(times.map((t, i) => ev({ id: `e${i}`, severity: 'info', time: t })), NOW, () => 'day');
+
+  it('puts the divider above the first entry that is not new', () => {
+    expect(lastVisitDividerId(days([NOW - H, NOW - 3 * H, NOW - 30 * H]), NOW - 2 * H)).toBe('e1');
+    // across a day boundary
+    expect(lastVisitDividerId(days([NOW - H, NOW - 30 * H]), NOW - 2 * H)).toBe('e1');
+  });
+
+  it('shows no divider without a last visit, when nothing is new, or when everything is', () => {
+    expect(lastVisitDividerId(days([NOW - H]), null)).toBeUndefined();
+    expect(lastVisitDividerId(days([NOW - 3 * H, NOW - 4 * H]), NOW - 2 * H)).toBeUndefined();
+    expect(lastVisitDividerId(days([NOW - H, NOW - 90_000]), NOW - 2 * H)).toBeUndefined();
   });
 });

@@ -4,13 +4,18 @@
  */
 import type { Guest, ServiceCheckSample, ServiceEntry, ServiceStatus } from '../../../../shared/types';
 
-export type ServiceFilter = 'all' | 'problems' | 'docker' | 'configured';
+/** discovered = found by the dashboard (published Docker ports and well-known apps listening in guests) */
+export type ServiceFilter = 'all' | 'problems' | 'discovered' | 'configured';
 
-export const SERVICE_FILTERS: readonly ServiceFilter[] = ['all', 'problems', 'docker', 'configured'];
+export const SERVICE_FILTERS: readonly ServiceFilter[] = ['all', 'problems', 'discovered', 'configured'];
 
 export function parseFilter(v: string | null | undefined): ServiceFilter {
+  if (v === 'docker') return 'discovered'; // older deep links
   return SERVICE_FILTERS.includes(v as ServiceFilter) ? (v as ServiceFilter) : 'all';
 }
+
+/** Found by the dashboard rather than listed in config.yaml. */
+export const isDiscovered = (s: Pick<ServiceEntry, 'source'>): boolean => s.source === 'docker' || s.source === 'port';
 
 /** A problem is a service that failed (down) or answers slowly (slow). */
 export const isProblem = (s: Pick<ServiceEntry, 'status'>): boolean => s.status === 'down' || s.status === 'slow';
@@ -19,8 +24,8 @@ export function matchesFilter(s: ServiceEntry, f: ServiceFilter): boolean {
   switch (f) {
     case 'problems':
       return isProblem(s);
-    case 'docker':
-      return s.source === 'docker';
+    case 'discovered':
+      return isDiscovered(s);
     case 'configured':
       return s.source === 'config';
     default:
@@ -29,10 +34,10 @@ export function matchesFilter(s: ServiceEntry, f: ServiceFilter): boolean {
 }
 
 export function countByFilter(list: readonly ServiceEntry[]): Record<ServiceFilter, number> {
-  const out: Record<ServiceFilter, number> = { all: list.length, problems: 0, docker: 0, configured: 0 };
+  const out: Record<ServiceFilter, number> = { all: list.length, problems: 0, discovered: 0, configured: 0 };
   for (const s of list) {
     if (isProblem(s)) out.problems++;
-    if (s.source === 'docker') out.docker++;
+    if (isDiscovered(s)) out.discovered++;
     else if (s.source === 'config') out.configured++;
   }
   return out;
@@ -102,17 +107,22 @@ export function filterServices(list: readonly ServiceEntry[], filter: ServiceFil
 export interface ServiceGroup {
   /** group title */
   name: string;
+  /** the starred services of this device (always first) */
+  favourites?: boolean;
   services: ServiceEntry[];
   /** down + slow in this group */
   problems: number;
 }
 
-/** Title for services without a group: configured ones go to "Other", discovered containers to "Docker". */
+/** Title for services without a group: configured ones go to "Other", containers to "Docker", found apps to "Apps". */
 export function groupName(s: Pick<ServiceEntry, 'group' | 'source'>): string {
   const g = s.group?.trim();
   if (g) return g;
-  return s.source === 'docker' ? 'Docker' : 'Other';
+  return s.source === 'docker' ? 'Docker' : s.source === 'port' ? 'Apps' : 'Other';
 }
+
+/** Title of the leading group of starred services. */
+export const FAVOURITES_GROUP = 'Favourites';
 
 const RANK: Record<ServiceStatus, number> = { down: 0, slow: 1, unknown: 2, up: 3, paused: 4 };
 
@@ -121,9 +131,22 @@ const RANK: Record<ServiceStatus, number> = { down: 0, slow: 1, unknown: 2, up: 
  * containers) and so do services inside a group, so the launcher stays put as statuses change. With `problemsFirst`
  * (the Problems filter) groups and services are ordered worst first instead.
  */
-export function groupServices(list: readonly ServiceEntry[], opts: { problemsFirst?: boolean } = {}): ServiceGroup[] {
+export function groupServices(
+  list: readonly ServiceEntry[],
+  opts: { problemsFirst?: boolean; favourites?: readonly string[] } = {},
+): ServiceGroup[] {
   const map = new Map<string, ServiceGroup>();
+  // starred services lead in their own group (in starring order), except in the worst-first Problems view
+  const favIds = !opts.problemsFirst && opts.favourites?.length ? opts.favourites : undefined;
+  let fav: ServiceGroup | undefined;
+  if (favIds) {
+    const byId = new Map(list.map((s) => [s.id, s]));
+    const picked = favIds.map((id) => byId.get(id)).filter((s): s is ServiceEntry => !!s);
+    if (picked.length) fav = { name: FAVOURITES_GROUP, favourites: true, services: picked, problems: picked.filter(isProblem).length };
+  }
+  const favSet = new Set(fav?.services.map((s) => s.id));
   for (const s of list) {
+    if (favSet.has(s.id)) continue;
     const name = groupName(s);
     let g = map.get(name);
     if (!g) {
@@ -139,7 +162,46 @@ export function groupServices(list: readonly ServiceEntry[], opts: { problemsFir
     for (const g of groups) g.services.sort((a, b) => (RANK[a.status] ?? 5) - (RANK[b.status] ?? 5) || a.name.localeCompare(b.name));
     groups.sort((a, b) => worst(a) - worst(b) || b.problems - a.problems);
   }
-  return groups;
+  return fav ? [fav, ...groups] : groups;
+}
+
+// ───────────────────────────────────────────────────────────── HTTPS certificates (D47)
+
+/** Days before expiry when a tile starts warning (matches the cert_expiry alert's default, services.certWarnDays). */
+export const CERT_WARN_DAYS = 14;
+/** Critical from here (and once expired). */
+export const CERT_CRIT_DAYS = 3;
+
+export interface CertStatus {
+  tone: 'ok' | 'warn' | 'crit';
+  /** whole days left (negative once expired) */
+  days: number;
+  /** short chip text: "Cert 12 d", "Cert expires today", "Cert expired" */
+  label: string;
+  /** tooltip / accessible text */
+  detail: string;
+}
+
+/**
+ * How the leaf certificate of an https check looks: undefined when the service has none. Tiles only show a chip
+ * for warn/crit; the detail goes into the tooltip either way.
+ */
+export function certStatus(
+  tls: ServiceEntry['tls'],
+  now: number,
+  warnDays: number = CERT_WARN_DAYS,
+  fmtDate: (t: number) => string = (t) => new Date(t).toLocaleDateString(),
+): CertStatus | undefined {
+  if (!tls || typeof tls.notAfter !== 'number' || !Number.isFinite(tls.notAfter)) return undefined;
+  const ms = tls.notAfter - now;
+  const days = Math.floor(ms / 86_400_000);
+  const who = tls.selfSigned ? 'self-signed' : tls.issuer ? `issued by ${tls.issuer}` : '';
+  if (ms <= 0) {
+    return { tone: 'crit', days, label: 'Cert expired', detail: `Certificate expired on ${fmtDate(tls.notAfter)}${who ? ` (${who})` : ''}` };
+  }
+  const tone = days < CERT_CRIT_DAYS ? 'crit' : days < warnDays ? 'warn' : 'ok';
+  const label = days < 1 ? 'Cert expires today' : `Cert ${days} d`;
+  return { tone, days, label, detail: `Certificate valid until ${fmtDate(tls.notAfter)}${who ? ` (${who})` : ''}` };
 }
 
 /** Uptime percentage that never rounds a failure up to 100%: 1 → "100%", 0.9967 → "99.6%", 0.5 → "50%". */

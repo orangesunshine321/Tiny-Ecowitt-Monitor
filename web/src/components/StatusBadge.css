@@ -92,7 +92,9 @@
   inset: 0;
   border-radius: 50%;
   background: var(--_tone);
-  animation: ui-pulse 2s var(--ease-out) infinite;
+  /* a few beats when the status (re)appears, then still: an always-on animation keeps the compositor (and the glass
+     above it) busy for as long as the dashboard is open. Re-mount the dot (key) to pulse again on a state change. */
+  animation: ui-pulse 2s var(--ease-out) 3 both;
 }
 @keyframes ui-pulse {
   0% {

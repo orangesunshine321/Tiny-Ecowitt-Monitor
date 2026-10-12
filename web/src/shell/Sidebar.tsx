@@ -6,6 +6,7 @@ import { formatDuration } from '../format';
 import { useBreakpoint } from '../hooks/useMediaQuery';
 import { Link, useRoute } from '../router';
 import { useNavBadges, useSnapshot } from '../store';
+import { nodeErrorCopy } from './freshness';
 import { NAV, NAV_GROUPS } from './nav';
 import { NavBadge, navItemLabel } from './NavBadge';
 import './Sidebar.css';
@@ -20,7 +21,14 @@ export function Sidebar() {
   const open = useShellUi((s) => s.sidebarOpen);
   const expanded = bp === 'ipad' && open;
   const { pathname } = useRoute();
-  const node = useSnapshot((s) => ({ name: s.node.node, online: s.node.online, uptime: s.node.uptime, title: s.meta.title }));
+  // the formatted uptime, not the raw seconds: those change on every 5 s poll and would re-render the whole sidebar
+  const node = useSnapshot((s) => ({
+    name: s.node.node,
+    online: s.node.online,
+    uptime: s.node.uptime > 0 ? formatDuration(s.node.uptime) : '',
+    title: s.meta.title,
+    short: nodeErrorCopy(s.node.errorKind).short,
+  }));
   const badges = useNavBadges();
 
   // close the overlay on navigation, on leaving the iPad layout and on Esc
@@ -46,9 +54,9 @@ export function Sidebar() {
             <span className="shell-sb-meta">
               <span className="shell-sb-status" data-tone={node.online ? 'ok' : 'crit'}>
                 <span aria-hidden="true">●</span>
-                {node.online ? 'Online' : 'Offline'}
+                {node.online ? 'Online' : node.short === 'Node offline' ? 'Offline' : node.short}
               </span>
-              {node.online && node.uptime > 0 && <span className="t-num">Up {formatDuration(node.uptime)}</span>}
+              {node.online && node.uptime && <span className="t-num">Up {node.uptime}</span>}
             </span>
           </div>
           <IconButton

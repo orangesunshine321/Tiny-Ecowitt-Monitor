@@ -123,6 +123,7 @@ function SpotlightPanel() {
             <input
               ref={input}
               className="spotlight-input"
+              data-keep-font=""
               type="search"
               placeholder={bp === 'iphone' ? 'Search' : 'Search guests, services, containers, pages'}
               value={query}

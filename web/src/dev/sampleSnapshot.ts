@@ -3,18 +3,33 @@
  * be developed and screenshotted without the server: open the Vite dev server with `?sample`.
  *
  * Loaded exclusively through dynamic `import()` behind `import.meta.env.DEV && SAMPLE_MODE` (store.ts, api.ts), so it
- * never ships in production builds. Values follow the contract units (bytes, bytes/s, fractions, epoch ms) and the
+ * never ships in production builds.
+ *
+ * Scenarios (`?sample&scenario=<name>`), to see states that the healthy demo never shows:
+ *  - auth | permission | tls | unreachable | timeout | proxmox: the Proxmox API fails with that classified cause
+ *    (node offline, `errorKind`/`errorHint` set, collectors failing);
+ *  - config: config.yaml is broken and the server runs on its last good copy (the event-driven `config` collector
+ *    fails with `intervalSec: 0`, as server/index.ts reports it);
+ *  - legacy: an older server that sends none of the optional fields added in the pre-install round (filesystems,
+ *    updates, tls, acknowledged, lvmThin, staleAfterDays, ...), to check that the UI degrades gracefully.
+ *
+ * Live ticks follow the server's wire format: `patch` events for node/guests carry EMPTY history rings and a separate
+ * `history` event carries the new samples (see `sampleTick`). Values follow the contract units (bytes, bytes/s, fractions, epoch ms) and the
  * demo's Proxmox semantics (wearout = percent remaining → wearUsedPercent = 100 − wearout).
  */
 import type {
   AlertEvent,
+  BackupCoverage,
   BackupItem,
   BackupJob,
   CollectorStatus,
+  DiagnosticsReport,
   DockerContainer,
   Guest,
+  GuestFilesystem,
   GuestInventory,
   ListeningPort,
+  LvmThinPool,
   NetworkInterface,
   NodeSummary,
   PhysicalDisk,
@@ -24,7 +39,9 @@ import type {
   ServiceEntry,
   SmartReport,
   Snapshot,
+  SnapshotKey,
   StoragePool,
+  StreamEvent,
   SystemService,
   TaskEntry,
   TaskLog,
@@ -81,6 +98,53 @@ function wave(seed: string, t: number): number {
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+// ───────────────────────────────────────────────────────────── scenarios
+
+type ErrorKind = NonNullable<NodeSummary['errorKind']>;
+export type SampleScenario = ErrorKind | 'legacy' | 'config' | null;
+
+const ERROR_KINDS: readonly ErrorKind[] = ['auth', 'permission', 'tls', 'unreachable', 'timeout', 'proxmox', 'other'];
+
+/** `?sample&scenario=…` (see the header). */
+export function sampleScenario(): SampleScenario {
+  if (typeof location === 'undefined') return null;
+  const v = new URLSearchParams(location.search).get('scenario');
+  if (v === 'legacy' || v === 'config') return v;
+  return (ERROR_KINDS as readonly string[]).includes(v ?? '') ? (v as ErrorKind) : null;
+}
+
+/** What the server's classifyPveError produces for each cause (message, then the one-line hint). */
+const PVE_ERRORS: Record<ErrorKind, { error: string; hint: string }> = {
+  auth: {
+    error: 'Proxmox rejected the API token (HTTP 401 authentication failure)',
+    hint: 'The token secret is wrong or was rotated. Re-run the installer on the Proxmox host with PVE1_DASH_ROTATE_TOKEN=yes, then run pve1-dash-doctor in the container.',
+  },
+  permission: {
+    error: 'The API token lacks permission: HTTP 403 Permission check failed (/, Sys.Audit)',
+    hint: "On the Proxmox host run: pveum acl modify / --tokens 'pve1dash@pve!dashboard' --roles PVEAuditor",
+  },
+  tls: {
+    error: "Proxmox's TLS certificate changed: fingerprint 1E:91:4C:…:7A no longer matches the pinned one",
+    hint: 'If you renewed the certificate on purpose, re-pin it: run pve1-dash-doctor in the container and follow the re-pin command.',
+  },
+  unreachable: {
+    error: 'Cannot connect to https://10.10.20.10:8006 (ECONNREFUSED)',
+    hint: 'Check proxmox.url in /etc/pve1-dash/config.yaml and that pveproxy is running; pve1-dash-doctor tests the connection.',
+  },
+  timeout: {
+    error: 'Proxmox did not answer within 10 s (https://10.10.20.10:8006)',
+    hint: 'A firewall may be dropping the traffic, or the host is overloaded. Run pve1-dash-doctor in the container.',
+  },
+  proxmox: {
+    error: 'Proxmox returned HTTP 596 Connection timed out (pveproxy could not reach pvedaemon)',
+    hint: 'Restart the API daemons on the host: systemctl restart pvedaemon pveproxy',
+  },
+  other: {
+    error: 'Unexpected response from Proxmox',
+    hint: 'Run pve1-dash-doctor in the container for details.',
+  },
+};
 const round = (v: number, d = 4) => Math.round(v * 10 ** d) / 10 ** d;
 
 // ───────────────────────────────────────────────────────────── node
@@ -150,6 +214,8 @@ function buildNode(now: number): NodeSummary {
       title: u.Title,
     })),
     updatesSource: 'ssh',
+    updatesCheckedAt: now - 5 * HOUR - 12 * 60_000,
+    rebootRequired: { reason: 'Kernel 6.14.11-3-pve is installed but 6.14.11-2-pve is running', installedKernel: '6.14.11-3-pve' },
     hostServices: [
       { service: 'pveproxy', name: 'pveproxy', desc: 'PVE API Proxy Server', state: 'running', activeState: 'active', unitState: 'enabled' },
       { service: 'pvedaemon', name: 'pvedaemon', desc: 'PVE API Daemon', state: 'running', activeState: 'active', unitState: 'enabled' },
@@ -313,6 +379,50 @@ function parseContainer(c: DemoContainer, vmid: number, now: number): DockerCont
   };
 }
 
+/** Extra listeners per guest that the port-based app discovery recognises (sample only). */
+const EXTRA_PORTS: Record<number, ListeningPort[]> = {
+  105: [{ proto: 'tcp', address: '0.0.0.0', port: 8384, process: 'syncthing', pid: 1888 }],
+  108: [{ proto: 'tcp', address: '0.0.0.0', port: 9090, process: 'cockpit-ws', pid: 1402 }],
+};
+
+const fs = (mount: string, fstype: string, device: string, sizeGiB: number, usedFraction: number): GuestFilesystem => {
+  const size = Math.round(sizeGiB * GiB);
+  const used = Math.round(size * usedFraction);
+  return { mount, fstype, device, size, used, avail: size - used };
+};
+
+/** df inside each guest (pseudo filesystems excluded, like the helper). */
+function guestFilesystems(g: DemoGuest): GuestFilesystem[] {
+  switch (g.vmid) {
+    case 102:
+      return [
+        fs('/', 'zfs', 'rpool/data/subvol-102-disk-0', g.diskGiB, 0.61),
+        fs('/mnt/media', 'zfs', 'tank/media', 5980, 0.836),
+      ];
+    case 105:
+      return [
+        fs('/', 'ext4', '/dev/sda2', 124.9, 0.47),
+        fs('/boot/efi', 'vfat', '/dev/sda1', 1.05, 0.06),
+      ];
+    case 108:
+      return [
+        fs('/', 'ext4', '/dev/mapper/pbs-root', 27.4, 0.22),
+        fs('/mnt/datastore/main', 'zfs', 'tank/pbs', 2048, 0.88),
+      ];
+    default:
+      return g.type === 'lxc' ? [fs('/', 'zfs', `rpool/data/subvol-${g.vmid}-disk-0`, g.diskGiB, g.diskUsed ?? 0.3)] : [];
+  }
+}
+
+/** Pending OS updates inside each guest (local package cache only). */
+function guestUpdates(g: DemoGuest, now: number): GuestInventory['updates'] {
+  const checkedAt = now - Math.round((2 + 20 * hash01(g.vmid, 'apt')) * HOUR);
+  if (g.ostype === 'alpine') return { count: 0, manager: 'apk', checkedAt };
+  const counts: Record<number, [number, number]> = { 101: [2, 0], 102: [5, 1], 103: [17, 6], 104: [0, 0], 105: [12, 4], 107: [3, 0], 108: [1, 0] };
+  const [count, security] = counts[g.vmid] ?? [0, 0];
+  return { count, security, manager: 'apt', checkedAt };
+}
+
 function buildInventory(g: DemoGuest, now: number): GuestInventory | undefined {
   if (g.status !== 'running' || g.template) return undefined;
   if (g.inventoryVia === 'none') {
@@ -322,11 +432,12 @@ function buildInventory(g: DemoGuest, now: number): GuestInventory | undefined {
       source: 'qm-guest-exec',
       collectedAt: now - 90_000,
       ok: false,
-      error: `VM ${g.vmid} qga command 'guest-exec' failed - Command guest-exec has been disabled`,
+      error: 'Home Assistant OS disables guest-exec in its guest agent, so apps inside it cannot be listed',
       ips: [],
       services: [],
       containers: [],
       ports: [],
+      inspectable: 'unsupported',
     };
   }
   const containers = (g.containers ?? []).map((c) => parseContainer(c, g.vmid, now));
@@ -337,7 +448,9 @@ function buildInventory(g: DemoGuest, now: number): GuestInventory | undefined {
       return { proto: 'tcp' as const, address: '0.0.0.0', port: Number(port), process, pid: 600 + i * 17 };
     }),
     ...containers.flatMap((c, i) => c.ports.filter((p) => c.state === 'running' && p.hostPort).map((p) => ({ proto: 'tcp' as const, address: '0.0.0.0', port: p.hostPort!, process: 'docker-proxy', pid: 2300 + i }))),
+    ...(EXTRA_PORTS[g.vmid] ?? []),
   ];
+  const extraUnits = (EXTRA_PORTS[g.vmid] ?? []).map((p) => ({ unit: p.process === 'syncthing' ? 'syncthing@brandon' : 'cockpit', sub: 'running', system: false, description: `${p.process} service` }));
   return {
     vmid: g.vmid,
     source: g.inventoryVia ?? 'pct-exec',
@@ -349,10 +462,14 @@ function buildInventory(g: DemoGuest, now: number): GuestInventory | undefined {
     load: [round(0.4 + 2 * g.cpuBase, 2), round(0.35 + 2 * g.cpuBase, 2), round(0.3 + 2 * g.cpuBase, 2)],
     ips: guestIps(g).map((ip) => ({ ...ip, source: 'inventory' as const })),
     initSystem: g.ostype === 'alpine' ? 'openrc' : 'systemd',
-    services: [...(g.services ?? []).map((unit) => ({ unit, sub: 'running', system: false, description: `${unit} service` })), ...(g.ostype === 'alpine' ? [] : SYSTEM_UNITS)],
+    services: [...(g.services ?? []).map((unit) => ({ unit, sub: 'running', system: false, description: `${unit} service` })), ...extraUnits, ...(g.ostype === 'alpine' ? [] : SYSTEM_UNITS)],
     containers,
     ports,
     dockerPresent: (g.services ?? []).includes('docker'),
+    filesystems: guestFilesystems(g),
+    updates: guestUpdates(g, now),
+    rebootRequired: g.vmid === 105 || g.vmid === 103,
+    inspectable: 'yes',
   };
 }
 
@@ -365,6 +482,57 @@ function history(id: string, now: number, ok: (i: number) => boolean, baseMs: nu
   });
 }
 
+/** Leaf certificates the https checks saw (by config service name). */
+function serviceTls(name: string, now: number): ServiceEntry['tls'] {
+  switch (name) {
+    case 'Proxmox VE':
+      return { notAfter: now + 39 * DAY, issuer: 'PVE Cluster Manager CA', subject: 'pve1.home.lan' };
+    case 'UniFi':
+      return { notAfter: now + 2810 * DAY, issuer: 'UniFi', subject: 'UniFi', selfSigned: true };
+    case 'Proxmox Backup Server':
+      return { notAfter: now + 9 * DAY + 5 * HOUR, issuer: 'pbs.home.lan', subject: 'pbs.home.lan', selfSigned: true };
+    default:
+      return undefined;
+  }
+}
+
+/** Well-known apps found listening inside guests (source 'port'). */
+function portServices(guests: Guest[], now: number): ServiceEntry[] {
+  const defs = [
+    { vmid: 105, port: 8384, name: 'Syncthing', icon: 'syncthing', scheme: 'http', path: '/' },
+    { vmid: 108, port: 9090, name: 'Cockpit', icon: 'cockpit', scheme: 'https', path: '/' },
+  ];
+  return defs.flatMap((d) => {
+    const g = guests.find((x) => x.vmid === d.vmid);
+    const ip = g?.ips.find((a) => a.family === 4)?.address;
+    if (!g || !ip) return [];
+    const id = `port-${d.vmid}-${d.port}`;
+    const base = 12 + 40 * hash01(id, 'lat');
+    const url = `${d.scheme}://${ip}:${d.port}${d.path}`;
+    const entry: ServiceEntry = {
+      id,
+      name: d.name,
+      url,
+      icon: d.icon,
+      group: 'Discovered',
+      description: `Found listening on port ${d.port}`,
+      vmid: g.vmid,
+      guestName: g.name,
+      source: 'port',
+      tls: d.scheme === 'https' ? { notAfter: now + 301 * DAY, issuer: 'pbs', subject: 'pbs', selfSigned: true } : undefined,
+      check: { type: 'http', target: url },
+      status: 'up',
+      latencyMs: Math.round(base),
+      lastChecked: now - 7_000,
+      lastChange: now - 12 * DAY,
+      uptime24h: 1,
+      history: history(id, now, () => true, base),
+      alert: true,
+    };
+    return [entry];
+  });
+}
+
 function buildServices(guests: Guest[], now: number): ServiceEntry[] {
   const out: ServiceEntry[] = [];
   for (const s of DEMO_SERVICES) {
@@ -373,6 +541,7 @@ function buildServices(guests: Guest[], now: number): ServiceEntry[] {
     const base = 18 + 60 * hash01(id, 'lat');
     const tcp = 'check' in s && typeof s.check === 'string';
     out.push({
+      tls: serviceTls(s.name, now),
       id,
       name: s.name,
       url: 'url' in s ? s.url : undefined,
@@ -422,17 +591,31 @@ function buildServices(guests: Guest[], now: number): ServiceEntry[] {
       });
     }
   }
+  out.push(...portServices(guests, now));
   return out;
 }
 
 // ───────────────────────────────────────────────────────────── storage, disks, backups, tasks
 
+/** The SSD (/dev/sdc) carries an LVM-thin pool in the sample (the demo world is ZFS-only). */
+const LVM_THIN = { id: 'ssd-thin', vg: 'ssd', pool: 'data', sizeGiB: 440, usedFraction: 0.583, metaGiB: 4.4, metaFraction: 0.187 };
+
 function buildStorage(): StoragePool[] {
-  return DEMO_STORAGE.map((s) => {
+  const pools = DEMO_STORAGE.map((s) => {
     const total = Math.round(s.totalGiB * GiB);
     const used = Math.round(s.usedGiB * GiB);
     return { id: s.id, type: s.type, content: [...s.content].sort(), active: true, enabled: true, shared: s.shared, total, used, avail: total - used, usedFraction: used / total };
   });
+  const total = Math.round(LVM_THIN.sizeGiB * GiB);
+  const used = Math.round(total * LVM_THIN.usedFraction);
+  pools.push({ id: LVM_THIN.id, type: 'lvmthin', content: ['images', 'rootdir'], active: true, enabled: true, shared: false, total, used, avail: total - used, usedFraction: used / total });
+  return pools;
+}
+
+function buildLvmThin(): LvmThinPool[] {
+  const size = Math.round(LVM_THIN.sizeGiB * GiB);
+  const metadataSize = Math.round(LVM_THIN.metaGiB * GiB);
+  return [{ name: LVM_THIN.pool, vg: LVM_THIN.vg, size, used: Math.round(size * LVM_THIN.usedFraction), metadataSize, metadataUsed: Math.round(metadataSize * LVM_THIN.metaFraction) }];
 }
 
 function buildZfs(): ZfsPool[] {
@@ -459,7 +642,7 @@ function buildDisks(): PhysicalDisk[] {
     healthStatus: d.health === 'PASSED' || d.health === 'OK' ? 'ok' : d.health.startsWith('FAILED') ? 'failed' : 'unknown',
     wearUsedPercent: typeof d.wearout === 'number' ? 100 - d.wearout : undefined,
     rpm: 'rpm' in d ? d.rpm : undefined,
-    used: d.used,
+    used: d.devpath === '/dev/sdc' ? 'LVM' : d.used,
     gpt: true,
   }));
 }
@@ -499,9 +682,11 @@ function buildBackups(now: number): Snapshot['backups'] {
     comment: j.comment,
   }));
   const excluded = new Set(['106', '110', '9000']);
-  const coverage = DEMO_GUESTS.filter((g) => !g.template).map((g) => {
+  const coverage = DEMO_GUESTS.filter((g) => !g.template).map((g): BackupCoverage => {
     const last = g.lastBackupHoursAgo !== undefined ? now - g.lastBackupHoursAgo * HOUR : undefined;
     const ageDays = g.lastBackupHoursAgo !== undefined ? round(g.lastBackupHoursAgo / 24, 2) : undefined;
+    // schedule-aware threshold: max(backupStaleDays, longest job interval + graceDays) → weekly-only guests get 8 days
+    const staleAfterDays = g.vmid === 106 ? 8 : 7;
     return {
       vmid: g.vmid,
       name: g.name,
@@ -510,11 +695,21 @@ function buildBackups(now: number): Snapshot['backups'] {
       lastBackupStorage: g.backupStorage,
       ageDays,
       notInAnyJob: excluded.has(String(g.vmid)) && g.vmid !== 106,
-      stale: ageDays === undefined || ageDays > 7,
+      stale: ageDays === undefined || ageDays > staleAfterDays,
+      staleAfterDays,
+      // last night's job failed for "apps" (its newest good backup is from the night before)
+      lastFailure: g.vmid === FAILED_BACKUP_VMID ? { time: nightlyFailedAt(now), upid: nightlyUpid(now), message: FAILED_BACKUP_MESSAGE } : undefined,
     };
   });
   return { items, jobs, coverage, source: 'ssh' };
 }
+
+const FAILED_BACKUP_VMID = 105;
+const FAILED_BACKUP_MESSAGE = "VM 105 qmp command 'backup' failed - got timeout";
+/** The nightly vzdump that ended with "job errors" (DEMO_TASKS[0], 20 h ago, 1840 s long). */
+const nightlyStart = (now: number) => Math.round(now - DEMO_TASKS[0]!.hoursAgo * HOUR);
+const nightlyFailedAt = (now: number) => nightlyStart(now) + 14 * 60_000;
+const nightlyUpid = (now: number) => upid(DEMO_TASKS[0]!.type, DEMO_TASKS[0]!.id, nightlyStart(now), 0);
 
 function upid(type: string, id: string, start: number, i: number): string {
   const hex = (n: number, w = 8) => Math.floor(n).toString(16).toUpperCase().padStart(w, '0');
@@ -567,31 +762,46 @@ const TEMPS: TempReading[] = [
   { label: 'temp1', source: 'drivetemp-scsi-1-0', celsius: 37, kind: 'disk', highC: 65, critC: 70 },
 ];
 
+/**
+ * Acknowledgements made in this tab (POST /api/alerts/:id/ack|unack in the sample API), by alert id. `null` means
+ * "explicitly unacknowledged" (overrides the fixture's default snooze).
+ */
+const sampleAcks = new Map<string, AlertEvent['acknowledged'] | null>();
+
 function buildAlerts(now: number): Snapshot['alerts'] {
-  const mk = (key: string, kind: AlertEvent['kind'], severity: AlertEvent['severity'], title: string, body: string, ago: number, path: string, resolved = false): AlertEvent => ({
-    id: `sample-${key}`,
-    key,
-    kind,
-    severity,
-    title,
-    body,
-    time: now - ago,
-    resolved,
-    resolvedAt: resolved ? now - ago + 25 * 60_000 : undefined,
-    path,
-  });
+  const mk = (key: string, kind: AlertEvent['kind'], severity: AlertEvent['severity'], title: string, body: string, ago: number, path: string, resolved = false, acknowledged?: AlertEvent['acknowledged']): AlertEvent => {
+    const id = `sample-${key}`;
+    const ack = sampleAcks.has(id) ? sampleAcks.get(id) ?? undefined : acknowledged;
+    return {
+      id,
+      key,
+      kind,
+      severity,
+      title,
+      body,
+      time: now - ago,
+      resolved,
+      resolvedAt: resolved ? now - ago + 25 * 60_000 : undefined,
+      path,
+      acknowledged: resolved ? undefined : ack,
+    };
+  };
   const active = [
-    mk('backup_failed:all', 'backup_failed', 'critical', 'Backup job failed', 'vzdump started 02:00 ended with "job errors".', 20 * HOUR, '/backups'),
+    mk('backup_failed:105', 'backup_failed', 'critical', 'Backup of apps failed', `Last night's backup of VM apps (105) failed: ${FAILED_BACKUP_MESSAGE}.`, 20 * HOUR - 14 * 60_000, '/backups'),
     mk('disk_health:WD-RD2A9X7Y', 'disk_health', 'critical', 'Disk /dev/sdb is failing', 'SMART health of WDC WD80EFPX-68C4ZN0 (WD-RD2A9X7Y): FAILED!. Replace it soon.', 26 * HOUR, '/storage'),
     mk('storage_usage:nas-backups', 'storage_usage', 'critical', 'Storage nas-backups is almost full', '96% used: 14 TiB of 14.6 TiB (alert at 85%, critical at 95%).', 3 * DAY, '/storage'),
     mk('service_down:docker-102-jellyseerr', 'service_down', 'warning', 'jellyseerr is down', 'HTTP 503 from http://10.10.20.31:5055/ for 47 minutes.', 47 * 60_000, '/services'),
     mk('container_unhealthy:102:jellyseerr', 'container_unhealthy', 'warning', 'jellyseerr is unhealthy', 'Container on docker-media (102) reports unhealthy.', 52 * 60_000, '/guests/102'),
-    mk('zfs_degraded:tank', 'zfs_degraded', 'warning', 'ZFS pool tank is DEGRADED', 'A device failed or is missing. The pool still works but has lost redundancy.', 26 * HOUR, '/storage'),
-    mk('backup_stale:106', 'backup_stale', 'warning', 'No recent backup of win11', 'Last backup of VM win11 (106) is 19 days old.', 12 * DAY, '/backups'),
+    // the replacement disk is on order: snoozed for 24 h, 4 h ago
+    mk('zfs_degraded:tank', 'zfs_degraded', 'warning', 'ZFS pool tank is DEGRADED', 'A device failed or is missing. The pool still works but has lost redundancy.', 26 * HOUR, '/storage', false, { at: now - 4 * HOUR, until: now + 20 * HOUR }),
+    mk('guest_disk:108:/mnt/datastore/main', 'guest_disk', 'warning', 'pbs: /mnt/datastore/main is 88% full', '1.8 TiB of 2 TiB used inside VM pbs (108) (warning at 85%).', 9 * HOUR, '/guests/108'),
+    mk('cert_expiry:proxmox-backup-server', 'cert_expiry', 'warning', 'Certificate of Proxmox Backup Server expires in 9 days', 'https://10.10.20.60:8007 presents a self-signed certificate for pbs.home.lan that expires soon.', 3 * DAY, '/services'),
+    mk('backup_stale:110', 'backup_stale', 'warning', 'No recent backup of dev-sandbox', 'Last backup of CT dev-sandbox (110) is 9 days old (threshold 7 days).', 2 * DAY, '/backups', false, { at: now - 2 * DAY + HOUR }),
     mk('updates_available', 'updates_available', 'info', '3 updates available on pve1', 'pve-manager, proxmox-kernel-6.14 and libc6 can be upgraded.', 5 * HOUR, '/'),
   ];
   const recent = [
     ...active,
+    mk('temperature:cpu', 'temperature', 'warning', 'CPU is running hot (87 °C)', 'Tctl reached 87 °C (warning at 85 °C) during the nightly backup.', 19 * HOUR, '/storage', true),
     mk('service_down:unifi', 'service_down', 'warning', 'UniFi is down', 'Timeout after 5s.', 2 * DAY, '/services', true),
     mk('guest_stopped:105', 'guest_stopped', 'critical', 'VM apps stopped', 'apps (105) went from running to stopped.', 12.7 * DAY, '/guests/105', true),
   ].sort((a, b) => b.time - a.time);
@@ -621,15 +831,16 @@ function buildCollectors(now: number): CollectorStatus[] {
 
 // ───────────────────────────────────────────────────────────── public API
 
-/** Build the full sample snapshot at `now`. */
+/** Build the full sample snapshot at `now` (honours `?scenario=`). */
 export function buildSampleSnapshot(now = Date.now()): Snapshot {
+  builtAt = now;
   const guests = DEMO_GUESTS.map((g) => buildGuest(g, now));
   const inventory: Record<string, GuestInventory> = {};
   for (const g of DEMO_GUESTS) {
     const inv = buildInventory(g, now);
     if (inv) inventory[String(g.vmid)] = inv;
   }
-  return {
+  const snap: Snapshot = {
     meta: {
       appVersion: '0.1.0',
       title: 'pve1',
@@ -656,65 +867,185 @@ export function buildSampleSnapshot(now = Date.now()): Snapshot {
     network: NETWORK,
     services: buildServices(guests, now),
     alerts: buildAlerts(now),
+    lvmThin: buildLvmThin(),
+  };
+  const scenario = sampleScenario();
+  if (scenario === 'legacy') return toLegacy(snap);
+  if (scenario === 'config') applyConfigFallback(snap, now);
+  else if (scenario) applyErrorScenario(snap, scenario, now);
+  return snap;
+}
+
+/** epoch ms the current sample snapshot was built at (rebuilt sections keep their relative times) */
+let builtAt = Date.now();
+
+/** The Proxmox API is failing with `kind`: node offline with the classified error, status collectors failing. */
+function applyErrorScenario(snap: Snapshot, kind: ErrorKind, now: number): void {
+  const lastOk = now - 4 * 60_000 - 20_000;
+  const { error, hint } = PVE_ERRORS[kind];
+  snap.node = { ...snap.node, online: false, lastUpdated: lastOk, error, errorKind: kind, errorHint: hint };
+  snap.meta = {
+    ...snap.meta,
+    collectors: snap.meta.collectors.map((c) =>
+      ['status', 'rrd', 'tasks', 'storage', 'guestDetails'].includes(c.name) ? { ...c, lastSuccess: lastOk, lastError: error, lastErrorAt: now - 3_000 } : c,
+    ),
   };
 }
 
-/** Advance the live parts (node, guests, meta) by one tick; other sections keep their identity. */
-export function tickSample(prev: Snapshot, now = Date.now()): Snapshot {
-  const n = prev.node;
-  const memUsed = Math.round(nodeMem(now) * n.memTotal);
-  const push = <T,>(arr: T[], v: T) => [...arr.slice(1), v];
-  const node: NodeSummary = {
-    ...n,
-    cpu: round(nodeCpu(now)),
-    memUsed,
-    memAvailable: n.memTotal - memUsed,
-    netIn: nodeNet(now, 'in'),
-    netOut: nodeNet(now, 'out'),
-    uptime: n.uptime + 5,
-    lastUpdated: now,
-    history: {
-      t: push(n.history.t, now),
-      cpu: push(n.history.cpu, round(nodeCpu(now))),
-      mem: push(n.history.mem, Math.round(nodeMem(now) * MEM_TOTAL)),
-      netIn: push(n.history.netIn, Math.round(nodeNet(now, 'in'))),
-      netOut: push(n.history.netOut, Math.round(nodeNet(now, 'out'))),
+/** config.yaml failed to load at startup: the server runs on dataDir/config.good.yaml and reports it this way. */
+function applyConfigFallback(snap: Snapshot, now: number): void {
+  const config: CollectorStatus = {
+    name: 'config',
+    intervalSec: 0,
+    lastErrorAt: now - 6 * 60_000,
+    lastError:
+      'config.yaml is invalid, running with the last good configuration: Invalid config /etc/pve1-dash/config.yaml: listen.port (line 6): Expected number, received string',
+  };
+  snap.meta = { ...snap.meta, collectors: [...snap.meta.collectors.filter((c) => c.name !== 'config'), config] };
+}
+
+/** What an older server (before the pre-install round) sends: none of the newer optional fields. */
+function toLegacy(snap: Snapshot): Snapshot {
+  const { errorKind: _k, errorHint: _h, rebootRequired: _r, updatesCheckedAt: _u, ...node } = snap.node;
+  const inventory: Record<string, GuestInventory> = {};
+  for (const [k, v] of Object.entries(snap.inventory)) {
+    const { filesystems: _f, updates: _up, rebootRequired: _rb, inspectable: _i, ...rest } = v;
+    inventory[k] = rest;
+  }
+  const strip = (a: AlertEvent): AlertEvent => {
+    const { acknowledged: _a, ...rest } = a;
+    return rest;
+  };
+  const known = new Set(['node_unreachable', 'guest_stopped', 'service_down', 'container_unhealthy', 'backup_failed', 'backup_stale', 'storage_usage', 'disk_health', 'zfs_degraded', 'updates_available', 'test']);
+  const { lvmThin: _l, ...rest } = snap;
+  return {
+    ...rest,
+    node,
+    inventory,
+    services: snap.services
+      .filter((x) => x.source !== 'port')
+      .map((x) => {
+        const { tls: _t, ...svc } = x;
+        return svc;
+      }),
+    backups: {
+      ...snap.backups,
+      coverage: snap.backups.coverage.map((c) => {
+        const { staleAfterDays: _s, lastFailure: _f, ...cov } = c;
+        return cov;
+      }),
+    },
+    alerts: {
+      active: snap.alerts.active.filter((a) => known.has(a.kind)).map(strip),
+      recent: snap.alerts.recent.filter((a) => known.has(a.kind)).map(strip),
     },
   };
+}
+
+const emptyNodeHistory = (): NodeSummary['history'] => ({ t: [], cpu: [], mem: [], netIn: [], netOut: [] });
+const emptyGuestHistory = (): Guest['history'] => ({ t: [], cpu: [], mem: [] });
+
+let tickCount = 0;
+
+/**
+ * One live tick (every 5 s), in the server's wire format: `patch` events for node/guests/meta whose history rings are
+ * EMPTY, plus one `history` event with the new samples. Every 6th tick (30 s) also re-checks services the same way.
+ */
+export function sampleTick(prev: Snapshot, now = Date.now()): StreamEvent[] {
+  tickCount++;
+  const events: StreamEvent[] = [];
+  const legacy = sampleScenario() === 'legacy';
+  const meta: Snapshot['meta'] = { ...prev.meta, serverTime: now, collectors: prev.node.online ? buildCollectors(now) : prev.meta.collectors };
+  events.push({ type: 'patch', key: 'meta', value: meta });
+  if (!prev.node.online) return events;
+
+  const n = prev.node;
+  const cpu = round(nodeCpu(now));
+  const memUsed = Math.round(nodeMem(now) * n.memTotal);
+  const netIn = nodeNet(now, 'in');
+  const netOut = nodeNet(now, 'out');
+  const node: NodeSummary = { ...n, cpu, memUsed, memAvailable: n.memTotal - memUsed, netIn, netOut, uptime: n.uptime + 5, lastUpdated: now };
+  const guestSamples: Record<string, { t: number[]; cpu: number[]; mem: number[] }> = {};
   const guests = prev.guests.map((g) => {
     const demo = DEMO_GUESTS.find((d) => d.vmid === g.vmid);
     if (!demo || g.status !== 'running') return g;
-    const cpu = round(guestCpu(demo, now));
-    const mem = guestMem(demo, now);
-    return {
-      ...g,
-      cpu,
-      mem: Math.round(mem * g.maxmem),
-      uptime: g.uptime + 5,
-      history: { t: push(g.history.t, now), cpu: push(g.history.cpu, cpu), mem: push(g.history.mem, Math.round(mem * g.maxmem)) },
-    };
+    const gcpu = round(guestCpu(demo, now));
+    const mem = Math.round(guestMem(demo, now) * g.maxmem);
+    guestSamples[String(g.vmid)] = { t: [now], cpu: [gcpu], mem: [mem] };
+    return { ...g, cpu: gcpu, mem, uptime: g.uptime + 5 };
   });
-  return { ...prev, node, guests, meta: { ...prev.meta, serverTime: now, collectors: buildCollectors(now) } };
+  const nodeSample = { t: [now], cpu: [cpu], mem: [Math.round(nodeMem(now) * MEM_TOTAL)], netIn: [Math.round(netIn)], netOut: [Math.round(netOut)] };
+
+  if (legacy) {
+    // old servers resend whole rings in every patch and never send `history`
+    const push = <T,>(arr: T[], v: T) => [...arr.slice(1), v];
+    node.history = { t: push(n.history.t, now), cpu: push(n.history.cpu, cpu), mem: push(n.history.mem, nodeSample.mem[0]!), netIn: push(n.history.netIn, nodeSample.netIn[0]!), netOut: push(n.history.netOut, nodeSample.netOut[0]!) };
+    const withRings = guests.map((g) => {
+      const s = guestSamples[String(g.vmid)];
+      return s ? { ...g, history: { t: push(g.history.t, now), cpu: push(g.history.cpu, s.cpu[0]!), mem: push(g.history.mem, s.mem[0]!) } } : g;
+    });
+    events.push({ type: 'patch', key: 'node', value: node }, { type: 'patch', key: 'guests', value: withRings });
+    return events;
+  }
+
+  events.push(
+    { type: 'patch', key: 'node', value: { ...node, history: emptyNodeHistory() } },
+    { type: 'patch', key: 'guests', value: guests.map((g) => ({ ...g, history: emptyGuestHistory() })) },
+  );
+  const history: Extract<StreamEvent, { type: 'history' }> = { type: 'history', node: nodeSample, guests: guestSamples };
+  if (tickCount % 6 === 0) {
+    const services: Record<string, ServiceCheckSample[]> = {};
+    const next = prev.services.map((svc) => {
+      const ok = svc.status === 'up' || svc.status === 'slow';
+      const ms = ok ? Math.round((svc.latencyMs ?? 40) * (0.85 + 0.3 * hash01(svc.id, now))) : undefined;
+      services[svc.id] = [{ t: now, ok, ms }];
+      return { ...svc, latencyMs: ms ?? svc.latencyMs, lastChecked: now, history: [] };
+    });
+    events.push({ type: 'patch', key: 'services', value: next });
+    history.services = services;
+  }
+  events.push(history);
+  return events;
+}
+
+// ───────────────────────────────────────────────────────────── sample-side live events (ack/unack)
+
+type SampleListener = (ev: StreamEvent) => void;
+const sampleListeners = new Set<SampleListener>();
+
+/** Live events the sample API produces (e.g. the alerts patch after an ack), like the server would over SSE. */
+export function onSampleEvent(fn: SampleListener): () => void {
+  sampleListeners.add(fn);
+  return () => sampleListeners.delete(fn);
+}
+
+function emitSample<K extends SnapshotKey>(key: K, value: Snapshot[K]): void {
+  for (const fn of sampleListeners) fn({ type: 'patch', key, value });
 }
 
 // ───────────────────────────────────────────────────────────── sample REST
 
-const RRD_SHAPE: Record<Timeframe, { step: number; n: number }> = {
-  hour: { step: 60_000, n: 70 },
-  day: { step: 30 * 60_000, n: 70 },
-  week: { step: 3 * HOUR, n: 70 },
-  month: { step: 12 * HOUR, n: 70 },
-  year: { step: 7 * DAY, n: 70 },
+/** PVE 9 RRD shapes: span covered and native sample count (the server downsamples to `maxPoints`, default 400). */
+const RRD_SHAPE: Record<Timeframe, { span: number; native: number }> = {
+  hour: { span: 70 * 60_000, native: 70 },
+  day: { span: DAY, native: 1440 },
+  week: { span: 7 * DAY, native: 1440 },
+  month: { span: 30 * DAY, native: 1440 },
+  year: { span: 365 * DAY, native: 1440 },
 };
 
-function rrd(target: 'node' | number, tf: Timeframe, now: number): RrdPoint[] {
-  const { step, n } = RRD_SHAPE[tf];
+function rrd(target: 'node' | number, tf: Timeframe, now: number, maxPoints = 400): RrdPoint[] {
+  const { span, native } = RRD_SHAPE[tf];
+  const n = Math.max(2, Math.min(native, maxPoints));
+  const step = Math.round(span / n);
   const end = Math.floor(now / step) * step;
   const g = typeof target === 'number' ? DEMO_GUESTS.find((d) => d.vmid === target) : undefined;
+  const gapFrom = Math.round(n * 0.54);
+  const gapTo = gapFrom + Math.max(2, Math.round(n * 0.03));
   return Array.from({ length: n }, (_, i) => {
     const time = end - (n - 1 - i) * step;
     // a short outage in the middle of day/week views shows how gaps render
-    if ((tf === 'day' || tf === 'week') && i >= 38 && i <= 40) return { time };
+    if ((tf === 'day' || tf === 'week') && i >= gapFrom && i <= gapTo) return { time };
     const slow = time / (tf === 'hour' ? 1 : tf === 'day' ? 8 : 40);
     if (!g) {
       return {
@@ -754,9 +1085,9 @@ function taskLog(id: string): TaskLog {
         'INFO: creating Proxmox Backup Server archive \'vm/100/2026-10-10T02:00:03Z\'',
         'INFO: backup was done incrementally, reused 30.81 GiB (96%)',
         'INFO: Finished Backup of VM 100 (00:01:42)',
-        'INFO: Starting Backup of VM 108 (qemu)',
-        "ERROR: Backup of VM 108 failed - VM 108 qmp command 'backup' failed - got timeout",
-        'INFO: Failed at 2026-10-10 02:30:41',
+        'INFO: Starting Backup of VM 105 (qemu)',
+        `ERROR: Backup of VM 105 failed - ${FAILED_BACKUP_MESSAGE}`,
+        'INFO: Failed at 2026-10-10 02:14:41',
         'INFO: Backup job finished with errors',
         'TASK ERROR: job errors',
       ]
@@ -856,8 +1187,97 @@ const SAMPLE_DEVICE: PushDevice = {
   endpointHost: 'web.push.apple.com',
   createdAt: Date.now() - 9 * DAY,
   lastSuccessAt: Date.now() - 20 * HOUR,
-  prefs: { kinds: ['node_unreachable', 'service_down', 'backup_failed', 'disk_health', 'zfs_degraded', 'storage_usage', 'guest_stopped'], minSeverity: 'warning', recoveries: true },
+  prefs: {
+    kinds: ['node_unreachable', 'service_down', 'backup_failed', 'disk_health', 'zfs_degraded', 'storage_usage', 'guest_stopped', 'guest_disk', 'cert_expiry', 'temperature'],
+    minSeverity: 'warning',
+    recoveries: true,
+    quietHours: { start: '22:00', end: '07:00', allowCritical: true, timeZone: 'America/Chicago' },
+  },
 };
+
+/** POST /api/alerts/:id/ack|unack: records the snooze and publishes the alerts section like the server does. */
+function ackAlert(id: string, ack: boolean, hours: number | undefined, now: number): AlertEvent {
+  const current = buildAlerts(builtAt);
+  const found = current.active.find((a) => a.id === id);
+  if (!found) throw new Error(`sample API: no active alert ${id}`);
+  sampleAcks.set(id, ack ? { at: now, until: hours ? now + hours * HOUR : undefined } : null);
+  const next = buildAlerts(builtAt);
+  emitSample('alerts', next);
+  return next.active.find((a) => a.id === id)!;
+}
+
+/** GET /api/diagnostics: what a healthy-ish first install reports (or the failing check of the current scenario). */
+function sampleDiagnostics(now: number): DiagnosticsReport {
+  const scenario = sampleScenario();
+  const err = scenario && scenario !== 'legacy' && scenario !== 'config' ? PVE_ERRORS[scenario] : undefined;
+  const checks: DiagnosticsReport['checks'] = [
+    // id/title/wording as server/config.ts configCheck() reports them
+    scenario === 'config'
+      ? {
+          id: 'config.file',
+          group: 'config',
+          title: 'Config file',
+          status: 'fail',
+          detail:
+            'Invalid config /etc/pve1-dash/config.yaml:\n  - listen.port (line 6): Expected number, received string\nThe dashboard is running with the last good configuration (/var/lib/pve1-dash/config.good.yaml).',
+          fix: 'Fix the file (run pve1-dash-doctor in the dashboard container to see the problem), then: systemctl restart pve1-dash',
+        }
+      : { id: 'config.file', group: 'config', title: 'Config file', status: 'ok', detail: '/etc/pve1-dash/config.yaml loaded without warnings.' },
+    { id: 'config.publicUrl', group: 'config', title: 'Public URL and Host header', status: 'ok', detail: 'publicUrl is https://dash.bgreen.cloud; requests for that host are accepted.' },
+    {
+      id: 'pve.reach',
+      group: 'proxmox',
+      title: 'Proxmox API reachable',
+      status: scenario === 'unreachable' || scenario === 'timeout' ? 'fail' : 'ok',
+      detail: scenario === 'unreachable' || scenario === 'timeout' ? err!.error : 'https://10.10.20.10:8006 answered in 18 ms.',
+      fix: scenario === 'unreachable' || scenario === 'timeout' ? err!.hint : undefined,
+      docs: 'docs/TROUBLESHOOTING.md#proxmox-unreachable',
+    },
+    {
+      id: 'pve.tls',
+      group: 'proxmox',
+      title: 'TLS certificate pin',
+      status: scenario === 'tls' ? 'fail' : 'ok',
+      detail: scenario === 'tls' ? err!.error : 'The presented certificate matches the pinned SHA-256 fingerprint.',
+      fix: scenario === 'tls' ? 'sudo pve1-dash-doctor --repin   # after checking: openssl s_client -connect 10.10.20.10:8006 </dev/null | openssl x509 -noout -fingerprint -sha256' : undefined,
+    },
+    {
+      id: 'pve.auth',
+      group: 'proxmox',
+      title: 'API token',
+      status: scenario === 'auth' ? 'fail' : 'ok',
+      detail: scenario === 'auth' ? err!.error : "Token pve1dash@pve!dashboard is valid.",
+      fix: scenario === 'auth' ? 'PVE1_DASH_ROTATE_TOKEN=yes bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)"' : undefined,
+    },
+    {
+      id: 'pve.acl',
+      group: 'proxmox',
+      title: 'Read permissions',
+      status: scenario === 'permission' ? 'fail' : 'warn',
+      detail: scenario === 'permission' ? err!.error : '/nodes/pve1/disks/smart answered 403: SMART details need Sys.Audit on /nodes/pve1.',
+      fix: "pveum acl modify / --tokens 'pve1dash@pve!dashboard' --roles PVEAuditor",
+      docs: 'docs/TROUBLESHOOTING.md#token-401403',
+    },
+    { id: 'pve.version', group: 'proxmox', title: 'Proxmox VE version', status: 'ok', detail: 'pve-manager 9.0.10 (supported).' },
+    { id: 'ssh.host', group: 'inventory', title: 'Host helper (SSH)', status: 'ok', detail: 'pve1-dash-helper 2 answered "version" over SSH in 140 ms.' },
+    {
+      id: 'ssh.guest.108',
+      group: 'inventory',
+      title: 'Direct SSH target pbs (108)',
+      status: 'warn',
+      detail: 'The host key changed since it was pinned.',
+      fix: 'ssh-keyscan -t ed25519 10.10.20.60 | sudo tee -a /var/lib/pve1-dash/known_hosts',
+    },
+    { id: 'collectors', group: 'system', title: 'Collectors', status: err ? 'fail' : 'ok', detail: err ? 'Node status has been failing for 4 minutes.' : 'All 15 collectors ran within their interval.' },
+    { id: 'push.vapid', group: 'push', title: 'Web Push keys', status: 'ok', detail: 'VAPID keys present; subject mailto:brandon@example.com.' },
+    { id: 'push.https', group: 'push', title: 'HTTPS for iPhone push', status: 'ok', detail: 'publicUrl is https, so Home Screen web apps on iOS can subscribe.' },
+    { id: 'system.node', group: 'system', title: 'Node.js', status: 'ok', detail: 'Node 22.20.0.' },
+    { id: 'system.disk', group: 'system', title: 'Free disk space', status: 'ok', detail: '2.7 GiB free in /var/lib/pve1-dash.' },
+    { id: 'system.clock', group: 'system', title: 'Clock', status: 'ok', detail: 'Within 0.4 s of the Proxmox host.' },
+    { id: 'services.config', group: 'services', title: 'Service checks', status: 'skip', detail: 'No services configured by hand; 19 were discovered.' },
+  ];
+  return { generatedAt: now, appVersion: '0.1.0', checks };
+}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -868,10 +1288,11 @@ export async function sampleApi(method: 'GET' | 'POST', path: string, body: unkn
   const p = url.pathname;
   const now = Date.now();
   const tf = (url.searchParams.get('timeframe') ?? 'hour') as Timeframe;
+  const maxPoints = Number(url.searchParams.get('maxPoints')) || undefined;
   if (method === 'GET' && p === '/api/snapshot') return buildSampleSnapshot(now);
-  if (method === 'GET' && p === '/api/rrd/node') return rrd('node', tf, now);
+  if (method === 'GET' && p === '/api/rrd/node') return rrd('node', tf, now, maxPoints);
   let m = /^\/api\/rrd\/guest\/(\d+)$/.exec(p);
-  if (method === 'GET' && m) return rrd(Number(m[1]), tf, now);
+  if (method === 'GET' && m) return rrd(Number(m[1]), tf, now, maxPoints);
   m = /^\/api\/tasks\/(.+)\/log$/.exec(p);
   if (method === 'GET' && m) return taskLog(decodeURIComponent(m[1]!));
   if (method === 'GET' && p === '/api/disks/smart') return smart(url.searchParams.get('disk') ?? '');
@@ -884,12 +1305,13 @@ export async function sampleApi(method: 'GET' | 'POST', path: string, body: unkn
   if (method === 'GET' && p === '/api/push/devices') return [SAMPLE_DEVICE];
   m = /^\/api\/push\/devices\/(.+)$/.exec(p);
   if (method === 'GET' && m) return { ...SAMPLE_DEVICE, id: decodeURIComponent(m[1]!) };
-  m = /^\/api\/push\/devices\/(.+)$/.exec(p);
-  if (method === 'GET' && m) return { ...SAMPLE_DEVICE, id: decodeURIComponent(m[1]!) };
   if (method === 'POST' && (p === '/api/push/subscribe' || p === '/api/push/prefs')) {
     const b = (body ?? {}) as { name?: string; prefs?: Partial<PushDevice['prefs']> };
     return { ...SAMPLE_DEVICE, name: b.name ?? SAMPLE_DEVICE.name, prefs: { ...SAMPLE_DEVICE.prefs, ...b.prefs } };
   }
+  if (method === 'GET' && p === '/api/diagnostics') return sampleDiagnostics(now);
+  m = /^\/api\/alerts\/(.+)\/(ack|unack)$/.exec(p);
+  if (method === 'POST' && m) return ackAlert(decodeURIComponent(m[1]!), m[2] === 'ack', (body as { hours?: number } | undefined)?.hours, now);
   if (method === 'POST' && p === '/api/push/unsubscribe') return { ok: true };
   if (method === 'POST' && p === '/api/push/test') return { ok: true };
   throw new Error(`sample API: no fixture for ${method} ${p}`);

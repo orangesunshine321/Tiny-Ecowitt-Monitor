@@ -1,20 +1,22 @@
 /**
  * Guests (DESIGN §5): every VM and container on pve1 as a card grid or a sortable table.
  *
- * Filters live in the URL (?type=lxc&status=running&q=docker&tags=media,dns) so they survive reloads and back
- * navigation; the grid/list choice and "show templates" are per-device preferences.
+ * Filters live in the URL (?type=lxc&status=running&q=docker&tags=media,dns&updates=1) so they survive reloads and
+ * back navigation; the grid/list choice and "show templates" are per-device preferences. iPhone keeps its own view
+ * choice and starts with the list (the grid shows about two guests per screen there).
  */
-import { Boxes, LayoutGrid, List, SearchX } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { ArrowDownToLine, Boxes, LayoutGrid, List, SearchX, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Snapshot } from '../../../shared/types';
 import { Button, EmptyState, IconButton, PageHeader, SegmentedControl, TagChip, Toggle, ToolbarGroup, type SegmentOption } from '../components';
 import { plural } from '../format';
 import { useBreakpoint } from '../hooks';
-import { setPref, usePrefs } from '../prefs';
+import { setPref, usePrefs, type GuestsView } from '../prefs';
 import { setQuery, useQueryParam } from '../router';
 import { useSnapshot } from '../store';
 import { SearchField } from './guests/GuestBits';
 import { GuestCard } from './guests/GuestCard';
+import { GuestList } from './guests/GuestList';
 import { GuestTable } from './guests/GuestTable';
 import { filterGuests, parseTagsParam, tagCounts, type StatusFilter, type TypeFilter } from './guests/guestUtil';
 import './guests/Guests.css';
@@ -38,18 +40,55 @@ const asStatus = (v: string | null): StatusFilter => (v === 'running' || v === '
 
 const selectGuests = (s: Snapshot) => s.guests;
 const selectInventory = (s: Snapshot) => s.inventory;
+const selectThresholds = (s: Snapshot) => s.meta.thresholds;
+
+/** The iPhone's own grid/list choice (the shared preference stays what the Mac and iPad use). Default: list. */
+const PHONE_VIEW_KEY = 'pve1-dash.guests.phoneView';
+
+function loadPhoneView(): GuestsView {
+  try {
+    const v = globalThis.localStorage?.getItem(PHONE_VIEW_KEY);
+    if (v === 'grid' || v === 'list') return v;
+  } catch {
+    /* storage unavailable */
+  }
+  return 'list';
+}
+
+function usePhoneView(): [GuestsView, (v: GuestsView) => void] {
+  const [view, setView] = useState<GuestsView>(loadPhoneView);
+  const set = useCallback((v: GuestsView) => {
+    setView(v);
+    try {
+      globalThis.localStorage?.setItem(PHONE_VIEW_KEY, v);
+    } catch {
+      /* storage unavailable: keep it for this visit */
+    }
+  }, []);
+  return [view, set];
+}
 
 export default function GuestsPage() {
   const guests = useSnapshot(selectGuests, Object.is);
   const inventory = useSnapshot(selectInventory, Object.is);
-  const view = usePrefs((p) => p.guestsView);
+  const thresholds = useSnapshot(selectThresholds, Object.is);
+  const prefView = usePrefs((p) => p.guestsView);
   const showTemplates = usePrefs((p) => p.showTemplates);
   const bp = useBreakpoint();
+  const iphone = bp === 'iphone';
+  const [phoneView, setPhoneView] = usePhoneView();
+  const view = iphone ? phoneView : prefView;
+  const setView = (v: GuestsView) => (iphone ? setPhoneView(v) : setPref('guestsView', v));
+  const diskThresholds = useMemo(
+    () => ({ warn: thresholds.storageWarnPercent / 100, crit: thresholds.storageCritPercent / 100 }),
+    [thresholds],
+  );
 
   const type = asType(useQueryParam('type'));
   const status = asStatus(useQueryParam('status'));
   const tagsParam = useQueryParam('tags');
   const urlQuery = useQueryParam('q') ?? '';
+  const updatesOnly = useQueryParam('updates') === '1';
   const tags = useMemo(() => parseTagsParam(tagsParam), [tagsParam]);
 
   // The field keeps its own state (no cursor jumps); the URL follows it.
@@ -61,8 +100,8 @@ export default function GuestsPage() {
   };
 
   const list = useMemo(
-    () => filterGuests(guests, { type, status, query, tags, templates: showTemplates }, inventory),
-    [guests, type, status, query, tags, showTemplates, inventory],
+    () => filterGuests(guests, { type, status, query, tags, templates: showTemplates, updates: updatesOnly }, inventory),
+    [guests, type, status, query, tags, showTemplates, updatesOnly, inventory],
   );
   // selected tags first, so an active filter is visible even when the chip row scrolls (iPhone)
   const allTags = useMemo(
@@ -72,7 +111,7 @@ export default function GuestsPage() {
   const real = guests.filter((g) => !g.template);
   const running = real.filter((g) => g.status === 'running').length;
   const templates = guests.length - real.length;
-  const filtered = type !== 'all' || status !== 'all' || query.trim() !== '' || tags.length > 0;
+  const filtered = type !== 'all' || status !== 'all' || query.trim() !== '' || tags.length > 0 || updatesOnly;
   const total = showTemplates ? guests.length : real.length;
 
   const toggleTag = (t: string) => {
@@ -81,7 +120,7 @@ export default function GuestsPage() {
   };
   const clearFilters = () => {
     setQueryText('');
-    setQuery({ type: null, status: null, q: null, tags: null });
+    setQuery({ type: null, status: null, q: null, tags: null, updates: null });
   };
 
   return (
@@ -97,13 +136,13 @@ export default function GuestsPage() {
               icon={<LayoutGrid size={18} strokeWidth={2} />}
               label="Grid"
               pressed={view === 'grid'}
-              onClick={() => setPref('guestsView', 'grid')}
+              onClick={() => setView('grid')}
             />
             <IconButton
               icon={<List size={19} strokeWidth={2} />}
               label="List"
               pressed={view === 'list'}
-              onClick={() => setPref('guestsView', 'list')}
+              onClick={() => setView('list')}
             />
           </ToolbarGroup>
         }
@@ -159,6 +198,18 @@ export default function GuestsPage() {
               </div>
             )}
 
+            {updatesOnly && (
+              <div className="gx-scope">
+                <span className="gx-scope-chip">
+                  <ArrowDownToLine size={13} strokeWidth={2.4} aria-hidden="true" />
+                  Pending updates or reboot
+                  <button type="button" className="gx-scope-clear" aria-label="Show all guests" onClick={() => setQuery({ updates: null })}>
+                    <X size={11} strokeWidth={3} aria-hidden="true" />
+                  </button>
+                </span>
+              </div>
+            )}
+
             {filtered && (
               <div className="gx-resultbar" aria-live="polite">
                 <span>{list.length === total ? `All ${plural(total, 'guest')}` : `${list.length} of ${plural(total, 'guest')}`}</span>
@@ -172,15 +223,25 @@ export default function GuestsPage() {
               <EmptyState
                 icon={<SearchX size={28} strokeWidth={1.8} />}
                 title="No matching guests"
-                message={query.trim() ? `Nothing matches “${query.trim()}” with the current filters.` : 'No guest matches the current filters.'}
+                message={
+                  query.trim()
+                    ? `Nothing matches “${query.trim()}” with the current filters.`
+                    : updatesOnly
+                      ? 'No guest has pending package updates or needs a reboot.'
+                      : 'No guest matches the current filters.'
+                }
                 action={<Button onClick={clearFilters}>Clear Filters</Button>}
               />
             ) : view === 'list' ? (
-              <GuestTable guests={list} inventory={inventory} />
+              iphone ? (
+                <GuestList guests={list} inventory={inventory} />
+              ) : (
+                <GuestTable guests={list} inventory={inventory} diskThresholds={diskThresholds} />
+              )
             ) : (
               <div className="gx-grid">
                 {list.map((g) => (
-                  <GuestCard key={g.vmid} guest={g} inventory={inventory[String(g.vmid)]} />
+                  <GuestCard key={g.vmid} guest={g} inventory={inventory[String(g.vmid)]} diskThresholds={diskThresholds} />
                 ))}
               </div>
             )}

@@ -1,18 +1,48 @@
-/** Overview summary cards: Guests, Storage, Temperatures and Departures. */
-import { Boxes, CircuitBoard, Cpu, HardDrive, TrainFront } from 'lucide-react';
+/** Overview summary cards: Guests, Storage, Temperatures, Favourites and Departures. */
+import { ArrowDownToLine, Boxes, ChevronRight, CircuitBoard, Cpu, HardDrive, Star, TrainFront } from 'lucide-react';
 import { useMemo, type CSSProperties } from 'react';
 import type { Snapshot } from '../../../../shared/types';
 import { MiniBoard } from '../../board/MiniBoard';
-import { Button, Card, EmptyState, Meter, OsIcon, StatusBadge, StatusDot, StatusIcon } from '../../components';
+import { AppIcon, Button, Card, EmptyState, Meter, OsIcon, StatusBadge, StatusDot, StatusIcon, toneOf } from '../../components';
 import { formatBytesOf, formatPercent, formatTemp, plural } from '../../format';
 import { Link } from '../../router';
 import { useSnapshot } from '../../store';
-import { typeLabel } from '../guests/guestUtil';
-import { departureOrder, groupTemps, hottest, topByCpu } from './overviewUtil';
+import { typeLabel, updatesSummary } from '../guests/guestUtil';
+import { useFavouriteServices } from '../services/servicePrefs';
+import { departureOrder, favouriteServices, groupTemps, hottest, openableUrl, topByCpu, updatesLine } from './overviewUtil';
 
 // ───────────────────────────────────────────────────────────── guests
 
 const selectGuests = (s: Snapshot) => s.guests;
+const selectInventory = (s: Snapshot) => s.inventory;
+
+/** Pending OS updates across guests: one line that opens the Guests page filtered to them. */
+function GuestUpdatesRow() {
+  const guests = useSnapshot(selectGuests, Object.is);
+  const inventory = useSnapshot(selectInventory, Object.is);
+  const summary = useMemo(() => updatesSummary(guests, inventory), [guests, inventory]);
+  const line = updatesLine(summary);
+  if (!line) return null;
+  return (
+    <Link
+      to="/guests?updates=1"
+      className="ov-gupd"
+      title={`${plural(summary.packages, 'package')} pending${summary.security ? `, ${summary.security} security` : ''}`}
+    >
+      <span className="ov-gupd-icon" data-tone={summary.security ? 'warn' : 'info'} aria-hidden="true">
+        <ArrowDownToLine size={14} strokeWidth={2.4} />
+      </span>
+      <span className="ov-gupd-text">
+        <span className="ov-gupd-title">{line}</span>
+        <span className="ov-gupd-sub">
+          {plural(summary.packages, 'package')}
+          {summary.security ? ` · ${summary.security} security` : ''}
+        </span>
+      </span>
+      <ChevronRight size={16} strokeWidth={2.4} aria-hidden="true" className="ov-gupd-chevron" />
+    </Link>
+  );
+}
 
 export function GuestsCard({ style }: { style?: CSSProperties }) {
   const guests = useSnapshot(selectGuests, Object.is);
@@ -53,6 +83,7 @@ export function GuestsCard({ style }: { style?: CSSProperties }) {
           </span>
         </div>
       </div>
+      <GuestUpdatesRow />
       {top.length === 0 ? (
         <div className="ov-pad">
           <EmptyState
@@ -172,9 +203,63 @@ export function TemperaturesCard({ style }: { style?: CSSProperties }) {
   );
 }
 
-// ───────────────────────────────────────────────────────────── departures
+// ───────────────────────────────────────────────────────────── favourites
 
 const selectServices = (s: Snapshot) => s.services;
+
+/**
+ * The apps starred on this device (Services → star), as a launcher row: icon with a status dot, name; tapping opens
+ * the app. Hidden until something is starred.
+ */
+export function FavouritesCard({ style }: { style?: CSSProperties }) {
+  const services = useSnapshot(selectServices, Object.is);
+  const favourites = useFavouriteServices();
+  const list = useMemo(() => favouriteServices(services, favourites), [services, favourites]);
+  if (!list.length) return null;
+  const down = list.filter((s) => s.status === 'down').length;
+  return (
+    <Card
+      title="Favourites"
+      subtitle={down ? `${down} down` : 'On this device'}
+      icon={<Star size={16} strokeWidth={2.2} />}
+      iconColor="var(--yellow)"
+      href="/services"
+      style={style}
+    >
+      <ul className="ov-fav" aria-label="Favourite apps">
+        {list.map((s) => {
+          const st = toneOf.service(s.status);
+          const url = openableUrl(s.url);
+          const body = (
+            <>
+              <span className="ov-fav-icon">
+                <AppIcon icon={s.icon} name={s.name} size={44} />
+                <StatusDot tone={st.tone} size={10} className="ov-fav-dot" />
+              </span>
+              <span className="ov-fav-name">{s.name}</span>
+            </>
+          );
+          return (
+            <li key={s.id}>
+              {url ? (
+                <a className="ov-fav-app" href={url} target="_blank" rel="noopener noreferrer" title={`${s.name} (${st.label}) · ${url}`} aria-label={`Open ${s.name}, ${st.label} (new tab)`}>
+                  {body}
+                </a>
+              ) : (
+                <span className="ov-fav-app" title={`${s.name} (${st.label})`} aria-label={`${s.name}, ${st.label}`}>
+                  {body}
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </Card>
+  );
+}
+
+// ───────────────────────────────────────────────────────────── departures
+
 const selectBoard = (s: Snapshot) => s.meta.board;
 
 export function DeparturesCard({ style }: { style?: CSSProperties }) {

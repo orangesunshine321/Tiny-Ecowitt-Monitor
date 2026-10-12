@@ -61,6 +61,90 @@
   .ov-pair {
     display: contents;
   }
+  /* phones: "is anything wrong?" first — Attention (order 10) above the hero */
+  .ov-grid > .ui-card.ov-hero {
+    order: 15;
+  }
+}
+
+/* ───────────────────────────── iPhone status strip */
+.ov-strip {
+  --_tone: var(--status-ok);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 60px;
+  margin-bottom: var(--s4);
+  padding: 10px 12px 10px 12px;
+  border-radius: 20px;
+  color: var(--label);
+  text-decoration: none;
+  transition: transform 300ms var(--spring-snappy);
+}
+.ov-strip:hover {
+  text-decoration: none;
+}
+.ov-strip:active {
+  transform: scale(0.985);
+}
+.ov-strip:focus-visible {
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ov-strip {
+    transition: none;
+  }
+  .ov-strip:active {
+    transform: none;
+  }
+}
+.ov-strip[data-tone='warn'] {
+  --_tone: var(--status-warn);
+}
+.ov-strip[data-tone='crit'] {
+  --_tone: var(--status-crit);
+}
+.ov-strip[data-tone='info'] {
+  --_tone: var(--status-info);
+}
+.ov-strip-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--_tone);
+  box-shadow: inset 0 0.5px 0 rgb(255 255 255 / 0.35);
+}
+.ov-strip-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.ov-strip-title {
+  font-size: var(--fs-headline);
+  line-height: var(--lh-headline);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-strip-sub {
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  color: var(--label-2);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-strip-chevron {
+  flex: none;
+  color: var(--label-3);
 }
 /* shared bits */
 .ov-pad {
@@ -161,6 +245,12 @@
   text-transform: uppercase;
   color: var(--label-2);
 }
+.ov-fact[data-tone='warn'] dd {
+  color: color-mix(in oklab, var(--status-warn) 70%, var(--label));
+}
+.ov-fact[data-tone='crit'] dd {
+  color: color-mix(in oklab, var(--status-crit) 74%, var(--label));
+}
 .ov-fact dd {
   margin: 2px 0 0;
   font-size: var(--fs-callout);
@@ -179,6 +269,7 @@
   gap: var(--s2);
 }
 .ov-banner {
+  --_tone: var(--status-crit);
   display: flex;
   align-items: flex-start;
   gap: 8px;
@@ -187,12 +278,59 @@
   border-radius: 14px;
   font-size: var(--fs-subhead);
   line-height: var(--lh-subhead);
-  color: color-mix(in oklab, var(--status-crit) 70%, var(--label));
-  background: color-mix(in srgb, var(--status-crit) 12%, transparent);
+  color: color-mix(in oklab, var(--_tone) 70%, var(--label));
+  background: color-mix(in srgb, var(--_tone) 12%, transparent);
+}
+.ov-banner[data-tone='warn'] {
+  --_tone: var(--status-warn);
+}
+.ov-banner[data-tone='info'] {
+  --_tone: var(--status-info);
 }
 .ov-banner > svg {
   flex: none;
   margin-top: 1px;
+}
+.ov-banner-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ov-banner-text strong {
+  font-weight: 600;
+}
+.ov-banner-raw {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 16px;
+  overflow-wrap: anywhere;
+}
+.ov-banner-when {
+  color: color-mix(in oklab, var(--_tone) 45%, var(--label-2));
+}
+.ov-banner-action {
+  flex: none;
+  align-self: center;
+}
+.ov-banner code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+.ov-sheet-banner {
+  margin: 0 0 var(--s4);
+}
+@container ov (max-width: 520px) {
+  .ov-banner {
+    flex-wrap: wrap;
+  }
+  .ov-banner-text {
+    flex-basis: calc(100% - 24px);
+  }
+  .ov-banner-action {
+    margin-left: 24px;
+  }
 }
 .ov-rings {
   display: grid;
@@ -261,11 +399,105 @@
   .ov-hero-actions .ui-btn {
     width: 100%;
   }
-  .ov-rings[data-compact] {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    justify-items: stretch;
-    gap: var(--s3);
-  }
+}
+
+/* iPhone hero: name and status, then four small rings in one row, load and IO wait, facts behind "Details" */
+.ov-hero[data-compact] .ov-hero-top {
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    'icon name'
+    'actions actions';
+  row-gap: var(--s3);
+}
+.ov-hero[data-compact] .ov-hero-icon {
+  align-self: center;
+}
+.ov-hero[data-compact] .ov-hero-name {
+  font-size: var(--fs-title2);
+  line-height: var(--lh-title2);
+  letter-spacing: var(--tr-title2, 0);
+}
+.ov-hero[data-compact] .ov-hero-namerow {
+  row-gap: 2px;
+}
+.ov-hero-sub {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  color: var(--label-2);
+  font-variant-numeric: tabular-nums;
+}
+.ov-hero[data-compact] .ov-hero-actions {
+  flex-wrap: wrap;
+}
+.ov-hero[data-compact] .ov-hero-actions .ui-btn {
+  width: auto;
+}
+.ov-hero[data-compact] .ov-rings {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  justify-items: stretch;
+  gap: var(--s4) var(--s2);
+  margin-top: var(--s4);
+  padding-top: var(--s4);
+}
+.ov-hero[data-compact] .ov-stats {
+  grid-column: 1 / -1;
+  flex-direction: row;
+  gap: var(--s2);
+}
+.ov-hero[data-compact] .ov-stats > * {
+  flex: 1 1 0;
+}
+.ov-hero[data-compact] .ov-banner {
+  margin-top: var(--s3);
+}
+.ov-hero-details {
+  margin-top: var(--s4);
+  border-top: 0.5px solid var(--separator);
+}
+.ov-hero-details > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  padding-top: 12px;
+  font-size: var(--fs-subhead);
+  line-height: var(--lh-subhead);
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+  list-style: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.ov-hero-details > summary::-webkit-details-marker {
+  display: none;
+}
+.ov-hero-details > summary:focus-visible {
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+.ov-hero-details-chevron {
+  color: var(--label-3);
+  transition: transform 200ms var(--spring-snappy);
+}
+.ov-hero-details[open] .ov-hero-details-chevron {
+  transform: rotate(90deg);
+}
+.ov-hero-details .ov-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 16px;
+  margin: var(--s3) 0 0;
+}
+.ov-hero-details .ov-fact[data-wide] {
+  grid-column: 1 / -1;
+}
+.ov-hero-details .ov-fact[data-wide] dd {
+  white-space: normal;
+}
+.ov-hero-details .ov-hero-note {
+  text-align: start;
 }
 /* updates sheet */
 .ov-upd {
@@ -308,6 +540,16 @@
 }
 .ov-sev[data-tone='info'] {
   color: color-mix(in oklab, var(--status-info) 74%, var(--label));
+}
+.ov-sev[data-tone='off'] {
+  color: var(--label-2);
+}
+/* snoozed alerts: muted, after everything else */
+.ov-list .ui-row.ov-snoozed .ui-row-title {
+  color: var(--label-2);
+}
+.ov-list .ui-row.ov-snoozed .ui-row-icon {
+  opacity: 0.55;
 }
 .ov-when {
   font-size: var(--fs-footnote);
@@ -438,6 +680,65 @@
   color: var(--label);
 }
 
+/* pending updates inside guests → /guests?updates=1 */
+.ov-gupd {
+  --_tone: var(--status-info);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px var(--s5) 0;
+  padding: 8px 10px 8px 10px;
+  border-radius: 14px;
+  color: var(--label);
+  background: var(--card-inset);
+  text-decoration: none;
+  transition: background-color 120ms ease;
+}
+.ov-gupd:hover {
+  text-decoration: none;
+  background: var(--row-hover);
+}
+.ov-gupd:focus-visible {
+  outline-offset: 2px;
+}
+.ov-gupd-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  color: color-mix(in oklab, var(--_tone) 80%, var(--label));
+  background: color-mix(in srgb, var(--_tone) 15%, transparent);
+}
+.ov-gupd-icon[data-tone='warn'] {
+  --_tone: var(--status-warn);
+}
+.ov-gupd-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.ov-gupd-title {
+  font-size: var(--fs-subhead);
+  line-height: var(--lh-subhead);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-gupd-sub {
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  color: var(--label-2);
+  font-variant-numeric: tabular-nums;
+}
+.ov-gupd-chevron {
+  flex: none;
+  color: var(--label-3);
+}
+
 /* ───────────────────────────── storage card */
 .ov-meters {
   display: flex;
@@ -531,4 +832,64 @@
 /* Matrix: mono figures sit a little tighter than the rounded face they replace (ring glow: Ring.css) */
 :root[data-theme='matrix'] .ov-gcount-value {
   letter-spacing: -0.03em;
+}
+
+/* ───────────────────────────── favourites (apps starred on this device): an icon launcher row */
+.ov-fav {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: var(--s2) var(--s1);
+}
+.ov-fav-app {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 2px;
+  border-radius: 14px;
+  color: var(--label);
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    background-color 120ms ease,
+    transform 300ms var(--spring-snappy);
+}
+a.ov-fav-app:hover {
+  text-decoration: none;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+a.ov-fav-app:active {
+  transform: scale(0.95);
+}
+a.ov-fav-app:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.ov-fav-icon {
+  position: relative;
+  display: inline-flex;
+}
+.ov-fav-dot {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  box-shadow: 0 0 0 2px var(--bg-elevated);
+}
+.ov-fav-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  font-weight: 500;
+  text-align: center;
+}
+/* iPhone: four across, like the Home Screen */
+@container ov (max-width: 639.98px) {
+  .ov-fav {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }

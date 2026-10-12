@@ -6,6 +6,7 @@ import { formatDuration } from '../format';
 import { useBreakpoint } from '../hooks/useMediaQuery';
 import { Link, isActivePath, useRoute } from '../router';
 import { useNavBadges, useSnapshot } from '../store';
+import { nodeErrorCopy } from './freshness';
 import { NAV } from './nav';
 import { NavBadge, navItemLabel } from './NavBadge';
 import './Sidebar.css';
@@ -62,7 +63,14 @@ export function TabBar() {
 
 function MoreSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { pathname } = useRoute();
-  const node = useSnapshot((s) => ({ name: s.meta.title || s.node.node, online: s.node.online, uptime: s.node.uptime, version: s.node.pveVersion }));
+  // formatted uptime (raw seconds change every poll)
+  const node = useSnapshot((s) => ({
+    name: s.meta.title || s.node.node,
+    online: s.node.online,
+    uptime: formatDuration(s.node.uptime),
+    version: s.node.pveVersion,
+    short: nodeErrorCopy(s.node.errorKind).short,
+  }));
   const rest = NAV.filter((n) => !n.tab);
   return (
     <Sheet open={open} onClose={onClose} title="More" side="bottom">
@@ -71,7 +79,7 @@ function MoreSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
         <div>
           <div className="t-headline">{node.name}</div>
           <div className="t-footnote t-label-2">
-            {node.online ? `Online · up ${formatDuration(node.uptime)}` : 'Offline'}
+            {node.online ? `Online · up ${node.uptime}` : node.short === 'Node offline' ? 'Offline' : node.short}
             {node.version ? ` · PVE ${node.version}` : ''}
           </div>
         </div>

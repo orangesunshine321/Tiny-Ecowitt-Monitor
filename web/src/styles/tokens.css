@@ -497,6 +497,8 @@
  *   --matrix-rain-color     glyph colour of the digital rain (wallpaper)
  *   --matrix-rain-opacity   overall opacity of the rain layer = a head glyph's strength (0.3: the most it can be while
  *                           --label-2-wp text over a head keeps 4.5:1; trails are drawn at 0.85 of it)
+ *   --matrix-backplate      text-shadow value: a tight dark halo in the wallpaper colour behind text set directly on
+ *                           the wallpaper (page titles, section headers), so rain glyphs never sit inside a line of text
  *   --font-mono             SF Mono stack (defined for every theme in :root); Matrix maps --font-rounded to it too,
  *                           so every hero number that uses the rounded face turns mono.
  *
@@ -518,6 +520,7 @@
   --matrix-bloom: 0 0 0 0.5px rgb(0 255 102 / 0.35), 0 0 18px -4px rgb(0 255 102 / 0.45);
   --matrix-rain-color: #00ff66;
   --matrix-rain-opacity: 0.3; /* heads at full strength; >= 4.5:1 for --label-2-wp over a head (rain tests) */
+  --matrix-backplate: 0 0 2px #000, 0 0 5px #000, 0 0 10px rgb(0 0 0 / 0.85), 0 0 18px rgb(0 0 0 / 0.6);
   --font-rounded: var(--font-mono);
 
   /* ── system colours, phosphor-tuned (decorative tints keep their hue identity) */

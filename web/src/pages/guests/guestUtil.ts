@@ -1,7 +1,7 @@
 /**
  * Pure helpers for the Guests and Guest detail pages (no DOM, no JSX) — unit-tested in tests/web-guests-util.test.ts.
  */
-import type { DockerContainer, DockerPort, Guest, GuestInventory, GuestIp, GuestType } from '../../../../shared/types';
+import type { DockerContainer, DockerPort, Guest, GuestFilesystem, GuestInventory, GuestIp, GuestType, ServiceEntry } from '../../../../shared/types';
 
 // ───────────────────────────────────────────────────────────── labels
 
@@ -45,6 +45,9 @@ export function shortOsName(pretty: string | undefined | null): string | undefin
 
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
+/** natural, case-insensitive ordering ("disk2" before "disk10") */
+const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
 /** used / total as a 0..1 fraction; undefined when the total is unknown or zero. */
 export function fraction(used: number | undefined | null, total: number | undefined | null): number | undefined {
   if (!isNum(used) || !isNum(total) || total <= 0) return undefined;
@@ -59,6 +62,133 @@ export function memFraction(v: number | undefined | null, total: number | undefi
   if (!isNum(v)) return undefined;
   if (v <= 1) return Math.max(0, v);
   return fraction(v, total);
+}
+
+// ───────────────────────────────────────────────────────────── disks inside guests
+
+/**
+ * Filesystem types that are not the guest's own disk (network shares, read-only images, RAM). Same lists as the
+ * guest_disk alert rule (server/alerts/rules.ts countsAsGuestDisk), so the UI and the alerts agree on what counts.
+ */
+const FOREIGN_FS = /^(nfs4?|cifs|smb3?|smbfs|9p|virtiofs|ceph|glusterfs|lustre|fuse(\..*)?|iso9660|udf|squashfs|erofs|cramfs|overlay|tmpfs|devtmpfs|ramfs|zram)$/i;
+const SKIP_MOUNTS = /^\/(proc|sys|dev|run|snap|var\/lib\/docker|var\/lib\/containers)(\/|$)/;
+/** filesystems smaller than this are ignored (EFI partitions, tiny images) */
+const MIN_FS_BYTES = 64 * 1024 ** 2;
+
+/** Does this df entry count as one of the guest's own disks (vs a share, an image, an EFI partition)? */
+export function countsAsGuestDisk(fs: Pick<GuestFilesystem, 'mount' | 'fstype' | 'size'>): boolean {
+  if (fs.fstype && FOREIGN_FS.test(fs.fstype)) return false;
+  if (SKIP_MOUNTS.test(fs.mount)) return false;
+  return isNum(fs.size) && fs.size >= MIN_FS_BYTES;
+}
+
+export interface GuestDiskUsage {
+  /** mount point inside the guest ("/" for the root filesystem) */
+  mount: string;
+  used: number;
+  /** usable size: used + available, like df's Use% (reserved blocks don't count as free) */
+  size: number;
+  /** used / size, 0..1 */
+  fraction: number;
+  fstype?: string;
+  device?: string;
+  /** df inside the guest, or the container rootfs as Proxmox reports it */
+  source: 'guest' | 'proxmox';
+}
+
+/**
+ * The guest's own disks as seen from inside: df's real filesystems (from the inventory) and, for containers, the
+ * rootfs Proxmox reports when df didn't measure "/" itself. "/" first, then by mount point. VMs without inventory
+ * have none (Proxmox reports no disk usage for VMs).
+ */
+export function guestDisks(g: Pick<Guest, 'type' | 'disk' | 'maxdisk'>, inv?: Pick<GuestInventory, 'filesystems'>): GuestDiskUsage[] {
+  const out: GuestDiskUsage[] = [];
+  const seen = new Set<string>();
+  for (const fs of inv?.filesystems ?? []) {
+    if (!fs || typeof fs.mount !== 'string' || seen.has(fs.mount) || !countsAsGuestDisk(fs) || !isNum(fs.used)) continue;
+    const size = isNum(fs.avail) && fs.avail >= 0 && fs.used + fs.avail > 0 ? fs.used + fs.avail : fs.size;
+    const f = fraction(fs.used, size);
+    if (f === undefined) continue;
+    seen.add(fs.mount);
+    out.push({ mount: fs.mount, used: fs.used, size, fraction: f, fstype: fs.fstype, device: fs.device, source: 'guest' });
+  }
+  if (g.type === 'lxc' && !seen.has('/')) {
+    const f = fraction(g.disk, g.maxdisk);
+    if (f !== undefined) out.push({ mount: '/', used: g.disk, size: g.maxdisk, fraction: f, source: 'proxmox' });
+  }
+  return out.sort((a, b) => (a.mount === '/' ? -1 : b.mount === '/' ? 1 : byName.compare(a.mount, b.mount)));
+}
+
+/** The root filesystem ("/") of a guest, when known. */
+export function rootDisk(g: Pick<Guest, 'type' | 'disk' | 'maxdisk'>, inv?: Pick<GuestInventory, 'filesystems'>): GuestDiskUsage | undefined {
+  return guestDisks(g, inv).find((d) => d.mount === '/');
+}
+
+/** The fullest disk other than "/" at or above `warn` (0..1), for a hint on the guest card. */
+export function fullestOtherDisk(disks: readonly GuestDiskUsage[], warn: number): GuestDiskUsage | undefined {
+  let best: GuestDiskUsage | undefined;
+  for (const d of disks) if (d.mount !== '/' && d.fraction >= warn && (!best || d.fraction > best.fraction)) best = d;
+  return best;
+}
+
+// ───────────────────────────────────────────────────────────── package updates inside guests
+
+export interface GuestUpdateInfo {
+  /** pending package updates (0 = up to date); undefined when the guest's package state is unknown */
+  count?: number;
+  security?: number;
+  manager?: string;
+  checkedAt?: number;
+  rebootRequired: boolean;
+}
+
+/** Pending updates and reboot-required flag from the inventory; undefined when nothing is known. */
+export function guestUpdates(inv?: Pick<GuestInventory, 'updates' | 'rebootRequired'>): GuestUpdateInfo | undefined {
+  const u = inv?.updates;
+  const count = u && isNum(u.count) && u.count >= 0 ? Math.round(u.count) : undefined;
+  const reboot = inv?.rebootRequired === true;
+  if (count === undefined && !reboot) return undefined;
+  const security = u && isNum(u.security) && u.security > 0 ? Math.round(u.security) : undefined;
+  return { count, security, manager: u?.manager, checkedAt: u?.checkedAt, rebootRequired: reboot };
+}
+
+/** Whether a guest has something to install or a pending reboot. */
+export function needsUpdates(info: GuestUpdateInfo | undefined): boolean {
+  return !!info && ((info.count ?? 0) > 0 || info.rebootRequired);
+}
+
+/** "12 updates · 4 security" / "1 update" (empty when there are none). */
+export function updatesText(info: GuestUpdateInfo | undefined): string {
+  const n = info?.count ?? 0;
+  if (n <= 0) return '';
+  return `${n} update${n === 1 ? '' : 's'}${info?.security ? ` · ${info.security} security` : ''}`;
+}
+
+export interface GuestsUpdateSummary {
+  /** guests with at least one pending update */
+  guests: number;
+  /** guests that need a reboot (new kernel or libraries) */
+  reboot: number;
+  /** pending packages across all guests */
+  packages: number;
+  security: number;
+}
+
+/** Pending updates across all (non-template) guests, for the Overview. */
+export function updatesSummary(guests: readonly Pick<Guest, 'vmid' | 'template'>[], inventory: Record<string, GuestInventory>): GuestsUpdateSummary {
+  const out: GuestsUpdateSummary = { guests: 0, reboot: 0, packages: 0, security: 0 };
+  for (const g of guests) {
+    if (g.template) continue;
+    const info = guestUpdates(inventory[String(g.vmid)]);
+    if (!info) continue;
+    if ((info.count ?? 0) > 0) {
+      out.guests++;
+      out.packages += info.count!;
+      out.security += info.security ?? 0;
+    }
+    if (info.rebootRequired) out.reboot++;
+  }
+  return out;
 }
 
 // ───────────────────────────────────────────────────────────── addresses
@@ -152,6 +282,69 @@ export function containerPortUrl(port: DockerPort, guestIp: string | undefined):
   return `${scheme}://${urlHost(host)}:${port.hostPort}`;
 }
 
+// ───────────────────────────────────────────────────────────── launcher entries of a guest
+
+const slug = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
+const SERVICE_RANK: Record<ServiceEntry['status'], number> = { down: 0, slow: 1, up: 2, unknown: 3, paused: 4 };
+
+/** Launcher entries that run on this guest and can be opened: problems first, then by name. */
+export function guestServices(services: readonly ServiceEntry[], vmid: number): ServiceEntry[] {
+  return services
+    .filter((s) => s.vmid === vmid && !!s.url && /^https?:\/\//i.test(s.url))
+    .sort((a, b) => (SERVICE_RANK[a.status] ?? 5) - (SERVICE_RANK[b.status] ?? 5) || byName.compare(a.name, b.name));
+}
+
+/**
+ * The launcher entry for a container: the auto-discovered one ("docker-<vmid>-<name>", possibly renamed or re-pointed by
+ * services.overrides), or a configured item on the same guest named like the container (which replaces discovery).
+ */
+export function containerService(
+  services: readonly ServiceEntry[],
+  vmid: number,
+  c: Pick<DockerContainer, 'name' | 'composeService'>,
+): ServiceEntry | undefined {
+  const id = `docker-${vmid}-${c.name}`;
+  const names = new Set([slug(c.name), ...(c.composeService ? [slug(c.composeService)] : [])]);
+  return (
+    services.find((s) => s.id === id) ??
+    services.find((s) => s.vmid === vmid && s.source === 'config' && names.has(slug(s.name)))
+  );
+}
+
+/** Host (without IPv6 brackets) and port (explicit or the scheme's default) of an http(s) URL. */
+export function urlHostPort(url: string | undefined): { host: string; port: number } | undefined {
+  if (!url) return undefined;
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return undefined;
+    const port = u.port ? Number(u.port) : u.protocol === 'https:' ? 443 : 80;
+    return { host: u.hostname.replace(/^\[|\]$/g, '').toLowerCase(), port };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Link for a published container port: the launcher URL when it points at this very port on the guest (it keeps the
+ * right scheme and path, e.g. https or /web), else http(s)://<guest ip>:<port>.
+ */
+export function portLink(port: DockerPort, guestIp: string | undefined, serviceUrl: string | undefined, guestAddrs: readonly string[]): string | undefined {
+  const plain = containerPortUrl(port, guestIp);
+  if (!plain) return undefined;
+  const target = urlHostPort(serviceUrl);
+  if (!target || target.port !== port.hostPort) return plain;
+  const hosts = new Set([...guestAddrs, ...(guestIp ? [guestIp] : []), ...(port.hostIp ? [port.hostIp] : [])].map((h) => h.toLowerCase()));
+  return hosts.has(target.host) ? serviceUrl : plain;
+}
+
+/** A launcher URL that does not point at the guest itself (a reverse-proxy name): shown as its own "Open" link. */
+export function proxiedAppUrl(serviceUrl: string | undefined, guestAddrs: readonly string[]): string | undefined {
+  const target = urlHostPort(serviceUrl);
+  if (!target) return undefined;
+  return guestAddrs.some((a) => a.toLowerCase() === target.host) ? undefined : serviceUrl;
+}
+
 /** Published ports, one per host port + protocol (docker lists 0.0.0.0 and :: bindings separately), sorted. */
 export function publishedPorts(c: Pick<DockerContainer, 'ports'>): DockerPort[] {
   const seen = new Map<string, DockerPort>();
@@ -205,7 +398,6 @@ export interface ContainerGroup {
   problems: number;
 }
 
-const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
 /** Containers grouped by compose project (alphabetical, standalone last); containers sorted by service/name. */
 export function groupContainers(containers: readonly DockerContainer[]): ContainerGroup[] {
@@ -240,6 +432,8 @@ export interface GuestFilter {
   tags: readonly string[];
   /** include templates */
   templates: boolean;
+  /** only guests with pending package updates or a pending reboot (Overview → "N guests have updates") */
+  updates?: boolean;
 }
 
 export const DEFAULT_FILTER: GuestFilter = { type: 'all', status: 'all', query: '', tags: [], templates: false };
@@ -269,6 +463,7 @@ export function filterGuests(guests: readonly Guest[], f: GuestFilter, inventory
       if (f.status === 'running' && g.status !== 'running') return false;
       if (f.status === 'stopped' && g.status === 'running') return false;
       if (tags.size && !g.tags.some((t) => tags.has(t.toLowerCase()))) return false;
+      if (f.updates && !needsUpdates(guestUpdates(inventory[String(g.vmid)]))) return false;
       if (words.length) {
         const hay = haystack(g, inventory[String(g.vmid)]);
         if (!words.every((w) => hay.includes(w))) return false;

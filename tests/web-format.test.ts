@@ -103,8 +103,9 @@ describe('durations', () => {
 
 describe('misc', () => {
   it('temperatures, load, days and plurals', () => {
-    expect(formatTemp(49.625)).toBe('50 °C');
-    expect(formatTemp(4.25)).toBe('4.3 °C');
+    // narrow no-break space: no wrap, and no wide gap in the Matrix mono face
+    expect(formatTemp(49.625)).toBe('50\u202f°C');
+    expect(formatTemp(4.25)).toBe('4.3\u202f°C');
     expect(formatLoad([3.56, 3.21, 3.2])).toBe('3.56 · 3.21 · 3.20');
     expect(formatDays(0.4)).toBe('today');
     expect(formatDays(1.2)).toBe('1 day');

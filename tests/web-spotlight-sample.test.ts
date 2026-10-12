@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { buildSampleSnapshot, sampleApi, tickSample } from '../web/src/dev/sampleSnapshot';
+import type { StreamEvent } from '../shared/types';
+import { buildSampleSnapshot, onSampleEvent, sampleApi, sampleTick } from '../web/src/dev/sampleSnapshot';
+import { appendHistory, mergeSection } from '../web/src/store';
 import { buildIndex, scoreItem, search } from '../web/src/shell/spotlightSearch';
 import { DEMO_GUESTS } from '../server/demo/world';
 
@@ -38,17 +40,58 @@ describe('sample snapshot (dev fixture from server/demo/world.ts)', () => {
     expect(s.storage.every((p) => p.usedFraction >= 0 && p.usedFraction <= 1)).toBe(true);
     expect(s.alerts.active.every((a) => !a.resolved)).toBe(true);
   });
-  it('ticks only the live sections', () => {
-    const next = tickSample(s, now + 5000);
-    expect(next.node).not.toBe(s.node);
+  it('ticks only the live sections, in the server wire format (empty rings + history samples)', () => {
+    const events = sampleTick(s, now + 5000);
+    const keys = events.map((e) => (e.type === 'patch' ? e.key : e.type));
+    expect(keys).toEqual(['meta', 'node', 'guests', 'history']);
+    const nodePatch = events.find((e): e is Extract<StreamEvent, { type: 'patch' }> => e.type === 'patch' && e.key === 'node')!;
+    expect((nodePatch.value as typeof s.node).history.t).toEqual([]);
+    // the store re-attaches the ring and appends the sample: same length, newest sample last
+    let next = { ...s, node: mergeSection(s, 'node', nodePatch.value as typeof s.node) };
+    const hist = events.find((e): e is Extract<StreamEvent, { type: 'history' }> => e.type === 'history')!;
+    next = appendHistory(next, hist);
     expect(next.node.history.t.at(-1)).toBe(now + 5000);
     expect(next.node.history.t).toHaveLength(s.node.history.t.length);
     expect(next.storage).toBe(s.storage);
-    expect(next.services).toBe(s.services);
   });
-  it('answers REST calls with gaps in RRD data', async () => {
+  it('fills the fields added in the pre-install round', () => {
+    expect(s.node.rebootRequired?.installedKernel).toBe('6.14.11-3-pve');
+    expect(s.node.updatesCheckedAt).toBeLessThan(now);
+    expect(s.inventory['102']?.filesystems?.find((f) => f.mount === '/')?.used).toBeGreaterThan(0);
+    expect(s.inventory['105']?.updates?.count).toBe(12);
+    expect(s.inventory['105']?.rebootRequired).toBe(true);
+    expect(s.inventory['100']?.inspectable).toBe('unsupported');
+    const pbsData = s.inventory['108']?.filesystems?.find((f) => f.mount.startsWith('/mnt/datastore'));
+    expect(pbsData && Math.round((pbsData.used / pbsData.size) * 100)).toBe(88);
+    expect(s.services.some((x) => x.source === 'port')).toBe(true);
+    expect(s.services.find((x) => x.name === 'Proxmox Backup Server')?.tls?.selfSigned).toBe(true);
+    expect(s.alerts.active.some((a) => a.acknowledged)).toBe(true);
+    for (const kind of ['guest_disk', 'cert_expiry', 'temperature']) expect(s.alerts.recent.some((a) => a.kind === kind)).toBe(true);
+    expect(s.backups.coverage.find((c) => c.vmid === 105)?.lastFailure?.message).toMatch(/qmp/);
+    expect(s.backups.coverage.every((c) => typeof c.staleAfterDays === 'number')).toBe(true);
+    expect(s.lvmThin?.[0]?.metadataUsed).toBeGreaterThan(0);
+  });
+  it('acknowledges alerts through the sample API and publishes the alerts section', async () => {
+    const seen: StreamEvent[] = [];
+    const off = onSampleEvent((e) => seen.push(e));
+    const id = s.alerts.active.find((a) => !a.acknowledged)!.id;
+    const acked = (await sampleApi('POST', `/api/alerts/${encodeURIComponent(id)}/ack`, { hours: 8 })) as { acknowledged?: { until?: number } };
+    expect(acked.acknowledged?.until).toBeGreaterThan(Date.now());
+    const unacked = (await sampleApi('POST', `/api/alerts/${encodeURIComponent(id)}/unack`, {})) as { acknowledged?: unknown };
+    expect(unacked.acknowledged).toBeUndefined();
+    off();
+    expect(seen.filter((e) => e.type === 'patch' && e.key === 'alerts')).toHaveLength(2);
+  });
+  it('answers diagnostics', async () => {
+    const report = (await sampleApi('GET', '/api/diagnostics', undefined)) as { checks: { status: string; fix?: string }[] };
+    expect(report.checks.length).toBeGreaterThan(5);
+    expect(report.checks.filter((c) => c.status === 'warn' || c.status === 'fail').every((c) => c.fix)).toBe(true);
+  });
+  it('answers REST calls with gaps in RRD data (PVE 9 resolution, downsampled to maxPoints)', async () => {
     const day = (await sampleApi('GET', '/api/rrd/node?timeframe=day', undefined)) as { time: number; cpu?: number }[];
-    expect(day.length).toBe(70);
+    expect(day.length).toBe(400);
+    const small = (await sampleApi('GET', '/api/rrd/node?timeframe=day&maxPoints=120', undefined)) as unknown[];
+    expect(small.length).toBe(120);
     expect(day.some((p) => p.cpu === undefined)).toBe(true);
     const smart = (await sampleApi('GET', '/api/disks/smart?disk=%2Fdev%2Fnvme0n1', undefined)) as { type: string };
     expect(smart.type).toBe('text');

@@ -1,6 +1,4 @@
 import {
-  ShieldAlert,
-  Thermometer,
   Archive,
   ArchiveX,
   Bell,
@@ -12,15 +10,17 @@ import {
   HardDrive,
   ListX,
   MonitorOff,
+  ServerCog,
   ServerCrash,
+  ShieldAlert,
+  Thermometer,
   type LucideIcon,
 } from 'lucide-react';
-import { useMemo, useState, type CSSProperties } from 'react';
-import type { AlertSeverity, Snapshot } from '../../../../shared/types';
+import { useState, type CSSProperties } from 'react';
+import type { AlertSeverity } from '../../../../shared/types';
 import { Button, Card, EmptyState, ListGroup, ListRow, RelativeTime, TONE_COLOR, type Tone } from '../../components';
-import { useServerNow } from '../../hooks';
-import { useSnapshot } from '../../store';
-import { attentionSummary, deriveAttention, type AttentionInput, type AttentionKind } from './attention';
+import { attentionSummary, snoozeText, type AttentionItem, type AttentionKind } from './attention';
+import { useAttention } from './useAttention';
 
 const ICON: Record<AttentionKind, LucideIcon> = {
   node_unreachable: ServerCrash,
@@ -38,6 +38,7 @@ const ICON: Record<AttentionKind, LucideIcon> = {
   temperature: Thermometer,
   test: Bell,
   task_failed: ListX,
+  host_service: ServerCog,
 };
 
 const SEVERITY: Record<AlertSeverity, { tone: Tone; label: string }> = {
@@ -46,31 +47,56 @@ const SEVERITY: Record<AlertSeverity, { tone: Tone; label: string }> = {
   info: { tone: 'info', label: 'Info' },
 };
 
-/** Items shown before "Show more". */
-const LIMIT = 6;
+function AttentionRow({ item }: { item: AttentionItem }) {
+  const Icon = ICON[item.kind] ?? Bell;
+  const sev = SEVERITY[item.severity];
+  return (
+    <ListRow
+      className={item.snoozed ? 'ov-snoozed' : undefined}
+      icon={<Icon strokeWidth={2.1} />}
+      iconColor={item.snoozed ? 'var(--status-off)' : TONE_COLOR[sev.tone]}
+      title={item.title}
+      subtitle={
+        item.snoozed ? (
+          <>
+            <span className="ov-sev" data-tone="off">
+              {snoozeText(item)}
+            </span>
+            {` · ${sev.label}`}
+          </>
+        ) : (
+          <>
+            <span className="ov-sev" data-tone={sev.tone}>
+              {sev.label}
+            </span>
+            {item.detail ? ` · ${item.detail}` : ''}
+          </>
+        )
+      }
+      value={item.time !== undefined ? <RelativeTime time={item.time} className="ov-when" /> : undefined}
+      href={item.path}
+    />
+  );
+}
 
-const select = (s: Snapshot): AttentionInput => ({
-  node: s.node,
-  alerts: s.alerts,
-  zfs: s.zfs,
-  disks: s.disks,
-  services: s.services,
-  guests: s.guests,
-  inventory: s.inventory,
-  backups: s.backups,
-  tasks: s.tasks,
-  storage: s.storage,
-  meta: s.meta,
-});
+export interface AttentionCardProps {
+  style?: CSSProperties;
+  /** items shown before "Show more" (default 6) */
+  limit?: number;
+  /** element id */
+  id?: string;
+  /** render nothing while there is nothing to list (iPhone, where the status strip covers "all nominal") */
+  hideWhenEmpty?: boolean;
+}
 
-/** Everything that needs a look, worst first; each row opens the page that explains it. */
-export function AttentionCard({ style }: { style?: CSSProperties }) {
-  const input = useSnapshot(select);
-  const now = useServerNow(60_000);
-  const items = useMemo(() => deriveAttention(input, now), [input, now]);
+/** Everything that needs a look, worst first (snoozed alerts last, muted); each row opens the page that explains it. */
+export function AttentionCard({ style, limit = 6, id, hideWhenEmpty }: AttentionCardProps) {
+  const items = useAttention();
   const [expanded, setExpanded] = useState(false);
-  const shown = expanded ? items : items.slice(0, LIMIT);
-  const hidden = items.length - shown.length;
+  const shown = expanded ? items : items.slice(0, limit);
+  const hidden = items.slice(shown.length);
+  const hiddenSnoozedOnly = hidden.length > 0 && hidden.every((i) => i.snoozed);
+  if (hideWhenEmpty && !items.length) return null;
 
   return (
     <Card
@@ -79,6 +105,7 @@ export function AttentionCard({ style }: { style?: CSSProperties }) {
       padding="none"
       className="ov-list"
       style={style}
+      id={id}
       accessory={
         <Button variant="plain" size="small" href="/alerts">
           Alerts
@@ -98,32 +125,13 @@ export function AttentionCard({ style }: { style?: CSSProperties }) {
       ) : (
         <>
           <ListGroup plain ariaLabel="Needs attention">
-            {shown.map((item) => {
-              const Icon = ICON[item.kind] ?? Bell;
-              const sev = SEVERITY[item.severity];
-              return (
-                <ListRow
-                  key={item.key}
-                  icon={<Icon strokeWidth={2.1} />}
-                  iconColor={TONE_COLOR[sev.tone]}
-                  title={item.title}
-                  subtitle={
-                    <>
-                      <span className="ov-sev" data-tone={sev.tone}>
-                        {sev.label}
-                      </span>
-                      {item.detail ? ` · ${item.detail}` : ''}
-                    </>
-                  }
-                  value={item.time !== undefined ? <RelativeTime time={item.time} className="ov-when" /> : undefined}
-                  href={item.path}
-                />
-              );
-            })}
+            {shown.map((item) => (
+              <AttentionRow key={item.key} item={item} />
+            ))}
           </ListGroup>
-          {(hidden > 0 || expanded) && items.length > LIMIT && (
+          {(hidden.length > 0 || expanded) && items.length > limit && (
             <button type="button" className="ov-more" aria-expanded={expanded} onClick={() => setExpanded((e) => !e)}>
-              {expanded ? 'Show fewer' : `Show ${hidden} more`}
+              {expanded ? 'Show fewer' : `Show ${hidden.length} ${hiddenSnoozedOnly ? 'snoozed' : 'more'}`}
             </button>
           )}
         </>

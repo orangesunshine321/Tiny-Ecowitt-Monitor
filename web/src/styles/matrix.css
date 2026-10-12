@@ -60,7 +60,7 @@
   font-size: 26px;
 }
 :root[data-theme='matrix']
-  :is(.ui-card-title, .shell-topbar-title, .ui-toast-title, .shell-fresh-title, .shell-sb-name, .gx-card-name, .svc-tile-name, .svc-group-name, .inf-section-title, .gd-section-title) {
+  :is(.ui-card-title, .shell-topbar-title, .ui-toast-title, .shell-fresh-title, .shell-nodeerr-title, .shell-sb-name, .gx-card-name, .svc-tile-name, .svc-group-name, .inf-section-title, .gd-section-title) {
   font-family: var(--font-mono);
   letter-spacing: -0.02em;
 }
@@ -147,6 +147,24 @@
 /* ───────────────────────────── 2. phosphor glow (hero numbers and titles only) */
 :root[data-theme='matrix'] :is(.ui-pageheader-title, .ov-hero-name, .ui-ring-value, .ov-stat-value) {
   text-shadow: var(--matrix-glow);
+}
+
+/*
+ * Text set directly on the wallpaper (page titles and subtitles, section headers between cards): a tight dark halo
+ * (--matrix-backplate) knocks the rain out from behind the letters, so a glyph never reads as part of the text. The
+ * rain itself is also calmer near the top of the viewport (MatrixRain.ts rainIntensity). `.t-on-wallpaper` is the hook
+ * for other wallpaper-level text. The glow is listed first, so it paints above the halo.
+ */
+:root[data-theme='matrix'] .ui-pageheader .ui-pageheader-title {
+  text-shadow: var(--matrix-glow), var(--matrix-backplate);
+}
+:root[data-theme='matrix']
+  :is(.ui-pageheader-subtitle, .ui-list-header, .t-on-wallpaper, .inf-section-title, .inf-section-subtitle, .gd-section-title, .svc-group-name, .al-tl-dayhead, .gx-filters-templates) {
+  text-shadow: var(--matrix-backplate);
+}
+:root[data-theme='matrix'] :is(.ui-card, .glass, .material-card) :is(.ui-list-header, .inf-section-title, .inf-section-subtitle, .gd-section-title, .svc-group-name, .al-tl-dayhead, .t-on-wallpaper) {
+  /* the same classes inside a card or sheet sit on a calm surface: no halo */
+  text-shadow: none;
 }
 :root[data-theme='matrix'] :is(.ui-ring-value, .ov-stat-value) small {
   text-shadow: none;
@@ -253,6 +271,9 @@
 :root[data-theme='matrix'] :is(.ui-toast-icon, .inf-banner-icon) {
   --_mx: var(--_tone);
 }
+:root[data-theme='matrix'] .shell-nodeerr .shell-nodeerr-icon {
+  --_mx: var(--status-crit);
+}
 :root[data-theme='matrix'] :is(.spotlight-glyph, .set-callout-icon) {
   --_mx: var(--_c, var(--gray));
 }
@@ -268,6 +289,7 @@
     .ui-row-icon[data-tinted],
     .ui-toast-icon,
     .inf-banner-icon,
+    .shell-nodeerr .shell-nodeerr-icon,
     .spotlight-glyph,
     .set-callout-icon,
     .ov-hero-top .ov-hero-glyph,
@@ -308,6 +330,10 @@
 @media (prefers-contrast: more) {
   :root[data-theme='matrix'] :is(.ui-pageheader-title, .ov-hero-name, .ui-ring-value, .ov-stat-value, .t-glow, .ui-btn) {
     text-shadow: none;
+  }
+  /* no bloom, but keep the halo behind wallpaper text: it only adds contrast */
+  :root[data-theme='matrix'] .ui-pageheader .ui-pageheader-title {
+    text-shadow: var(--matrix-backplate);
   }
   :root[data-theme='matrix'] .ui-ring-dial svg {
     filter: none;

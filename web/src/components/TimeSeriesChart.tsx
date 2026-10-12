@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
+import { memo, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import { useElementSize } from '../hooks/useElementSize';
 import './TimeSeriesChart.css';
 import { Skeleton } from './Skeleton';
@@ -68,19 +68,96 @@ const M_TOP = 8;
 const M_RIGHT = 10;
 const M_BOTTOM = 24;
 
+/** Rows in the screen-reader table: a summary plus evenly sampled rows (a 1440-point table is 4000+ DOM nodes). */
+export const SR_TABLE_ROWS = 24;
+
+/** Evenly spaced indices into `n` samples, always including the first and the last (exported for tests). */
+export function sampleIndices(n: number, max: number): number[] {
+  if (n <= max) return Array.from({ length: n }, (_, i) => i);
+  const out: number[] = [];
+  for (let k = 0; k < max; k++) out.push(Math.round((k * (n - 1)) / (max - 1)));
+  return [...new Set(out)];
+}
+
+/** min / average / max of a series' plottable values (null when it has none). */
+export function seriesStats(values: readonly (number | null | undefined)[], n: number): { min: number; avg: number; max: number } | null {
+  let min = Infinity;
+  let max = -Infinity;
+  let sum = 0;
+  let count = 0;
+  for (let i = 0; i < n; i++) {
+    const v = valueOrGap(values[i]);
+    if (v === null) continue;
+    if (v < min) min = v;
+    if (v > max) max = v;
+    sum += v;
+    count++;
+  }
+  return count ? { min, avg: sum / count, max } : null;
+}
+
+/** A formatter's behaviour, sampled: inline lambdas that format the same way compare equal. */
+function formatSignature(f: ((v: number) => string) | undefined): string {
+  if (!f) return '';
+  try {
+    return [0, 0.0374, 0.5, 1, 42.5, 1234.5, 1_048_576, 7.5e9].map((v) => f(v)).join('\u0001');
+  } catch {
+    return String(Math.random());
+  }
+}
+
+function sameSeries(a: readonly ChartSeries[], b: readonly ChartSeries[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i]!;
+    const y = b[i]!;
+    if (x.id !== y.id || x.label !== y.label || x.color !== y.color || x.values !== y.values) return false;
+  }
+  return true;
+}
+
+/**
+ * Props equality for React.memo: callers build `series` (and often the formatters) inline, so compare the series
+ * item by item (values by identity) and formatters by what they produce. Unrelated parent re-renders (live patches
+ * every 5 s) then skip the chart entirely.
+ */
+export function chartPropsEqual(a: TimeSeriesChartProps, b: TimeSeriesChartProps): boolean {
+  return (
+    a.times === b.times &&
+    sameSeries(a.series, b.series) &&
+    a.height === b.height &&
+    a.area === b.area &&
+    a.loading === b.loading &&
+    a.ariaLabel === b.ariaLabel &&
+    a.emptyMessage === b.emptyMessage &&
+    a.legend === b.legend &&
+    a.className === b.className &&
+    a.yDomain?.[0] === b.yDomain?.[0] &&
+    a.yDomain?.[1] === b.yDomain?.[1] &&
+    (a.yFormat === b.yFormat || formatSignature(a.yFormat) === formatSignature(b.yFormat)) &&
+    (a.tooltipFormat === b.tooltipFormat || formatSignature(a.tooltipFormat) === formatSignature(b.tooltipFormat)) &&
+    (a.timeFormat === b.timeFormat || (!!a.timeFormat && !!b.timeFormat && a.timeFormat(0) === b.timeFormat(0) && a.timeFormat(1.7e12) === b.timeFormat(1.7e12)))
+  );
+}
+
 /**
  * Responsive SVG line chart for 1–3 series over time: one y-axis with nice ticks, a time x-axis with calendar-aligned
  * ticks, hairline grid, 2px lines (a 10% area wash under a single series), gaps for missing samples, and a crosshair + tooltip listing
- * every series (pointer, touch and arrow keys). A legend appears for 2+ series; a hidden table mirrors the data for
- * screen readers.
+ * every series (pointer, touch and arrow keys). A legend appears for 2+ series; a hidden table summarises the data for
+ * screen readers (min/avg/max plus ~24 sampled rows).
+ *
+ * Memoised (chartPropsEqual): paths, ticks and the table are only rebuilt when the data, size or formatting changes.
  *
  * @example
  * <TimeSeriesChart ariaLabel="CPU and memory" times={h.t} yDomain={[0, 1]} yFormat={(v) => formatPercent(v)}
  *   series={[{ id: 'cpu', label: 'CPU', values: h.cpu }, { id: 'mem', label: 'Memory', values: h.mem }]} />
  */
-export function TimeSeriesChart({
+export const TimeSeriesChart = memo(TimeSeriesChartImpl, chartPropsEqual);
+
+function TimeSeriesChartImpl({
   times,
-  series,
+  series: seriesProp,
   height = 200,
   yFormat = defaultFormat,
   tooltipFormat,
@@ -96,9 +173,22 @@ export function TimeSeriesChart({
   const [sizeRef, { width }] = useElementSize<HTMLDivElement>();
   const [hover, setHover] = useState<number | null>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const colors = series.map((s, i) => s.color ?? SERIES_COLORS[i % SERIES_COLORS.length]!);
-  const showLegend = legend ?? series.length >= 2;
+  // keep the previous series array while its items are the same, so the memos below hold across inline props
+  const seriesRef = useRef(seriesProp);
+  if (!sameSeries(seriesRef.current, seriesProp)) seriesRef.current = seriesProp;
+  const series = seriesRef.current;
+  // formatters: the latest function, but memos only recompute when what they PRODUCE changes
+  const yFmtSig = formatSignature(yFormat);
+  const yFormatRef = useRef(yFormat);
+  yFormatRef.current = yFormat;
   const tipFmt = tooltipFormat ?? yFormat;
+  const tipFmtSig = formatSignature(tipFmt);
+  const tipFmtRef = useRef(tipFmt);
+  tipFmtRef.current = tipFmt;
+  const colors = useMemo(() => series.map((s, i) => s.color ?? SERIES_COLORS[i % SERIES_COLORS.length]!), [series]);
+  const showLegend = legend ?? series.length >= 2;
+  const yMin = yDomain?.[0];
+  const yMax = yDomain?.[1];
 
   const hasData = useMemo(
     () => times.length > 0 && series.some((s) => s.values.some((v, i) => i < times.length && valueOrGap(v) !== null)),
@@ -120,8 +210,8 @@ export function TimeSeriesChart({
       }
     }
     const plotH = Math.max(20, height - M_TOP - M_BOTTOM);
-    const yt = niceTicks(Math.min(0, lo), hi, plotH < 130 ? 3 : 5, { min: yDomain?.[0], max: yDomain?.[1] });
-    const labels = yt.ticks.map((t) => yFormat(t));
+    const yt = niceTicks(Math.min(0, lo), hi, plotH < 130 ? 3 : 5, { min: yMin, max: yMax });
+    const labels = yt.ticks.map((t) => yFormatRef.current(t));
     const left = Math.ceil(Math.max(0, ...labels.map(textWidth))) + 10;
     const plotW = Math.max(10, width - left - M_RIGHT);
     const t0 = times[0]!;
@@ -143,10 +233,60 @@ export function TimeSeriesChart({
         return k.x - w / 2 >= 0 && k.x + w / 2 <= width;
       });
     return { plotH, plotW, left, x, y, yt, labels, lines, xTicks, t0, t1 };
-  }, [hasData, times, series, width, height, yDomain, yFormat, area]);
+    // yFmtSig stands in for yFormat (see formatSignature)
+  }, [hasData, times, series, width, height, yMin, yMax, yFmtSig, area]);
 
   const span = times.length > 1 ? times[times.length - 1]! - times[0]! : 0;
   const fmtTime = timeFormat ?? tooltipTimeFormat(span);
+  const fmtTimeRef = useRef(fmtTime);
+  fmtTimeRef.current = fmtTime;
+
+  // The screen-reader table, built once per data change (a stable element, so re-renders skip it).
+  const srTable = useMemo(() => {
+    if (!hasData) return null;
+    const n = times.length;
+    const fmt = tipFmtRef.current;
+    const ft = fmtTimeRef.current;
+    const rows = sampleIndices(n, SR_TABLE_ROWS);
+    const stats = series.map((s) => seriesStats(s.values, n));
+    return (
+      <table className="sr-only">
+        <caption>
+          {ariaLabel}
+          {n > rows.length ? ` (${rows.length} of ${n} samples)` : ''}
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">Time</th>
+            {series.map((s) => (
+              <th key={s.id} scope="col">
+                {s.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th scope="row">Minimum, average, maximum</th>
+            {series.map((s, i) => {
+              const st = stats[i];
+              return <td key={s.id}>{st ? `${fmt(st.min)}, ${fmt(st.avg)}, ${fmt(st.max)}` : 'no data'}</td>;
+            })}
+          </tr>
+          {rows.map((i) => (
+            <tr key={times[i]}>
+              <th scope="row">{ft(times[i]!)}</th>
+              {series.map((s) => {
+                const v = valueOrGap(s.values[i]);
+                return <td key={s.id}>{v === null ? 'no data' : fmt(v)}</td>;
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+    // tipFmtSig stands in for the tooltip formatter
+  }, [hasData, times, series, ariaLabel, tipFmtSig, span]);
 
   const indexAt = (clientX: number, el: Element): number | null => {
     if (!geo) return null;
@@ -289,32 +429,7 @@ export function TimeSeriesChart({
           </div>
         )}
       </div>
-      {hasData && (
-        <table className="sr-only">
-          <caption>{ariaLabel}</caption>
-          <thead>
-            <tr>
-              <th scope="col">Time</th>
-              {series.map((s) => (
-                <th key={s.id} scope="col">
-                  {s.label}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {times.map((t, i) => (
-              <tr key={t}>
-                <th scope="row">{fmtTime(t)}</th>
-                {series.map((s) => {
-                  const v = valueOrGap(s.values[i]);
-                  return <td key={s.id}>{v === null ? 'no data' : tipFmt(v)}</td>;
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+      {srTable}
       <span className="sr-only" aria-live="polite">
         {hi !== null ? `${fmtTime(times[hi]!)}: ${series.map((s) => `${s.label} ${valueOrGap(s.values[hi]) === null ? 'no data' : tipFmt(valueOrGap(s.values[hi])!)}`).join(', ')}` : ''}
       </span>

@@ -12,7 +12,7 @@
  *    come from one `destination-out` fill per step that fades what is already there (the translucent-fill trick: no
  *    full clear, no per-glyph trail redraw, and the canvas stays transparent so the wallpaper's depth gradient shows
  *    through);
- *  - every glyph is scaled by rainIntensity(): it emerges from the dark at the top (page titles sit there), dims a little
+ *  - every glyph is scaled by rainIntensity(): it emerges from the dark below a calm top band (page titles sit there), dims a little
  *    near the bottom, and a vignette keeps the centre (the content area) calmer than the edges;
  *  - half-width katakana are drawn mirrored (as in the film); digits and symbols are not.
  *
@@ -213,7 +213,8 @@ const smoothstep = (e0: number, e1: number, x: number) => {
 export function rainIntensity(x: number, y: number, w: number, h: number): number {
   const fy = h > 0 ? y / h : 0;
   const fx = w > 0 ? x / w : 0.5;
-  const vertical = smoothstep(0, 0.22, fy) * (1 - 0.3 * smoothstep(0.72, 1, fy));
+  // a calm band at the top, where the page title and subtitle sit on the wallpaper (with --matrix-backplate)
+  const vertical = smoothstep(0.03, 0.27, fy) * (1 - 0.3 * smoothstep(0.72, 1, fy));
   const dx = (fx - 0.5) / 0.5;
   const dy = (fy - 0.55) / 0.65;
   const d = Math.sqrt(dx * dx + dy * dy);

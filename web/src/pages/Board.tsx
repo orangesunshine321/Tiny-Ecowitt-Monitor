@@ -11,8 +11,10 @@
  *  - Optional WebAudio clack (prefs.boardSound, off by default; needs a tap to unlock audio).
  *  - Reduced motion: faces swap instantly with a subtle fade, the reflection sweep stops.
  *  - Matrix theme: the same board in green phosphor (board.css / boardPage.css), on the Matrix page colour.
+ *  - Keep Screen On (D45): a screen wake lock while the board is visible, so a wall iPad or a Mac doesn't lock;
+ *    a per-device switch in the toolbar (on by default), hidden where the browser has no wake lock.
  */
-import { Maximize2, Minimize2, RotateCcw, TrainFront, Volume2, VolumeX } from 'lucide-react';
+import { Maximize2, Minimize2, RotateCcw, Sun, SunDim, TrainFront, Volume2, VolumeX } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { Button, IconButton, ToolbarGroup } from '../components';
 import { armGestureUnlock, boardAudioState, playFlapSteps, playTestClack, subscribeBoardAudio, unlockBoardAudio } from '../board/audio';
@@ -21,6 +23,7 @@ import { BoardLabels, BoardRow, boardVars, measureRemarkEm } from '../board/Boar
 import { useFlapGroup } from '../board/Flap';
 import { onFlapSteps } from '../board/flapEngine';
 import { FlipClock } from '../board/FlipClock';
+import { setKeepAwake, useKeepAwake, useWakeLock, wakeLockApi } from '../board/useWakeLock';
 import { useBreakpoint } from '../hooks/useMediaQuery';
 import { useElementSize } from '../hooks/useElementSize';
 import { useHotkey } from '../hooks/useHotkey';
@@ -91,6 +94,11 @@ export default function BoardPage() {
     void unlockBoardAudio().then(playTestClack);
   };
 
+  // ── keep the screen on while the board shows (iPad wall display, a Mac left open)
+  const keepAwake = useKeepAwake();
+  const wakeLock = useWakeLock(keepAwake);
+  const canWakeLock = wakeLock !== 'unsupported' && !!wakeLockApi();
+
   // ── fullscreen (Mac, iPad; iPhone Safari has no element fullscreen)
   const canFullscreen = typeof document !== 'undefined' && document.fullscreenEnabled === true;
   const [isFullscreen, setIsFullscreen] = useState(() => typeof document !== 'undefined' && !!document.fullscreenElement);
@@ -157,7 +165,7 @@ export default function BoardPage() {
         <div className="bd-head-trailing">
           <FlipClock sound={sound} />
           <div className="bd-controls">
-            {(audio !== 'unsupported' || canFullscreen) && (
+            {(audio !== 'unsupported' || canFullscreen || canWakeLock) && (
               <ToolbarGroup label="Board options">
                 {audio !== 'unsupported' && (
                   <IconButton
@@ -165,6 +173,14 @@ export default function BoardPage() {
                     label={sound ? 'Turn board sound off' : 'Turn board sound on'}
                     pressed={sound}
                     onClick={toggleSound}
+                  />
+                )}
+                {canWakeLock && (
+                  <IconButton
+                    icon={keepAwake ? <Sun size={18} strokeWidth={2} /> : <SunDim size={18} strokeWidth={2} />}
+                    label={keepAwake ? 'Keep screen on: on (tap to let it sleep)' : 'Keep screen on: off'}
+                    pressed={keepAwake}
+                    onClick={() => setKeepAwake(!keepAwake)}
                   />
                 )}
                 {canFullscreen && (

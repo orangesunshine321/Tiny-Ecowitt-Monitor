@@ -1,0 +1,139 @@
+/*
+ * Proxmox API error banner (NodeErrorBanner.tsx): content material with a red wash, under the page's large title.
+ * Matrix re-skins it through the shared tokens (status colours, mono for the command).
+ */
+.shell-nodeerr {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--s3) var(--s4);
+  margin: 0 0 var(--s5);
+  padding: var(--s4) var(--s5);
+  border-radius: var(--r-card);
+  background:
+    linear-gradient(color-mix(in srgb, var(--status-crit) 10%, transparent), color-mix(in srgb, var(--status-crit) 10%, transparent)),
+    var(--card-fill);
+  -webkit-backdrop-filter: blur(var(--card-blur)) saturate(140%);
+  backdrop-filter: blur(var(--card-blur)) saturate(140%);
+  box-shadow:
+    0 0 0 0.5px color-mix(in srgb, var(--status-crit) 30%, var(--card-hairline)),
+    var(--card-shadow);
+  color: var(--label);
+}
+:root[data-reduce-transparency] .shell-nodeerr {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background:
+    linear-gradient(color-mix(in srgb, var(--status-crit) 10%, transparent), color-mix(in srgb, var(--status-crit) 10%, transparent)),
+    var(--card-solid);
+}
+.shell-nodeerr-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  color: #fff;
+  background: var(--status-crit);
+  box-shadow: inset 0 0.5px 0 rgb(255 255 255 / 0.35);
+}
+.shell-nodeerr-body {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.shell-nodeerr-title {
+  margin: 0;
+  font-size: var(--fs-headline);
+  line-height: var(--lh-headline);
+  font-weight: 600;
+  color: color-mix(in oklab, var(--status-crit) 75%, var(--label));
+}
+.shell-nodeerr-text,
+.shell-nodeerr-hint {
+  margin: 0;
+  font-size: var(--fs-subhead);
+  line-height: var(--lh-subhead);
+  overflow-wrap: anywhere;
+}
+.shell-nodeerr-text {
+  color: var(--label-2);
+}
+.shell-nodeerr-detail {
+  color: var(--label-2);
+}
+.shell-nodeerr-hint {
+  color: var(--label);
+}
+.shell-nodeerr-cmd {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 6px 6px 6px 10px;
+  border-radius: var(--r-control);
+  background: var(--card-inset);
+  min-width: 0;
+}
+.shell-nodeerr-cmd code {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  overflow-wrap: anywhere;
+  user-select: all;
+  -webkit-user-select: all;
+}
+.shell-nodeerr-copy {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  color: var(--accent);
+}
+.shell-nodeerr-copy:hover {
+  background: var(--row-hover);
+}
+.shell-nodeerr-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: var(--r-capsule);
+  font-size: var(--fs-subhead);
+  font-weight: 600;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  white-space: nowrap;
+  text-decoration: none;
+}
+.shell-nodeerr-link:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+@media (max-width: 767.98px) {
+  .shell-nodeerr {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: var(--s2) var(--s3);
+    padding: var(--s3) var(--s4) var(--s4);
+    margin-bottom: var(--s4);
+  }
+  .shell-nodeerr-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+  }
+  .shell-nodeerr-text,
+  .shell-nodeerr-hint {
+    font-size: var(--fs-footnote);
+    line-height: var(--lh-footnote);
+  }
+  .shell-nodeerr-link {
+    grid-column: 2;
+    justify-self: start;
+    min-height: 40px;
+  }
+}

@@ -24,6 +24,7 @@ import {
   coverageBadges,
   coverageTone,
   formatLabel,
+  lastBackupFailed,
   modeLabel,
   verificationStatus,
   type CoverageSummary,
@@ -74,8 +75,9 @@ export function SummaryCard({ summary, staleDays, next, newest, archives, totalS
               <div className="bk-hero-sub">Coverage appears once the backup collector has run</div>
             </>
           )}
-          {(summary.never > 0 || summary.stale > 0 || summary.notInAnyJob > 0) && (
+          {(summary.never > 0 || summary.stale > 0 || summary.notInAnyJob > 0 || summary.failed > 0) && (
             <div className="inf-pills bk-summary-pills">
+              {summary.failed > 0 && <StatusBadge tone="crit" label={`${summary.failed} failed`} size="small" />}
               {summary.never > 0 && <StatusBadge tone="crit" label={`${summary.never} never backed up`} size="small" />}
               {summary.stale > 0 && <StatusBadge tone="warn" label={`${summary.stale} stale`} size="small" />}
               {summary.notInAnyJob > 0 && <StatusBadge tone="warn" label={`${summary.notInAnyJob} not in any job`} size="small" />}
@@ -146,22 +148,35 @@ export function CoverageTable({ rows, lookup, now }: { rows: readonly BackupCove
         hideBelow: 'iphone',
         sortValue: (c) => c.lastBackup ?? 0,
         defaultDir: 'desc',
-        cell: (c) =>
-          c.lastBackup ? (
-            <span title={formatFullDateTime(c.lastBackup)}>
-              {formatDateTime(c.lastBackup)}
-              <span className="t-label-2"> · {formatDays(ageDays(c, now))}</span>
-            </span>
-          ) : (
-            <span className="inf-muted">Never</span>
-          ),
+        cell: (c) => (
+          <>
+            {c.lastBackup ? (
+              <span title={formatFullDateTime(c.lastBackup)}>
+                {formatDateTime(c.lastBackup)}
+                <span className="t-label-2">
+                  {' · '}
+                  {formatDays(ageDays(c, now))}
+                  {c.stale && c.staleAfterDays !== undefined ? ` (limit ${plural(c.staleAfterDays, 'day')})` : ''}
+                </span>
+              </span>
+            ) : (
+              <span className="inf-muted">Never</span>
+            )}
+            {lastBackupFailed(c) && c.lastFailure && (
+              <span className="bk-fail" title={c.lastFailure.message}>
+                Failed {formatDateTime(c.lastFailure.time)}
+                {c.lastFailure.message ? `: ${c.lastFailure.message}` : ''}
+              </span>
+            )}
+          </>
+        ),
       },
       { key: 'storage', header: 'Storage', hideBelow: 'ipad', sortValue: (c) => c.lastBackupStorage, cell: (c) => c.lastBackupStorage ?? <span className="inf-muted">–</span> },
       {
         key: 'status',
         header: 'Status',
         align: 'right',
-        sortValue: (c) => (c.lastBackup === undefined ? 3 : c.stale ? 2 : 0) + (c.notInAnyJob ? 1 : 0),
+        sortValue: (c) => (lastBackupFailed(c) ? 4 : 0) + (c.lastBackup === undefined ? 3 : c.stale ? 2 : 0) + (c.notInAnyJob ? 1 : 0),
         defaultDir: 'desc',
         cell: (c) => (
           <span className="bk-badges">

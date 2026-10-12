@@ -1,7 +1,11 @@
 /**
  * A tiny History-API router (DESIGN §2).
  *
- *  - `ROUTES` maps paths to lazily loaded pages (React.lazy); `/board` renders without app chrome.
+ *  - `ROUTES` maps paths to lazily loaded pages (`lazyPage`); `/board` renders without app chrome. The current page's
+ *    chunk is requested at startup in parallel with the first snapshot, and the others are preloaded while idle, so
+ *    switching pages never shows a skeleton (see `lazyPage`).
+ *  - Hash-only changes (the skip link, in-page anchors) keep the history key, so the page is not remounted; a
+ *    malformed #hash is ignored instead of crashing.
  *  - `navigate(to)` / `<Link to>` push history entries; back/forward restore the scroll position of each entry
  *    (history.scrollRestoration = 'manual', positions kept in sessionStorage).
  *  - Route changes use the View Transitions API when available (a quiet crossfade), else the new page rises in via
@@ -11,15 +15,81 @@
  * The server falls back to index.html for unknown paths, so deep links and reloads work.
  */
 import {
+  createElement,
   lazy,
   useSyncExternalStore,
   type AnchorHTMLAttributes,
   type ComponentType,
-  type LazyExoticComponent,
   type MouseEvent,
   type ReactNode,
 } from 'react';
 import { flushSync } from 'react-dom';
+
+// ───────────────────────────────────────────────────────────── lazily loaded pages
+
+/**
+ * A page component loaded on demand. Unlike a bare React.lazy, it can be preloaded, and once its module is loaded it
+ * renders the page directly: no Suspense boundary is involved, so React's 300 ms Suspense reveal throttle never adds
+ * a skeleton flash. RouteView shows its own skeleton (outside Suspense) until `isSettled()`.
+ */
+export interface LazyPage {
+  (): ReactNode;
+  /** start (or join) loading the module; resolves when it settled either way */
+  preload(): Promise<void>;
+  /** loaded, or failed (rendering then throws the error into the page's ErrorBoundary) */
+  isSettled(): boolean;
+  /** notifies when it settles (for useSyncExternalStore) */
+  subscribe(cb: () => void): () => void;
+}
+
+export function lazyPage(load: () => Promise<{ default: ComponentType }>): LazyPage {
+  let mod: ComponentType | null = null;
+  let error: unknown = null;
+  let pending: Promise<void> | null = null;
+  const subs = new Set<() => void>();
+  const notify = () => {
+    for (const cb of subs) cb();
+  };
+  const preload = (): Promise<void> => {
+    if (mod) return Promise.resolve();
+    if (!pending) {
+      error = null;
+      pending = load().then(
+        (m) => {
+          mod = m.default;
+          notify();
+        },
+        (err: unknown) => {
+          // a later preload or render retries (e.g. the device was offline for a moment)
+          error = err;
+          pending = null;
+          notify();
+        },
+      );
+    }
+    return pending;
+  };
+  // Only for a render before the module settled, or after it failed: React.lazy suspends, or rethrows the load error
+  // into the page's ErrorBoundary (chunk errors after a server update reload onto the new build there).
+  let fallback = makeFallback();
+  function makeFallback() {
+    return lazy(async () => {
+      await preload();
+      if (mod) return { default: mod };
+      const err = error ?? new Error('The page could not be loaded');
+      fallback = makeFallback(); // React.lazy caches a rejection forever: the next attempt gets a fresh one
+      throw err;
+    });
+  }
+  const Page = (() => (mod ? createElement(mod) : createElement(fallback))) as LazyPage;
+  Page.preload = preload;
+  Page.isSettled = () => mod !== null || error !== null;
+  Page.subscribe = (cb) => {
+    subs.add(cb);
+    return () => subs.delete(cb);
+  };
+  return Page;
+}
 
 // ───────────────────────────────────────────────────────────── routes
 
@@ -42,24 +112,57 @@ export interface RouteDef {
   path: string;
   /** default document title (pages can refine it via PageHeader) */
   title: string;
-  component: LazyExoticComponent<ComponentType>;
+  component: LazyPage;
   /** render without the app shell (the departure board) */
   fullscreen?: boolean;
 }
 
 export const ROUTES: readonly RouteDef[] = [
-  { id: 'overview', path: '/', title: 'Overview', component: lazy(() => import('./pages/Overview')) },
-  { id: 'guests', path: '/guests', title: 'Guests', component: lazy(() => import('./pages/Guests')) },
-  { id: 'guest', path: '/guests/:vmid', title: 'Guest', component: lazy(() => import('./pages/GuestDetail')) },
-  { id: 'services', path: '/services', title: 'Services', component: lazy(() => import('./pages/Services')) },
-  { id: 'board', path: '/board', title: 'Departures', component: lazy(() => import('./pages/Board')), fullscreen: true },
-  { id: 'storage', path: '/storage', title: 'Storage', component: lazy(() => import('./pages/Storage')) },
-  { id: 'backups', path: '/backups', title: 'Backups', component: lazy(() => import('./pages/Backups')) },
-  { id: 'tasks', path: '/tasks', title: 'Tasks', component: lazy(() => import('./pages/Tasks')) },
-  { id: 'network', path: '/network', title: 'Network', component: lazy(() => import('./pages/Network')) },
-  { id: 'alerts', path: '/alerts', title: 'Alerts', component: lazy(() => import('./pages/Alerts')) },
-  { id: 'settings', path: '/settings', title: 'Settings', component: lazy(() => import('./pages/Settings')) },
+  { id: 'overview', path: '/', title: 'Overview', component: lazyPage(() => import('./pages/Overview')) },
+  { id: 'guests', path: '/guests', title: 'Guests', component: lazyPage(() => import('./pages/Guests')) },
+  { id: 'guest', path: '/guests/:vmid', title: 'Guest', component: lazyPage(() => import('./pages/GuestDetail')) },
+  { id: 'services', path: '/services', title: 'Services', component: lazyPage(() => import('./pages/Services')) },
+  { id: 'board', path: '/board', title: 'Departures', component: lazyPage(() => import('./pages/Board')), fullscreen: true },
+  { id: 'storage', path: '/storage', title: 'Storage', component: lazyPage(() => import('./pages/Storage')) },
+  { id: 'backups', path: '/backups', title: 'Backups', component: lazyPage(() => import('./pages/Backups')) },
+  { id: 'tasks', path: '/tasks', title: 'Tasks', component: lazyPage(() => import('./pages/Tasks')) },
+  { id: 'network', path: '/network', title: 'Network', component: lazyPage(() => import('./pages/Network')) },
+  { id: 'alerts', path: '/alerts', title: 'Alerts', component: lazyPage(() => import('./pages/Alerts')) },
+  { id: 'settings', path: '/settings', title: 'Settings', component: lazyPage(() => import('./pages/Settings')) },
 ];
+
+/** Start loading the page for `pathname` (no-op for unknown paths). Call it right after the live stream started. */
+export function preloadRoute(pathname: string): void {
+  void matchRoute(pathname)?.route.component.preload();
+}
+
+/**
+ * Preload every page, one per idle slot (setTimeout where Safari lacks requestIdleCallback), so later navigation is
+ * instant and the service worker caches every page chunk for offline launches. Returns a cancel function.
+ */
+export function preloadRoutesWhenIdle(): () => void {
+  if (!hasWindow) return () => undefined;
+  const queue = ROUTES.map((r) => r.component).filter((c) => !c.isSettled());
+  let cancelled = false;
+  let handle: number | ReturnType<typeof setTimeout> | undefined;
+  const w = window as Window & { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number; cancelIdleCallback?: (h: number) => void };
+  const next = () => {
+    if (cancelled) return;
+    const page = queue.shift();
+    if (!page) return;
+    void page.preload().finally(schedule);
+  };
+  const schedule = () => {
+    if (cancelled || !queue.length) return;
+    handle = w.requestIdleCallback ? w.requestIdleCallback(next, { timeout: 2_000 }) : setTimeout(next, 200);
+  };
+  schedule();
+  return () => {
+    cancelled = true;
+    if (w.cancelIdleCallback && typeof handle === 'number') w.cancelIdleCallback(handle);
+    else clearTimeout(handle as ReturnType<typeof setTimeout>);
+  };
+}
 
 interface Compiled {
   route: RouteDef;
@@ -113,6 +216,8 @@ export interface RouterLocation {
   hash: string;
   /** unique per history entry (scroll restoration, remounting pages) */
   key: string;
+  /** position of this entry in the app's own history (0 = the first page of this session) */
+  idx: number;
 }
 
 export interface CurrentRoute extends RouterLocation {
@@ -151,19 +256,42 @@ function persistScroll(): void {
 
 const newKey = () => Math.random().toString(36).slice(2, 10);
 
-function readLocation(): RouterLocation {
-  if (!hasWindow) return { pathname: '/', search: '', hash: '', key: 'initial' };
-  const state = history.state as { key?: string } | null;
+interface HistoryState {
+  key?: string;
+  idx?: number;
+}
+
+/**
+ * The location of the current history entry. An entry without our state (the first load, or a native #hash
+ * navigation such as the skip link) gets one: a hash-only change of the current page keeps its key and index, so the
+ * page isn't remounted.
+ */
+function readLocation(prev?: RouterLocation): RouterLocation {
+  if (!hasWindow) return { pathname: '/', search: '', hash: '', key: 'initial', idx: 0 };
+  const state = history.state as HistoryState | null;
   let key = state?.key;
-  if (!key) {
-    key = newKey();
+  let idx = typeof state?.idx === 'number' ? state.idx : undefined;
+  if (!key || idx === undefined) {
+    const sameDoc = prev && prev.pathname === location.pathname && prev.search === location.search;
+    key ??= sameDoc ? prev.key : newKey();
+    idx ??= sameDoc ? prev.idx : 0;
     try {
-      history.replaceState({ ...(state ?? {}), key }, '');
+      history.replaceState({ ...(state ?? {}), key, idx }, '');
     } catch {
       /* sandboxed */
     }
   }
-  return { pathname: location.pathname, search: location.search, hash: location.hash, key };
+  return { pathname: location.pathname, search: location.search, hash: location.hash, key, idx };
+}
+
+/** Decode a #hash into an element id; a malformed escape (e.g. "#%E0%A4%A") is used as is instead of throwing. */
+export function hashId(hash: string): string {
+  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
 }
 
 function build(loc: RouterLocation, action: CurrentRoute['action'], animateEnter: boolean): CurrentRoute {
@@ -189,7 +317,14 @@ if (hasWindow) {
   }
   window.addEventListener('popstate', () => {
     saveScroll();
-    commit(readLocation(), 'pop');
+    const loc = readLocation(current);
+    if (loc.key === current.key) {
+      // same entry, only the #hash changed (in-page anchor, skip link): no transition, no remount
+      current = build(loc, current.action, false);
+      for (const l of listeners) l();
+      return;
+    }
+    commit(loc, 'pop');
   });
   window.addEventListener('pagehide', saveScroll);
 }
@@ -249,7 +384,7 @@ function commit(loc: RouterLocation, action: 'push' | 'pop'): void {
  * top. Retries for a moment while lazily loaded content grows the page.
  */
 export function applyScroll(loc: CurrentRoute = current): void {
-  const id = loc.hash ? decodeURIComponent(loc.hash.slice(1)) : '';
+  const id = loc.hash ? hashId(loc.hash) : '';
   // back/forward and reloads (same history key) restore; new entries start at the top
   const target = loc.action === 'push' ? 0 : (scrollPositions.get(loc.key) ?? 0);
   const started = performance.now();
@@ -288,14 +423,18 @@ export function navigate(to: string, opts: { replace?: boolean } = {}): void {
   }
   saveScroll();
   const key = newKey();
-  if (opts.replace) history.replaceState({ key }, '', path);
-  else history.pushState({ key }, '', path);
-  commit({ pathname: url.pathname, search: url.search, hash: url.hash, key }, 'push');
+  const idx = opts.replace ? current.idx : current.idx + 1;
+  if (opts.replace) history.replaceState({ key, idx }, '', path);
+  else history.pushState({ key, idx }, '', path);
+  commit({ pathname: url.pathname, search: url.search, hash: url.hash, key, idx }, 'push');
 }
 
-/** Go back in history, or to `fallback` when this is the first entry of the session. */
+/**
+ * Go back in history, or to `fallback` when this is the first page of the session in this app (opened directly, from
+ * a notification or the Home Screen): history.back() would then leave the app (or close nothing on iOS).
+ */
 export function goBack(fallback = '/'): void {
-  if (history.length > 1 && current.action !== 'initial') history.back();
+  if (hasWindow && current.idx > 0) history.back();
   else navigate(fallback);
 }
 
@@ -308,7 +447,7 @@ export function setQuery(params: Record<string, string | number | boolean | null
   }
   const search = q.toString() ? `?${q}` : '';
   history.replaceState(history.state, '', location.pathname + search + location.hash);
-  current = build({ pathname: current.pathname, search, hash: current.hash, key: current.key }, current.action, false);
+  current = build({ pathname: current.pathname, search, hash: current.hash, key: current.key, idx: current.idx }, current.action, false);
   for (const l of listeners) l();
 }
 

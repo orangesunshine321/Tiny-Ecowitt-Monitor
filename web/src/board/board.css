@@ -93,6 +93,11 @@
   right: 0;
   height: calc(50% - 0.5px);
   overflow: hidden;
+}
+/* backface culling only on the flaps that are rotating right now: on every half at rest it made Chrome composite
+   ~1,700 layers for a full board (D63). The static halves never rotate. */
+.flap[data-anim] .flap-fall,
+.flap[data-anim] .flap-rise {
   -webkit-backface-visibility: hidden;
   backface-visibility: hidden;
 }

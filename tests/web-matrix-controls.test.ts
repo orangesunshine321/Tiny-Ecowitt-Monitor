@@ -136,6 +136,9 @@ describe.skipIf(!CHROMIUM)('Matrix controls in Chromium', () => {
         ringFits: [...document.querySelectorAll('.ov-ringcell-sub')].every((e) => e.scrollWidth <= e.clientWidth),
         ringsWidth: document.querySelector('.ov-rings')!.getBoundingClientRect().width,
         ringCellWidth: document.querySelector('.ov-ringcell')!.getBoundingClientRect().width,
+        // the compact hero's ring grid (W2 owns the layout: two or four cells per row)
+        ringCols: getComputedStyle(document.querySelector('.ov-rings')!).gridTemplateColumns.split(' ').length,
+        ringGap: parseFloat(getComputedStyle(document.querySelector('.ov-rings')!).columnGap) || 0,
         glyph: { bg: cs('g-page').backgroundColor, img: cs('g-page').backgroundImage },
         blue: getComputedStyle(document.documentElement).getPropertyValue('--blue').trim(),
         stat: (() => {
@@ -204,9 +207,10 @@ describe.skipIf(!CHROMIUM)('Matrix controls in Chromium', () => {
     for (const width of [393, 375]) {
       const m = await probe('matrix', 'dark', { width });
       for (const [id, font] of Object.entries(m.fonts)) expect(font, `${id} @${width}`).toBe('ui-monospace');
-      // the real iPhone layout: card content 40 px narrower than the 16 px-gutter page, two ring cells per row
+      // the real iPhone layout: card content 40 px narrower than the 16 px-gutter page, ring cells filling each row
       expect(m.ringsWidth).toBe(width - 72);
-      expect(m.ringCellWidth).toBeCloseTo((width - 72 - 12) / 2, 1);
+      expect(m.ringCols).toBeGreaterThanOrEqual(2);
+      expect(m.ringCellWidth).toBeCloseTo((width - 72 - m.ringGap * (m.ringCols - 1)) / m.ringCols, 1);
       expect(m.ringFits, `@${width}`).toBe(true);
     }
     const d = await probe('dark', 'dark');

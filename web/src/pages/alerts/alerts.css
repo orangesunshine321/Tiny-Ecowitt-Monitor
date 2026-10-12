@@ -248,3 +248,111 @@ a.al-tl-row:focus-visible {
     margin-top: calc(var(--lh-footnote) + 6px);
   }
 }
+
+/* ───────────────────────────── active rows with a snooze button (link + button are siblings) */
+.al-arow {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+}
+.al-arow + .al-arow::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: calc(var(--s4) + 30px + var(--s3));
+  height: 0.5px;
+  background: var(--separator);
+  z-index: 1;
+}
+.al-arow-main {
+  flex: 1;
+  min-width: 0;
+  padding-right: 6px;
+}
+.al-snooze {
+  flex: none;
+  display: grid;
+  place-items: center;
+  align-self: center;
+  padding-right: var(--s3);
+}
+.al-arow[data-snoozed] .al-row-title,
+.al-arow[data-snoozed] .al-row-body {
+  color: var(--label-2);
+}
+.al-arow[data-snoozed] .ui-row-icon {
+  opacity: 0.75;
+}
+.al-row-snoozed {
+  font-weight: 600;
+  color: var(--label-2);
+}
+.al-group-header[data-tone='off'] {
+  color: var(--label-2);
+}
+
+/* snooze menu (inside a Popover) */
+.al-menu {
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+}
+.al-menu-label {
+  padding: 6px 10px 4px;
+  font-size: var(--fs-footnote);
+  font-weight: 600;
+  color: var(--label-2);
+}
+.al-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--label);
+  font: inherit;
+  font-size: var(--fs-body);
+  text-align: left;
+  cursor: pointer;
+}
+.al-menu-item:hover,
+.al-menu-item:focus-visible {
+  background: var(--fill-3);
+}
+.al-menu-strong {
+  color: var(--accent);
+  font-weight: 600;
+}
+.al-menu-foot {
+  padding: 6px 10px 4px;
+  font-size: var(--fs-caption);
+  line-height: 1.35;
+  color: var(--label-3);
+}
+
+/* "Last viewed 14:02": everything above is new since the last visit */
+.al-tl-divider {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin: 4px var(--s4) 6px;
+  font-size: var(--fs-footnote);
+  font-weight: 600;
+  color: var(--accent);
+  list-style: none;
+}
+.al-tl-divider::before,
+.al-tl-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+:root[data-theme='matrix'] .al-tl-divider {
+  font-family: var(--font-mono);
+}

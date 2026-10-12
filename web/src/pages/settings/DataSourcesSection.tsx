@@ -8,7 +8,7 @@ import { guestSetupCommand } from '../../api';
 import { ListGroup, ListRow, RelativeTime, StatusBadge, StatusDot } from '../../components';
 import { formatDuration, plural } from '../../format';
 import { useServerNow } from '../../hooks/useNow';
-import { collectorLabel, collectorTone } from '../../shell/LiveIndicator';
+import { collectorEvery, collectorLabel, collectorTone } from '../../shell/LiveIndicator';
 import { useSnapshot } from '../../store';
 import { INVENTORY_SOURCE_LABEL, agentlessCandidates, guestYamlSnippet, inventoryStatus } from './settingsModel';
 import { Callout, CodeBlock, ListItem, SelectField } from './ui';
@@ -17,7 +17,7 @@ const TONE_WORD = { ok: 'fresh', warn: 'stale', crit: 'failing', off: 'waiting',
 
 export function DataSourcesSection() {
   const meta = useSnapshot((s) => s.meta, Object.is);
-  const node = useSnapshot((s) => ({ online: s.node.online, error: s.node.error, name: s.node.node, lastUpdated: s.node.lastUpdated }));
+  const node = useSnapshot((s) => ({ online: s.node.online, error: s.node.error, hint: s.node.errorHint, name: s.node.node, lastUpdated: s.node.lastUpdated }));
   const guests = useSnapshot((s) => s.guests, Object.is);
   const inventory = useSnapshot((s) => s.inventory, Object.is);
   const host = useSnapshot((s) => s.hostInventory, Object.is);
@@ -36,8 +36,9 @@ export function DataSourcesSection() {
         <ListRow
           icon={<Server strokeWidth={2} />}
           title="Proxmox VE API"
-          subtitle={node.online ? `${node.name} · read-only token` : (node.error ?? 'Not reachable')}
+          subtitle={node.online ? `${node.name} · read-only token` : [node.error ?? 'Not reachable', node.hint].filter(Boolean).join(' — ')}
           wrap={!node.online}
+          href={node.online ? undefined : '/settings#diagnostics'}
           value={<StatusBadge size="small" tone={node.online ? 'ok' : 'crit'} label={node.online ? 'Online' : 'Offline'} />}
         />
         <ListRow
@@ -116,13 +117,14 @@ export function DataSourcesSection() {
         header="Collector freshness"
         footer={
           failingCollectors
-            ? `${plural(failingCollectors, 'collector')} failing. The dashboard keeps the last good data.`
+            ? `${plural(failingCollectors, 'collector')} failing. The dashboard keeps the last good data; Diagnostics below says what to fix.`
             : 'How recently each part of the data was refreshed.'
         }
       >
         {collectors.length === 0 && <ListRow title={<span className="t-label-2">No collector has reported yet</span>} />}
         {collectors.map((c) => {
           const tone = collectorTone(c, now);
+          const every = collectorEvery(c, (sec) => formatDuration(sec, { units: 1 }));
           return (
             <ListRow
               key={c.name}
@@ -131,11 +133,21 @@ export function DataSourcesSection() {
               icon={<StatusDot tone={tone} size={9} label={TONE_WORD[tone]} />}
               title={
                 <>
-                  {collectorLabel(c.name)} <span className="set-every">every {formatDuration(c.intervalSec, { units: 1 })}</span>
+                  {collectorLabel(c.name)}{' '}
+                  {/* event-driven collectors (config) report intervalSec 0: no "every 0s" */}
+                  {every && <span className="set-every">{every}</span>}
                 </>
               }
               subtitle={tone === 'crit' && c.lastError ? <span className="set-device-error">{c.lastError}</span> : undefined}
-              value={c.lastSuccess ? <RelativeTime time={c.lastSuccess} /> : 'never'}
+              value={
+                c.lastSuccess ? (
+                  <RelativeTime time={c.lastSuccess} />
+                ) : c.intervalSec <= 0 && c.lastErrorAt ? (
+                  <RelativeTime time={c.lastErrorAt} />
+                ) : (
+                  'never'
+                )
+              }
             />
           );
         })}

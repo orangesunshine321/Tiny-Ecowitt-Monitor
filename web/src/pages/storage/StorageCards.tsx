@@ -6,6 +6,7 @@ import { Card, Meter, StatusBadge, Table, toneOf, type TableColumn, type Thresho
 import { bytesParts, formatBytes, formatNumber, formatPercent, formatPercentValue } from '../../format';
 import { GlyphTile, Pill, TapCard, TwoLine } from './ui';
 import {
+  THIN_META_THRESHOLDS,
   compareDevpath,
   contentLabels,
   diskTypeLabel,
@@ -15,6 +16,7 @@ import {
   storageTypeLabel,
   wearFraction,
   wearTone,
+  type ThinPoolView,
 } from './storageModel';
 
 const POOL_ICONS: Record<string, LucideIcon> = {
@@ -210,4 +212,49 @@ export function DisksTable({ disks, wearWarnPercent, onOpen }: { disks: readonly
 /** Serial/WWN for tooltips and sheets ("unknown" placeholders dropped). */
 export function diskIds(d: PhysicalDisk): { serial?: string; wwn?: string } {
   return { serial: known(d.serial), wwn: known(d.wwn) };
+}
+
+/**
+ * One LVM-thin pool (D52): data usage like a storage pool, plus the metadata volume. Proxmox's storage view only
+ * shows the data part, yet a full metadata volume makes the pool read-only and freezes guests (heavy snapshot use).
+ */
+export function ThinPoolCard({ pool, thresholds }: { pool: ThinPoolView; thresholds: Thresholds }) {
+  const metaTone = pool.metaFraction === undefined ? undefined : pool.metaFraction >= THIN_META_THRESHOLDS.crit ? 'crit' : pool.metaFraction >= THIN_META_THRESHOLDS.warn ? 'warn' : 'ok';
+  return (
+    <Card
+      className="stor-card inf-card-tight"
+      title={pool.label}
+      subtitle="LVM-thin pool"
+      icon={<Layers size={16} strokeWidth={2.2} />}
+      iconColor="var(--gray)"
+      accessory={
+        metaTone && metaTone !== 'ok' ? (
+          <StatusBadge tone={metaTone} size="small" label={metaTone === 'crit' ? 'Metadata almost full' : 'Metadata filling'} />
+        ) : undefined
+      }
+    >
+      <div className="stor-usage">
+        <UsageFigure used={pool.used} total={pool.size} fraction={pool.dataFraction} />
+        <Meter value={pool.dataFraction} valueLabel={null} thresholds={thresholds} ariaLabel={`${pool.label} data usage`} />
+      </div>
+      <div className="stor-usage stor-thin-meta">
+        <div className="stor-thin-meta-head">
+          <span>Metadata</span>
+          <span className="t-num">
+            {pool.metaFraction !== undefined && pool.metadataSize !== undefined
+              ? `${formatPercent(pool.metaFraction)} of ${formatBytes(pool.metadataSize)}`
+              : 'Not reported'}
+          </span>
+        </div>
+        {pool.metaFraction !== undefined && (
+          <Meter value={pool.metaFraction} valueLabel={null} thresholds={THIN_META_THRESHOLDS} ariaLabel={`${pool.label} metadata usage`} />
+        )}
+        {metaTone && metaTone !== 'ok' && (
+          <p className="stor-thin-hint">
+            Grow it on the host: <code>lvextend --poolmetadatasize +1G {pool.label}</code>
+          </p>
+        )}
+      </div>
+    </Card>
+  );
 }

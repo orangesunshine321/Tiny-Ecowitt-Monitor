@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { NodeErrorBanner } from './NodeErrorBanner';
 import './PageHeader.css';
 import { shellUi, useShellUi } from './uiStore';
 
@@ -18,6 +19,11 @@ export interface PageHeaderProps {
   icon?: ReactNode;
   /** document title (default: the compact title) */
   documentTitle?: string;
+  /**
+   * Show the Proxmox API error banner (NodeErrorBanner) under the title while the node is offline (default true).
+   * Pass false on a page that places <NodeErrorBanner/> itself.
+   */
+  nodeBanner?: boolean;
 }
 
 /**
@@ -29,7 +35,7 @@ export interface PageHeaderProps {
  *
  * @example <PageHeader title="Guests" subtitle="12 guests · 9 running" toolbar={<ToolbarGroup>…</ToolbarGroup>} />
  */
-export function PageHeader({ title, compactTitle, subtitle, toolbar, back, icon, documentTitle }: PageHeaderProps) {
+export function PageHeader({ title, compactTitle, subtitle, toolbar, back, icon, documentTitle, nodeBanner = true }: PageHeaderProps) {
   const slot = useShellUi((s) => s.toolbarSlot);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const plain = compactTitle ?? (typeof title === 'string' || typeof title === 'number' ? String(title) : '');
@@ -53,20 +59,23 @@ export function PageHeader({ title, compactTitle, subtitle, toolbar, back, icon,
   }, []);
 
   return (
-    <header className="ui-pageheader" data-back={backTo ? true : undefined}>
-      {icon && <div className="ui-pageheader-icon">{icon}</div>}
-      <div className="ui-pageheader-titles">
-        <h1 ref={titleRef} className="ui-pageheader-title">
-          {title}
-        </h1>
-        {subtitle && <p className="ui-pageheader-subtitle">{subtitle}</p>}
-      </div>
-      {toolbar &&
-        (slot ? (
-          createPortal(<div className="ui-pageheader-toolbar">{toolbar}</div>, slot)
-        ) : (
-          <div className="ui-pageheader-toolbar ui-pageheader-inline-toolbar">{toolbar}</div>
-        ))}
-    </header>
+    <>
+      <header className="ui-pageheader" data-back={backTo ? true : undefined}>
+        {icon && <div className="ui-pageheader-icon">{icon}</div>}
+        <div className="ui-pageheader-titles">
+          <h1 ref={titleRef} className="ui-pageheader-title">
+            {title}
+          </h1>
+          {subtitle && <p className="ui-pageheader-subtitle">{subtitle}</p>}
+        </div>
+        {toolbar &&
+          (slot ? (
+            createPortal(<div className="ui-pageheader-toolbar">{toolbar}</div>, slot)
+          ) : (
+            <div className="ui-pageheader-toolbar ui-pageheader-inline-toolbar">{toolbar}</div>
+          ))}
+      </header>
+      {nodeBanner && <NodeErrorBanner />}
+    </>
   );
 }

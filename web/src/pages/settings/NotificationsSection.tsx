@@ -4,7 +4,7 @@
  * Push on Apple devices: iPhone/iPad only in the Home Screen app; permission and subscribe must come straight from a
  * tap (push.ts `subscribe()` asks first, inside the click). Each device keeps its own preferences on the server.
  */
-import { BellOff, BellRing, CircleSlash, Laptop, Monitor, Send, ShieldAlert, Smartphone, Tablet, Trash2, TriangleAlert } from 'lucide-react';
+import { BellOff, BellRing, CircleSlash, ExternalLink, Laptop, LockKeyhole, Monitor, Moon, Send, ShieldAlert, Smartphone, Tablet, Trash2, TriangleAlert } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import type { AlertKind, AlertSeverity, PushDevice, PushPrefs } from '../../../../shared/types';
 import { errorText, getPushDevices, postPushTest, postPushUnsubscribe } from '../../api';
@@ -24,7 +24,8 @@ import {
 } from '../../push';
 import { pushToast, useSnapshot } from '../../store';
 import { ALERT_KINDS, SUBSCRIBABLE_KINDS } from '../alerts/alertKinds';
-import { cleanDeviceName, pushUiState, toggleKind } from './settingsModel';
+import { publicUrlTarget } from './diagnosticsModel';
+import { DEFAULT_QUIET_HOURS, cleanDeviceName, inQuietHours, pushUiState, quietHoursPatch, toggleKind, type QuietHours } from './settingsModel';
 import { Callout, ListItem, TextFieldRow } from './ui';
 
 const SEVERITIES: { value: AlertSeverity; label: string }[] = [
@@ -35,6 +36,8 @@ const SEVERITIES: { value: AlertSeverity; label: string }[] = [
 
 export function NotificationsSection() {
   const serverEnabled = useSnapshot((s) => s.meta.pushEnabled && !!s.meta.vapidPublicKey);
+  const publicUrl = useSnapshot((s) => s.meta.publicUrl);
+  const secure = typeof window === 'undefined' || window.isSecureContext;
   const [permission, setPermission] = useState(currentPermission);
   const [stored, setStored] = useState(getStoredDevice);
   const [needsInstall, setNeedsInstall] = useState(needsHomeScreenInstall);
@@ -79,7 +82,7 @@ export function NotificationsSection() {
   );
   const remove = useCallback((id: string) => setDevices((list) => list?.filter((x) => x.id !== id)), []);
 
-  const state = pushUiState({ serverEnabled, supported, needsInstall, permission, storedId: stored?.id ?? null, storedLost: stored?.lost, devices });
+  const state = pushUiState({ serverEnabled, secure, supported, needsInstall, permission, storedId: stored?.id ?? null, storedLost: stored?.lost, devices });
   const me = stored ? devices?.find((d) => d.id === stored.id) : undefined;
   const [name, setName] = useState(() => stored?.name || defaultDeviceName());
   useEffect(() => {
@@ -157,6 +160,11 @@ export function NotificationsSection() {
               Set <code>alerts.enabled: true</code> and a real <code>alerts.vapidSubject</code> in config.yaml, then restart pve1-dash. The server log
               says why push couldn’t start.
             </Callout>
+          </ListItem>
+        )}
+        {state === 'insecure' && (
+          <ListItem>
+            <InsecureCallout publicUrl={publicUrl} />
           </ListItem>
         )}
         {state === 'needs-install' && (
@@ -260,6 +268,11 @@ export function NotificationsSection() {
             />
           </ListGroup>
 
+          <QuietHoursGroup
+            value={me.prefs.quietHours}
+            onChange={(patch) => savePrefs(patch as unknown as Partial<PushPrefs>)}
+          />
+
           <ListGroup>
             <ListItem className="set-actions set-actions-row">
               <Button variant="gray" icon={<Send size={15} strokeWidth={2.2} />} loading={busy === 'test'} onClick={test}>
@@ -287,6 +300,98 @@ export function NotificationsSection() {
         />
       )}
     </div>
+  );
+}
+
+/**
+ * Over plain HTTP (the installer's LAN address) nothing push-related can work, and an iPhone Home Screen app added
+ * from there never can either: send people to the HTTPS address instead (D10/D19).
+ */
+function InsecureCallout({ publicUrl }: { publicUrl: string | undefined }) {
+  const here = typeof location === 'undefined' ? '' : location.origin;
+  const target = typeof location === 'undefined' ? undefined : publicUrlTarget(publicUrl, here, location.pathname + location.search + location.hash);
+  const host = target ? new URL(target).host : undefined;
+  return (
+    <Callout tone="warn" icon={<LockKeyhole size={18} strokeWidth={2} />} title="Notifications and the Home Screen app need HTTPS">
+      <p className="set-callout-p">
+        You opened pve1 at <code>{here}</code>, a plain HTTP address. Browsers only allow notifications on HTTPS pages, and on iPhone and iPad a
+        Home Screen app added from this address can never receive them.
+      </p>
+      {target ? (
+        <>
+          <p className="set-callout-p">Open the HTTPS address and turn notifications on there (on iPhone and iPad, add that page to the Home Screen first).</p>
+          <Button variant="prominent" href={target} target="_self" rel="noopener" icon={<ExternalLink size={15} strokeWidth={2.2} />}>
+            Open {host}
+          </Button>
+        </>
+      ) : (
+        <p className="set-callout-p">
+          Open the dashboard through your HTTPS reverse proxy instead. Set <code>publicUrl: https://…</code> in <code>/etc/pve1-dash/config.yaml</code>{' '}
+          (then <code>systemctl restart pve1-dash</code>) and a link to it appears here.
+        </p>
+      )}
+    </Callout>
+  );
+}
+
+/** Quiet hours for this device: warnings wait until morning, critical alerts still come through (unless turned off). */
+function QuietHoursGroup({ value, onChange }: { value: QuietHours | undefined; onChange: (patch: { quietHours: QuietHours | null }) => void }) {
+  const on = !!value;
+  const q = value ?? DEFAULT_QUIET_HOURS;
+  const quietNow = on && inQuietHours(value, Date.now());
+  const change = (c: Parameters<typeof quietHoursPatch>[1]) => {
+    const patch = quietHoursPatch(value, c);
+    if (patch) onChange(patch);
+    else pushToast({ tone: 'warn', title: 'Pick different start and end times', key: 'quiet-hours' });
+  };
+  return (
+    <ListGroup
+      header="Quiet hours"
+      footer={
+        on
+          ? `${quietNow ? 'Quiet now. ' : ''}Between ${q.start} and ${q.end} (this device’s time) ${q.allowCritical ? 'only critical alerts are delivered' : 'nothing is delivered'}; everything still shows in the app.`
+          : 'Hold back notifications at night. Alerts still show in the app.'
+      }
+    >
+      <ListRow
+        icon={<Moon strokeWidth={2.1} />}
+        iconColor="var(--indigo)"
+        title="Quiet hours"
+        accessory={<Toggle ariaLabel="Quiet hours" checked={on} onChange={(v) => change({ enabled: v })} />}
+      />
+      {on && (
+        <>
+          <TimeRow label="From" value={q.start} onCommit={(v) => change({ start: v })} />
+          <TimeRow label="To" value={q.end} onCommit={(v) => change({ end: v })} />
+          <ListRow
+            title="Critical alerts"
+            subtitle="Still notify for critical alerts (node down, a failed disk)"
+            accessory={<Toggle ariaLabel="Critical alerts during quiet hours" checked={q.allowCritical} onChange={(v) => change({ allowCritical: v })} />}
+          />
+        </>
+      )}
+    </ListGroup>
+  );
+}
+
+function TimeRow({ label, value, onCommit }: { label: string; value: string; onCommit: (v: string) => void }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  return (
+    <label role="listitem" className="set-field">
+      <span className="set-field-label">{label}</span>
+      <input
+        className="set-field-input set-time-input"
+        type="time"
+        step={60}
+        required
+        value={draft}
+        aria-label={`Quiet hours ${label.toLowerCase()}`}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => draft !== value && onCommit(draft)}
+        onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+      />
+    </label>
   );
 }
 

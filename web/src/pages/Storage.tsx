@@ -9,9 +9,9 @@ import { Card, CardGrid, EmptyState, PageHeader } from '../components';
 import { plural } from '../format';
 import { setQuery, useQueryParam } from '../router';
 import { useSnapshot } from '../store';
-import { DisksTable, PoolCard, ZfsCard } from './storage/StorageCards';
+import { DisksTable, PoolCard, ThinPoolCard, ZfsCard } from './storage/StorageCards';
 import { SmartSheet, ZfsSheet } from './storage/StorageSheets';
-import { poolProblems, storageThresholds } from './storage/storageModel';
+import { poolProblems, storageThresholds, thinPoolViews } from './storage/storageModel';
 import { Section, useCollectorIssue } from './storage/ui';
 import './storage/ui.css';
 import './storage/storage.css';
@@ -20,11 +20,14 @@ export default function StoragePage() {
   const pools = useSnapshot((s) => s.storage, Object.is);
   const zfs = useSnapshot((s) => s.zfs, Object.is);
   const disks = useSnapshot((s) => s.disks, Object.is);
+  const lvmThin = useSnapshot((s) => s.lvmThin, Object.is);
   const thresholdsRaw = useSnapshot((s) => s.meta.thresholds, Object.is);
   const thresholds = useMemo(() => storageThresholds(thresholdsRaw), [thresholdsRaw]);
   const storageIssue = useCollectorIssue('storage');
   const disksIssue = useCollectorIssue('disks');
 
+  const thinPools = useMemo(() => thinPoolViews(lvmThin, thresholds), [lvmThin, thresholds]);
+  const thinProblems = thinPools.filter((p) => p.tone !== 'ok').length;
   const sortedPools = useMemo(() => [...pools].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true })), [pools]);
   const problems = poolProblems(pools, thresholds);
   const failing = disks.filter((d) => d.healthStatus === 'failed').length;
@@ -63,6 +66,20 @@ export default function StoragePage() {
             </Card>
           )}
         </Section>
+
+        {thinPools.length > 0 && (
+          <Section
+            id="lvm-thin"
+            title="LVM-thin"
+            subtitle={thinProblems ? `${plural(thinProblems, 'thin pool needs', 'thin pools need')} attention` : 'Guest disks and their snapshot metadata'}
+          >
+            <CardGrid min={280} stretch>
+              {thinPools.map((p) => (
+                <ThinPoolCard key={p.key} pool={p} thresholds={thresholds} />
+              ))}
+            </CardGrid>
+          </Section>
+        )}
 
         {zfs.length > 0 && (
           <Section id="zfs" title="ZFS" subtitle={[degraded ? `${plural(degraded, 'pool is', 'pools are')} not healthy` : '', 'Tap a pool for its devices and scrub status'].filter(Boolean).join(' · ')}>

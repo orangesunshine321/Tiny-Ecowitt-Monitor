@@ -211,3 +211,15 @@
     text-shadow: none;
   }
 }
+
+/* a failed latest backup (D26): the reason from the vzdump log, under the last good backup */
+.bk-fail {
+  display: block;
+  max-width: 42ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  color: color-mix(in oklab, var(--status-crit) 80%, var(--label));
+}

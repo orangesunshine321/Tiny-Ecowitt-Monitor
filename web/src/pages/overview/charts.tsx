@@ -117,20 +117,23 @@ export function chartEmpty(state: Pick<AsyncState<unknown>, 'error' | 'reload'> 
 const pct = (v: number) => formatPercent(v);
 const bps = (v: number) => formatBitRate(v / 8);
 
+/**
+ * Each chart card subscribes to the live history ring itself, so a 5 s history tick re-renders the two charts and not
+ * the whole Overview.
+ */
 export function PerformanceCard({
   range,
   onRange,
-  series,
   rrd,
   style,
 }: {
   range: Range;
   onRange: (r: Range) => void;
-  series: NodeSeries;
   rrd: AsyncState<RrdPoint[]>;
   style?: CSSProperties;
 }) {
   const bp = useBreakpoint();
+  const series = useNodeSeries(range, range === 'live' ? undefined : rrd.data);
   const loading = range !== 'live' && rrd.loading;
   return (
     <Card
@@ -168,7 +171,8 @@ function peak(values: readonly (number | undefined)[]): number | undefined {
   return m;
 }
 
-export function NetworkCard({ range, series, rrd, style }: { range: Range; series: NodeSeries; rrd: AsyncState<RrdPoint[]>; style?: CSSProperties }) {
+export function NetworkCard({ range, rrd, style }: { range: Range; rrd: AsyncState<RrdPoint[]>; style?: CSSProperties }) {
+  const series = useNodeSeries(range, range === 'live' ? undefined : rrd.data);
   const netIn = useSnapshot((s) => s.node.netIn);
   const netOut = useSnapshot((s) => s.node.netOut);
   const [inV, inU] = splitRate(formatBitRate(netIn));

@@ -9,6 +9,7 @@ import {
   CircleAlert,
   CirclePause,
   Copy,
+  EyeOff,
   Layers,
   MonitorOff,
   PackageX,
@@ -21,7 +22,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { useMemo, useState, type ReactNode } from 'react';
-import type { DockerContainer, Guest, GuestInventory, ListeningPort, Snapshot, SnapshotMeta } from '../../../../../shared/types';
+import type { DockerContainer, Guest, GuestInventory, ListeningPort, ServiceEntry, Snapshot, SnapshotMeta } from '../../../../../shared/types';
 import { guestSetupCommand } from '../../../api';
 import {
   AppIcon,
@@ -40,10 +41,13 @@ import { plural } from '../../../format';
 import { pushToast, useSnapshot } from '../../../store';
 import {
   containerIconSlug,
-  containerPortUrl,
+  containerService,
   containerStatusText,
   groupContainers,
+  guestAddresses,
+  portLink,
   primaryIp,
+  proxiedAppUrl,
   publishedPorts,
   type ContainerGroup,
 } from '../guestUtil';
@@ -153,12 +157,17 @@ function ReasonView({ reason, action }: { reason: InventoryReason; action?: Reac
 
 const selectServices = (s: Snapshot) => s.services;
 
-function ContainerRow({ c, ip, icon }: { c: DockerContainer; ip?: string; icon?: string }) {
+function ContainerRow({ c, ip, addrs, service }: { c: DockerContainer; ip?: string; addrs: readonly string[]; service?: ServiceEntry }) {
   const state = toneOf.container(c);
   const ports = publishedPorts(c);
+  const running = c.state === 'running';
+  // the launcher's URL for this app: used for its own port (keeps https and paths), or as an extra link when it goes
+  // through a reverse-proxy name (services.overrides)
+  const appUrl = running ? service?.url : undefined;
+  const proxied = proxiedAppUrl(appUrl, addrs);
   return (
     <li className="gd-ctr">
-      <AppIcon icon={containerIconSlug(c, icon)} name={c.composeService || c.name} size={36} />
+      <AppIcon icon={containerIconSlug(c, service?.icon)} name={c.composeService || c.name} size={36} />
       <div className="gd-ctr-main">
         <div className="gd-ctr-top">
           <span className="gd-ctr-name">{c.name}</span>
@@ -169,10 +178,16 @@ function ContainerRow({ c, ip, icon }: { c: DockerContainer; ip?: string; icon?:
         </div>
         <div className="gd-ctr-meta">
           <span>{containerStatusText(c)}</span>
-          {ports.length > 0 && (
+          {(ports.length > 0 || proxied) && (
             <span className="gd-ports">
+              {proxied && (
+                <a className="gd-port" data-app href={proxied} target="_blank" rel="noopener noreferrer" title={`Open ${proxied}`}>
+                  {urlLabel(proxied)}
+                  <ArrowUpRight size={11} strokeWidth={2.6} aria-hidden="true" />
+                </a>
+              )}
               {ports.map((p) => {
-                const url = c.state === 'running' ? containerPortUrl(p, ip) : undefined;
+                const url = running ? portLink(p, ip, appUrl, addrs) : undefined;
                 const label = p.proto === 'udp' ? `${p.hostPort}/udp` : String(p.hostPort);
                 const title = `${p.hostIp && p.hostIp !== '0.0.0.0' && p.hostIp !== '::' ? `${p.hostIp}:` : ''}${p.hostPort} → ${p.containerPort}/${p.proto}`;
                 return url ? (
@@ -201,6 +216,17 @@ function ContainerRow({ c, ip, icon }: { c: DockerContainer; ip?: string; icon?:
   );
 }
 
+/** "jellyfin.bgreen.cloud" for a link chip (host, plus the path when there is one). */
+function urlLabel(url: string): string {
+  try {
+    const u = new URL(url);
+    const path = u.pathname !== '/' ? u.pathname.replace(/\/$/, '') : '';
+    return `${u.host}${path}`;
+  } catch {
+    return url;
+  }
+}
+
 function groupSummary(g: ContainerGroup): string {
   const unhealthy = g.containers.filter((c) => c.health === 'unhealthy').length;
   const stopped = g.containers.filter((c) => c.state !== 'running').length;
@@ -215,7 +241,7 @@ function DockerSection({ inv, guest }: { inv: GuestInventory; guest: Guest }) {
   const services = useSnapshot(selectServices, Object.is);
   const groups = useMemo(() => groupContainers(inv.containers ?? []), [inv.containers]);
   const ip = primaryIp(guest, inv);
-  const iconFor = (c: DockerContainer) => services.find((s) => s.id === `docker-${guest.vmid}-${c.name}`)?.icon;
+  const addrs = useMemo(() => guestAddresses(guest, inv).map((a) => a.address), [guest, inv]);
 
   if (!inv.containers?.length) {
     if (!inv.dockerPresent) return null;
@@ -243,7 +269,7 @@ function DockerSection({ inv, guest }: { inv: GuestInventory; guest: Guest }) {
           >
             <ul className="gd-ctrs">
               {g.containers.map((c) => (
-                <ContainerRow key={c.id || c.name} c={c} ip={ip} icon={iconFor(c)} />
+                <ContainerRow key={c.id || c.name} c={c} ip={ip} addrs={addrs} service={containerService(services, guest.vmid, c)} />
               ))}
             </ul>
           </Card>
@@ -487,6 +513,13 @@ export function AppsTab({ guest, inv, meta, onRefresh, refreshing }: AppsTabProp
             The inventory helper is a POSIX shell script, so it can only look inside Linux and BSD guests. Resources, IPs and backups still work.
           </span>
           <RawError text={view.error} />
+        </Unavailable>
+      );
+    case 'unsupported':
+      return (
+        <Unavailable icon={EyeOff} title={view.reason.title}>
+          <span className="gd-msg">{view.reason.message}</span>
+          <RawError text={view.reason.raw} />
         </Unavailable>
       );
     case 'no-agent': {

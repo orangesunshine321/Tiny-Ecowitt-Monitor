@@ -9,3 +9,4 @@ export { useFocusTrap, focusableIn } from './useFocusTrap';
 export { useHotkey, shortcutLabel, IS_APPLE } from './useHotkey';
 export { useScrollLock } from './useScrollLock';
 export { useTheme, changeTheme, toggleMatrixTheme, withThemeTransition, type ThemeInfo } from './useTheme';
+export { useLastVisit, visitTracker, type VisitStore } from './useLastVisit';

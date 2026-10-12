@@ -582,3 +582,109 @@
     box-shadow: 0 0 0 1px var(--label-2);
   }
 }
+
+/* ───────────────────────────── diagnostics (#diagnostics) */
+.set-callout-p {
+  margin: 0 0 8px;
+}
+.set-callout-p:last-child {
+  margin-bottom: 0;
+}
+.set-callout-body .ui-btn {
+  margin-top: 4px;
+}
+.set-time-input {
+  max-width: 9em;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.set-diag-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px var(--s3);
+}
+.set-diag-summary-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.set-diag-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+}
+.set-diag-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.set-diag-head[data-tone='crit'] {
+  color: var(--status-crit);
+}
+.set-diag-head[data-tone='warn'] {
+  color: var(--status-warn);
+}
+.set-diag-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+}
+.set-diag-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+}
+.set-diag-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.set-diag-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  font-weight: 500;
+}
+.set-diag-detail {
+  font-size: var(--fs-subhead);
+  line-height: var(--lh-subhead);
+  color: var(--label-2);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.set-diag-row[data-status='ok'] .set-diag-title,
+.set-diag-row[data-status='skip'] .set-diag-title {
+  font-weight: 400;
+}
+.set-diag-row[data-status='skip'] .set-diag-detail {
+  color: var(--label-3);
+}
+.set-diag-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+}
+.set-diag-fold .ui-row-subtitle {
+  white-space: normal;
+}
+:root[data-theme='matrix'] .set-diag-detail,
+:root[data-theme='matrix'] .set-diag-summary .set-inline-sub {
+  font-family: var(--font-mono);
+}
+.set-diag-fixtext {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--card-inset);
+  font-size: var(--fs-subhead);
+  line-height: var(--lh-subhead);
+  color: var(--label);
+}

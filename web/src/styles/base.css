@@ -307,4 +307,18 @@
       scroll-behavior: auto !important;
     }
   }
+
+  /*
+   * iOS Safari (Home Screen apps included) zooms the page when a text field under 16px gets focus, and stays zoomed.
+   * On touch devices and phone widths every text field is at least 16px. !important because page CSS sets field sizes
+   * (unlayered rules beat this layer otherwise); larger fields (Spotlight's 17/22px) opt out with [data-keep-font].
+   * Never maximum-scale=1 in the viewport: that would also block accessibility zoom.
+   */
+  @media (pointer: coarse), (max-width: 767.98px) {
+    input:not([type='checkbox'], [type='radio'], [type='range'], [type='button'], [type='submit'], [type='reset'], [type='color'], [type='file'], [type='image'], [data-keep-font]),
+    textarea:not([data-keep-font]),
+    select:not([data-keep-font]) {
+      font-size: max(16px, 1em) !important;
+    }
+  }
 }
