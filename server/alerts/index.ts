@@ -152,6 +152,10 @@ export function createAlertService(ctx: AppContext): AlertService {
   return {
     push,
 
+    // Acknowledge/snooze: stubbed for the contract; implemented in the alerts engine in the improvement round.
+    acknowledge: () => undefined,
+    unacknowledge: () => undefined,
+
     start() {
       if (started) return;
       started = true;

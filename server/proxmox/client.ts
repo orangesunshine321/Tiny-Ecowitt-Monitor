@@ -295,3 +295,20 @@ export class PveClient {
     return new PveApiError(`Proxmox GET ${path}: ${reason}`, 0, path, undefined, typeof code === 'string' ? code : 'ENETWORK', { cause: err });
   }
 }
+
+export type PveErrorKind = 'auth' | 'permission' | 'tls' | 'unreachable' | 'timeout' | 'proxmox' | 'other';
+
+/**
+ * Classify a Proxmox API failure into a cause the UI and pve1-dash-doctor can explain.
+ * (Contract stub — refined by the proxmox stream: messages, hints, more causes.)
+ */
+export function classifyPveError(err: unknown): { kind: PveErrorKind; message: string; hint: string } {
+  const message = err instanceof Error ? err.message : String(err);
+  if (err instanceof TlsPinError) return { kind: 'tls', message, hint: 'Run pve1-dash-doctor in the container.' };
+  if (err instanceof PveApiError) {
+    if (err.status === 401) return { kind: 'auth', message, hint: 'Run pve1-dash-doctor in the container.' };
+    if (err.status === 403) return { kind: 'permission', message, hint: 'Run pve1-dash-doctor in the container.' };
+    if (err.status >= 500) return { kind: 'proxmox', message, hint: 'Run pve1-dash-doctor in the container.' };
+  }
+  return { kind: 'other', message, hint: 'Run pve1-dash-doctor in the container.' };
+}

@@ -72,6 +72,10 @@ export interface NodeSummary {
   lastUpdated?: number;
   /** last error talking to the Proxmox API (human readable) */
   error?: string;
+  /** classified cause of `error`, so the UI can say what to do */
+  errorKind?: 'auth' | 'permission' | 'tls' | 'unreachable' | 'timeout' | 'proxmox' | 'other';
+  /** one-line fix for `error`, e.g. "Run pve1-dash-doctor in the container" */
+  errorHint?: string;
 
   pveVersion?: string; // e.g. "9.0.10"
   pveRelease?: string; // e.g. "9.0"
@@ -121,6 +125,10 @@ export interface NodeSummary {
   updates?: PackageUpdate[];
   updatesSource?: 'ssh' | 'apt-versions';
   hostServices?: HostService[];
+  /** epoch ms when the package list behind `updates` was last refreshed (apt cache / pkgupdates file mtime) */
+  updatesCheckedAt?: number;
+  /** a newer kernel is installed than the one running (host needs a reboot to use it) */
+  rebootRequired?: { reason: string; installedKernel?: string };
   /* temperatures live in Snapshot.hostInventory.temps (written by the inventory module) */
   certificate?: { subject?: string; issuer?: string; notAfter?: number; fingerprint?: string; filename?: string; san?: string[] };
 
@@ -315,6 +323,26 @@ export interface GuestInventory {
   ports: ListeningPort[];
   /** docker CLI present (distinguishes "no docker" from "docker with zero containers") */
   dockerPresent?: boolean;
+  /** mounted filesystems inside the guest (df), pseudo/tmp filesystems excluded */
+  filesystems?: GuestFilesystem[];
+  /** pending OS package updates inside the guest, from the local package cache only (no network) */
+  updates?: { count: number; security?: number; manager: string; checkedAt?: number };
+  /** /var/run/reboot-required (Debian/Ubuntu) or equivalent */
+  rebootRequired?: boolean;
+  /**
+   * 'unsupported' = cannot be inspected by design (Windows, HAOS with guest-exec disabled, no agent and no SSH target):
+   * show as informational, never as a failure.
+   */
+  inspectable?: 'yes' | 'unsupported';
+}
+
+export interface GuestFilesystem {
+  mount: string;
+  fstype?: string;
+  device?: string;
+  size: number;
+  used: number;
+  avail: number;
 }
 
 export interface HostInventory {
@@ -469,6 +497,10 @@ export interface BackupCoverage {
   notInAnyJob: boolean;
   /** last backup older than the configured threshold (or never backed up) */
   stale: boolean;
+  /** the stale threshold used for this guest (days); longer for guests only covered by weekly/monthly jobs */
+  staleAfterDays?: number;
+  /** most recent failed backup of THIS guest (from vzdump task logs), when newer than its last good backup */
+  lastFailure?: { time: number; upid: string; message?: string };
 }
 
 export type TaskSeverity = 'ok' | 'warning' | 'error' | 'running';
@@ -542,7 +574,10 @@ export interface ServiceEntry {
   description?: string;
   vmid?: number;
   guestName?: string;
-  source: 'config' | 'docker';
+  /** config = config.yaml · docker = published container port · port = well-known app found listening in a guest */
+  source: 'config' | 'docker' | 'port';
+  /** leaf certificate of an https check (collected even when verification is skipped) */
+  tls?: { notAfter: number; issuer?: string; subject?: string; selfSigned?: boolean };
   check: { type: 'http' | 'tcp' | 'none'; target?: string };
   /**
    * up = healthy; slow = healthy but latency above threshold; down = failing for >= afterFailures checks;
@@ -600,6 +635,8 @@ export interface AlertEvent {
   resolvedAt?: number;
   /** in-app path to open, e.g. "/guests/102" */
   path?: string;
+  /** set when someone acknowledged/snoozed it: no pushes and no badge until `until` (or until it resolves) */
+  acknowledged?: { at: number; until?: number };
 }
 
 export interface PushPrefs {
@@ -609,6 +646,8 @@ export interface PushPrefs {
   minSeverity: AlertSeverity;
   /** also notify when an alert resolves */
   recoveries: boolean;
+  /** local-time quiet hours ("22:00"–"07:00"); critical alerts still come through when allowCritical */
+  quietHours?: { start: string; end: string; allowCritical: boolean; timeZone?: string };
 }
 
 export interface PushDevice {
@@ -679,6 +718,8 @@ export interface Snapshot {
   network: NetworkInterface[];
   services: ServiceEntry[];
   alerts: { active: AlertEvent[]; recent: AlertEvent[] };
+  /** LVM-thin pools with data and metadata usage (metadata full = guests freeze) */
+  lvmThin?: LvmThinPool[];
 }
 
 export type SnapshotKey = keyof Snapshot;
@@ -693,7 +734,17 @@ export type StreamEvent =
   | { type: 'snapshot'; data: Snapshot }
   | { type: 'patch'; key: SnapshotKey; value: Snapshot[SnapshotKey] }
   | { type: 'alert'; data: AlertEvent }
-  | { type: 'ping'; serverTime: number };
+  | { type: 'ping'; serverTime: number }
+  /**
+   * Append-only history samples. `patch` events for node/guests/services carry an EMPTY history (rings are not resent);
+   * the client keeps its rings from the snapshot and appends these samples (trim: node/guests 120, services 90).
+   */
+  | {
+      type: 'history';
+      node?: { t: number[]; cpu: number[]; mem: number[]; netIn: number[]; netOut: number[] };
+      guests?: Record<string, { t: number[]; cpu: number[]; mem: number[] }>;
+      services?: Record<string, ServiceCheckSample[]>;
+    };
 
 /** One RRD sample, normalised. `time` is epoch ms. Missing samples have fields omitted (gaps, not zeros). */
 export interface RrdPoint {
@@ -745,9 +796,43 @@ export interface RrdPoint {
  *  POST /api/push/test                        → { ok: boolean, error?: string } body: { id: string }
  *  GET  /setup/guest.sh                       → shell script that installs the guest inventory helper + forced-command key
  *  GET  /healthz                              → { ok: true }
+ *  GET  /api/diagnostics                      → DiagnosticsReport   (read-only self-test; same checks as pve1-dash-doctor)
+ *  POST /api/alerts/:id/ack                   → AlertEvent  body: { hours?: number }  (default: until it resolves)
+ *  POST /api/alerts/:id/unack                 → AlertEvent
  * Errors: non-2xx with body ApiError.
  */
 export interface ApiError {
   error: string;
   detail?: string;
+}
+
+export interface LvmThinPool {
+  name: string;
+  vg: string;
+  size: number;
+  used: number;
+  metadataSize?: number;
+  metadataUsed?: number;
+}
+
+export type DiagnosticStatus = 'ok' | 'warn' | 'fail' | 'skip';
+
+export interface DiagnosticCheck {
+  /** stable id, e.g. "pve.auth", "pve.tls", "ssh.host", "push.vapid" */
+  id: string;
+  group: 'config' | 'proxmox' | 'inventory' | 'services' | 'push' | 'system';
+  title: string;
+  status: DiagnosticStatus;
+  /** what was found, plain English */
+  detail: string;
+  /** copy-pasteable fix or next step (shell command, config line, UI step) */
+  fix?: string;
+  /** relative docs link, e.g. "docs/TROUBLESHOOTING.md#token" */
+  docs?: string;
+}
+
+export interface DiagnosticsReport {
+  generatedAt: number;
+  appVersion: string;
+  checks: DiagnosticCheck[];
 }
