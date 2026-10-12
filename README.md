@@ -51,32 +51,26 @@ cd pve1-dash
 npm ci && npm run build && npm run demo
 ```
 
-(Before pve1-dash is merged into `main`, clone its branch: add `--branch claude/homelab-dashboard-pve1-dizt16` to the
-`git clone` line.)
-
 Then open <http://localhost:8080>. (Port taken? `PVE1_DASH_PORT=8081 npm run demo`.)
 
 ## 🏠 Install on your Proxmox host
 
-On **pve1**, as root (the web UI's node → **Shell** is fine):
+On **pve1**, as root, over SSH or in the web UI's node → **Shell**:
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)"
 ```
 
-> **Before pve1-dash is merged into `main`:** the repository's `main` branch still holds the old *Tiny Ecowitt
-> Monitor*, so the command above finds no installer there (and ends without doing anything). Until the merge, install from the pve1-dash branch. Name
-> the branch twice: in the URL (which installer to download) and in `PVE1_DASH_REF` (which code the installer builds):
+> **Keep the shell open for 5-10 minutes.** The web UI's Shell panel ends the install when you close it or click
+> another item in the tree. Open it in its own window instead (the **>_ Shell** button's arrow → **xterm.js**), or use
+> SSH. If it gets cut off anyway, run the same command again: it continues where it stopped.
 >
-> ```bash
-> PVE1_DASH_REF=claude/homelab-dashboard-pve1-dizt16 bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/claude/homelab-dashboard-pve1-dizt16/deploy/install.sh)"
-> ```
->
-> The installer remembers the branch in the container, so updates and re-runs stay on it. Once the branch is merged
-> into `main`, the plain command above works. If the ref you give doesn't contain pve1-dash, the installer stops right
-> at the start and says so.
+> To install a fixed version instead of the moving `main`, put `PVE1_DASH_REF=<tag>` in front of `bash -c ...`; the
+> container remembers it, and `pve1-dash-update --ref main` moves it back.
 
-It asks a few questions with sensible defaults, shows a plan, and then:
+Have these answers ready: your **public URL** (e.g. `https://dash.example.com`, even if the proxy isn't set up yet),
+your **email** (the Web Push contact), and **who may connect** (the default is your LAN, e.g. `10.10.10.0/24`; your
+reverse proxy must be inside it). It asks a few more questions with sensible defaults, shows a plan, and then:
 
 1. creates an **unprivileged Debian 13 container** (tagged `pve1-dash`, no root password, starts on boot; Debian 12
    on hosts whose `pve-container` is too old for Debian 13);
@@ -84,7 +78,9 @@ It asks a few questions with sensible defaults, shows a plan, and then:
    cluster gets its own token);
 3. installs **Node.js 24 LTS** and builds pve1-dash inside the container as a sandboxed systemd service;
 4. installs a small **read-only SSH helper** on the host and authorizes the dashboard's key for it only;
-5. optionally installs **lm-sensors** for temperatures, and runs a smoke test.
+5. optionally installs **lm-sensors** for temperatures, runs a smoke test and then **`pve1-dash-doctor`**, the
+   self-test that checks every link (config, Proxmox API and permissions, SSH helper, push) and prints a fix for
+   anything that isn't right.
 
 Then put it behind your HTTPS reverse proxy ([recipes for Nginx Proxy Manager, nginx, Caddy and
 Traefik](deploy/reverse-proxy/README.md)), add it to your iPhone's Home Screen and enable notifications in
@@ -92,14 +88,15 @@ Settings. Every step, and how to do it by hand, is in **[docs/SETUP.md](docs/SET
 
 | What | Command |
 |---|---|
-| Update | `pct exec <ctid> -- pve1-dash-update` |
+| **Something's off: check everything** | `pct exec <ctid> -- pve1-dash-doctor` (read-only, prints the fix; `--json` for the raw report) |
+| Edit the config safely (checked before it is saved) | `pct enter <ctid>`, then `pve1-dash-config` |
+| Update | `pct exec <ctid> -- pve1-dash-update` (runs the doctor afterwards) |
 | Refresh the host helper (when the update tells you; it prints the exact command) | `bash -c "$(curl -fsSL …/deploy/install.sh)" -- --update-helper` |
 | Repair, re-pin the certificate, change the container's network | run the installer again (it keeps your config, data and the branch or tag you installed) |
 | Uninstall | `bash -c "$(curl -fsSL …/deploy/uninstall.sh)"` (add `-- --yes` for no questions) |
-| Something's off | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) |
+| Still off after the doctor | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) |
 
-`…` stands for `https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main` (or
-`…/claude/homelab-dashboard-pve1-dizt16` before the merge, see above).
+`…` stands for `https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main`.
 
 ### 📋 Requirements
 
@@ -115,9 +112,11 @@ Settings. Every step, and how to do it by hand, is in **[docs/SETUP.md](docs/SET
   `VM.Monitor`, because that privilege also allows running commands inside guests.
 - **One SSH key, pinned to one read-only script** with `restrict,command="..."`: it can't open a shell, forward ports or
   run anything else. It inspects running guests with a fixed script and reads a few files Proxmox already keeps.
-- **TLS to Proxmox is pinned**: the token is never sent before the certificate checks out.
-- **No login, LAN only.** Keep it behind your proxy and never port-forward it; add an IP allow-list or SSO at the
-  proxy if your LAN isn't just you.
+- **TLS to Proxmox is verified** against Proxmox's own cluster CA (or a pinned certificate): the token is never sent
+  before the certificate checks out.
+- **No login, LAN only.** The dashboard itself refuses connections from outside the networks you allow
+  (`listen.allowedSources`, checked on the connection, not on headers). Keep it behind your proxy, never port-forward
+  it, and add an access list or SSO at the proxy if your LAN isn't just you.
 - Strict Content-Security-Policy, no third-party scripts, secrets only in the container with tight permissions.
 
 The full threat model is in **[docs/SECURITY.md](docs/SECURITY.md)**.
@@ -146,6 +145,7 @@ server/              Fastify backend (TypeScript, ESM)
   inventory/         SSH runner and parsers for "what runs inside guests"
   health/            service checks and Docker discovery
   alerts/            alert rules, history, Web Push
+  diagnostics/       the checks behind pve1-dash-doctor (doctor.ts) and /api/diagnostics
   demo/              the simulated homelab (mock Proxmox API + mock SSH)
   http.ts            REST API, live stream (SSE), static web app
   config.ts          config schema (zod)
@@ -153,6 +153,7 @@ shared/types.ts      the data contract between server and web
 web/                 React 19 PWA (Vite)
 deploy/
   install.sh         host installer   · uninstall.sh · lxc-setup.sh (inside the container) · update.sh
+  pve1-dash-*.sh     the container's doctor and config-editor commands
   pve1-dash.service  systemd unit
   helpers/           the read-only SSH helpers (host and guest)
   config.example.yaml

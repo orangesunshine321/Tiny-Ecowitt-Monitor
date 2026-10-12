@@ -11,6 +11,9 @@ Afterwards: [put it behind your HTTPS proxy](../deploy/reverse-proxy/README.md),
 [add VMs that have no guest agent](#-adding-vms-without-the-guest-agent) and
 [turn on push notifications on your iPhone](#-web-push-on-iphone-and-ipad).
 
+Something not working? Start with **`pct exec <ctid> -- pve1-dash-doctor`** on the host: it checks every link
+(config, Proxmox API, TLS, token permissions, SSH helper, push, disk) and prints a copy-paste fix for each problem.
+
 **Requirements**
 
 - Proxmox VE **8.x or 9.x**, a single node (a cluster works too: each dashboard looks at one node, and you can install
@@ -23,23 +26,18 @@ Afterwards: [put it behind your HTTPS proxy](../deploy/reverse-proxy/README.md),
 
 ## 🚀 The one-liner
 
-On the Proxmox host, as root (the shell from the web UI's node → **Shell** works):
+On the Proxmox host, as root, over SSH or in the web UI's node → **Shell**:
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)"
 ```
 
-> **Before pve1-dash is merged into `main`:** `main` still holds the old *Tiny Ecowitt Monitor*, so the command above
-> finds no installer. Install from the pve1-dash branch instead, naming it in the URL (which installer runs) **and** in
-> `PVE1_DASH_REF` (which code it builds):
->
-> ```bash
-> PVE1_DASH_REF=claude/homelab-dashboard-pve1-dizt16 bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/claude/homelab-dashboard-pve1-dizt16/deploy/install.sh)"
-> ```
->
-> The same goes for every other command on this page that downloads from `.../main/...`: use
-> `.../claude/homelab-dashboard-pve1-dizt16/...` until the merge. After the merge, the plain commands work. The
-> installer checks right at the start that the ref holds pve1-dash and stops with this hint if it doesn't.
+The install takes **5-10 minutes; keep the shell open.** The web UI's Shell panel ends the session (and the install)
+when you close it or click another item in the tree: open it in its own window (the **>_ Shell** button's arrow →
+**xterm.js**) or use SSH. If it gets cut off anyway, run the same command again: it continues where it stopped.
+
+To build a fixed version instead of the moving `main`, put `PVE1_DASH_REF=<tag>` in front of `bash -c ...`. The
+container remembers it for updates; `pve1-dash-update --ref main` moves it back to `main`.
 
 It asks a few questions (each has a sensible default), shows a plan, and only then changes anything:
 
@@ -50,31 +48,45 @@ It asks a few questions (each has a sensible default), shows a plan, and only th
 | Disk storage / size | `local-lvm` (or `local-zfs`, or the first one) / 6 GiB | storages that allow container disks |
 | Template storage | `local` | where the Debian 13 template is downloaded (Debian 12 if the host's `pve-container` is too old for 13) |
 | Bridge / VLAN | `vmbr0` / none | a bridge that doesn't exist on the host is refused unless you insist |
-| IPv4 | `dhcp` | or a static `192.168.1.60/24` plus gateway (offered only if the host's own gateway is in that network) |
+| IPv4 | `dhcp` | or a static address in your network (the example uses it, e.g. `10.10.10.60/24`) plus gateway (offered only if the host's own gateway is in that network). Your proxy forwards to this address: use a static one or a DHCP reservation (the summary shows the MAC) |
 | Cores / memory / swap | 1 / 1024 MiB / 512 MiB | the build needs the 1 GiB |
 | Proxmox host IP | detected | the dashboard talks to `https://<ip>:8006` and SSH on `<ip>:22` |
-| Public HTTPS URL | none | e.g. `https://dash.home.lan`, can be added later |
+| Public HTTPS URL | none | the `https://` name you'll open, e.g. `https://dash.example.com`. Enter it now even if the proxy doesn't exist yet: push notification links need it. A re-run with `PVE1_DASH_PUBLIC_URL=...` sets it in an existing config |
 | Host name on the certificate | the ACME domain, if any | only asked when the host uses a custom/ACME certificate: verify it with the public CAs instead of pinning it (a pin breaks at every renewal) |
 | Email for Web Push | **required** | your real address; Apple rejects `localhost` and made-up domains |
+| Allow connections from | this host's network, e.g. `10.10.10.0/24` | `listen.allowedSources`: everyone else gets HTTP 403 (checked on the connection, never on headers). Your reverse proxy's address **must** be inside, since the proxy is what connects. `any` allows everyone |
 | Install lm-sensors | no | for CPU/board temperatures |
 
 Unattended, with environment variables (see `install.sh --help` for all of them):
 
 ```bash
-PVE1_DASH_VAPID_EMAIL=you@example.com PVE1_DASH_PUBLIC_URL=https://dash.home.lan \
+PVE1_DASH_VAPID_EMAIL=you@example.com PVE1_DASH_PUBLIC_URL=https://dash.example.com PVE1_DASH_ALLOWED_SOURCES=10.10.10.0/24 \
   bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)" -- --yes
 ```
+
+**TLS to Proxmox.** With the default self-signed certificate, the installer checks that the certificate on `:8006`
+verifies with Proxmox's own cluster CA for the host's address, and then writes `proxmox.tls.ca` (a copy of
+`/etc/pve/pve-root-ca.pem`) instead of pinning the certificate. Proxmox renews that certificate by itself shortly
+before it expires, and a pin would break that night; the CA stays the same. If the check fails (e.g. the host's address
+changed since the certificate was made), it pins the certificate's fingerprint as before.
+
+**At the end** it runs `pve1-dash-doctor` in the container: a read-only check of the config, the Proxmox API (TLS,
+token, every permission the dashboard uses), the SSH helper and push, with a copy-paste fix for anything that isn't
+right. Run it again any time: `pct exec <ctid> -- pve1-dash-doctor`.
 
 Run it again any time: it finds the container by its `pve1-dash` tag and upgrades/repairs it in place, keeping your
 config, push devices and history. A log of the long steps goes to `/var/log/pve1-dash-install.log`. On a re-run:
 
 - **The source stays the same.** The branch or tag recorded in the container (`/etc/pve1-dash/install.env`) is kept,
-  as long as the repository has it. A repository other than the default is only used again when you confirm it (with
+  as long as the repository has it. (A container that still follows the old development branch,
+  `claude/homelab-dashboard-pve1-dizt16`, is offered a switch to `main`, where pve1-dash lives now; `--yes` switches.) A repository other than the default is only used again when you confirm it (with
   `--yes`: pass `PVE1_DASH_REPO=...`), because the host helper is checked against it. A commit id is not taken over
   automatically; pass `PVE1_DASH_REF=<commit>` to stay on it.
 - **The token is checked, not just found.** If Proxmox rejects the container's secret, the installer replaces the token,
   and it does that only at the end, once the new version runs: a run that fails half-way never leaves the dashboard
   with a revoked secret.
+- **`PVE1_DASH_PUBLIC_URL` and `PVE1_DASH_ALLOWED_SOURCES` apply to the existing config** (comments are kept). If the
+  config has no `publicUrl`, the installer asks for one.
 - **Network settings apply to the existing container.** `PVE1_DASH_IP`, `PVE1_DASH_GATEWAY`, `PVE1_DASH_BRIDGE` and
   `PVE1_DASH_VLAN` given on a re-run change its `net0` (the MAC address stays) and restart it.
 - **A new version that doesn't come up is rolled back**, like `pve1-dash-update` does.
@@ -138,7 +150,11 @@ Separation" ticked), → **Permissions** → Add a *User Permission* and an *API
 ### 3. Facts to note from the host
 
 ```bash
-# TLS pin: the certificate pveproxy serves (pveproxy-ssl.pem if you uploaded one / use ACME, else pve-ssl.pem)
+# TLS, best: Proxmox's cluster CA, which survives the automatic renewals of the node certificate. Use it when this
+# says "Verify return code: 0 (ok)" for the address the dashboard will use:
+openssl s_client -connect 192.168.1.10:8006 -CAfile /etc/pve/pve-root-ca.pem -verify_ip 192.168.1.10 </dev/null 2>&1 | grep 'Verify return'
+pct push 120 /etc/pve/pve-root-ca.pem /etc/pve1-dash/pve-root-ca.pem --perms 0644   # after step 4 created /etc/pve1-dash
+# Otherwise a pin on the certificate pveproxy serves (pveproxy-ssl.pem if you uploaded one / use ACME, else pve-ssl.pem)
 openssl x509 -in /etc/pve/local/pve-ssl.pem -noout -fingerprint -sha256
 # -> sha256 Fingerprint=3F:9A:...   (the part after "=")
 
@@ -151,17 +167,18 @@ cat /etc/ssh/ssh_host_ed25519_key.pub
 Easiest: let the setup script do it. It is the same script the installer runs, and it is safe to repeat.
 
 ```bash
-# On the host: copy the script in and run it with your values (before the merge: .../claude/homelab-dashboard-pve1-dizt16/...)
+# On the host: copy the script in and run it with your values
 curl -fsSL -o /tmp/lxc-setup.sh https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/lxc-setup.sh
 pct push 120 /tmp/lxc-setup.sh /root/lxc-setup.sh
 pct enter 120
 # now inside the container:
 export P1D_NODE=pve1 P1D_NODE_IP=192.168.1.10 P1D_CTID=120
 export P1D_TLS_FINGERPRINT='3F:9A:...'                     # from step 3
+# or, when the CA check in step 3 said "ok":  export P1D_TLS_CA="$(cat /root/pve-root-ca.pem)"  (pct push it there)
 export P1D_HOST_KEY='ssh-ed25519 AAAA...'                  # from step 3, WITHOUT the trailing "root@pve1"
 export P1D_TOKEN_SECRET='0b4c5d2e-...'                     # from step 2
-export P1D_VAPID_EMAIL=you@example.com P1D_PUBLIC_URL=https://dash.home.lan
-# export PVE1_DASH_REF=claude/homelab-dashboard-pve1-dizt16    # before the merge into main
+export P1D_VAPID_EMAIL=you@example.com P1D_PUBLIC_URL=https://dash.example.com
+export P1D_ALLOWED_SOURCES=10.10.10.0/24                   # who may connect; your reverse proxy must be inside
 bash /root/lxc-setup.sh
 ```
 
@@ -184,7 +201,6 @@ for b in node npm npx corepack; do ln -sfn /opt/node/bin/$b /usr/local/bin/$b; d
 
 # Service user and the app (built from source, then dev dependencies removed)
 useradd --system --user-group --home-dir /var/lib/pve1-dash --no-create-home --shell /usr/sbin/nologin pve1dash
-# (before the merge into main: --branch claude/homelab-dashboard-pve1-dizt16)
 git clone --depth 1 --branch main https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git /opt/pve1-dash
 cd /opt/pve1-dash
 npm ci --include=dev --ignore-scripts && npm run build && npm prune --omit=dev --ignore-scripts
@@ -204,12 +220,15 @@ echo '192.168.1.10 ssh-ed25519 AAAA...' > /etc/pve1-dash/ssh/known_hosts   # hos
 chown pve1dash:pve1dash /etc/pve1-dash/ssh/*
 chmod 0600 /etc/pve1-dash/ssh/id_ed25519 /etc/pve1-dash/ssh/known_hosts
 
-# systemd unit and the update tool
+# systemd unit and the tools: update, self-test, safe config editor
 install -m 0644 /opt/pve1-dash/deploy/pve1-dash.service /etc/systemd/system/
 install -m 0755 /opt/pve1-dash/deploy/update.sh /usr/local/bin/pve1-dash-update
-printf 'PVE1_DASH_REPO=https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git\nPVE1_DASH_REF=main\n' > /etc/pve1-dash/install.env
+install -m 0755 /opt/pve1-dash/deploy/pve1-dash-doctor.sh /usr/local/bin/pve1-dash-doctor
+install -m 0755 /opt/pve1-dash/deploy/pve1-dash-config.sh /usr/local/bin/pve1-dash-config
+printf 'PVE1_DASH_REPO=https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git\nPVE1_DASH_REF=main\nPVE1_DASH_CTID=120\n' > /etc/pve1-dash/install.env
 systemctl daemon-reload && systemctl enable --now pve1-dash
 curl -s http://127.0.0.1:8080/healthz      # {"ok":true}
+pve1-dash-doctor                           # after step 5: every check should be ✓
 ```
 
 A minimal `/etc/pve1-dash/config.yaml` (every other option, with its default, is in
@@ -217,14 +236,16 @@ A minimal `/etc/pve1-dash/config.yaml` (every other option, with its default, is
 
 ```yaml
 title: pve1
-publicUrl: https://dash.home.lan
+publicUrl: https://dash.example.com
+listen:
+  allowedSources: ["10.10.10.0/24"]   # who may connect (your reverse proxy must be inside); [] = everyone
 proxmox:
   url: https://192.168.1.10:8006
   node: pve1
   tokenId: "pve1dash@pve!dashboard"
   tokenSecretFile: /etc/pve1-dash/token
   tls:
-    fingerprint: "3F:9A:..."
+    ca: /etc/pve1-dash/pve-root-ca.pem   # or, instead:  fingerprint: "3F:9A:..."
 inventory:
   enabled: true
   host:
@@ -242,15 +263,14 @@ The helper runs as root on the host, so install the **repository's** copy, at th
 container's copy only to compare (the container is less trusted than the host):
 
 ```bash
-# On the host. REF = the branch or tag the container was installed from (main, or a tag; before the merge:
-# claude/homelab-dashboard-pve1-dizt16)
+# On the host. REF = the branch or tag the container was installed from (main, or a tag)
 REF=main
 curl -fsSL -o /tmp/pve1-dash-helper \
   "https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/$REF/deploy/helpers/pve1-dash-helper"
 pct pull 120 /opt/pve1-dash/deploy/helpers/pve1-dash-helper /tmp/pve1-dash-helper.ct
 cmp /tmp/pve1-dash-helper /tmp/pve1-dash-helper.ct && echo same     # different? update the container, or check REF
 install -o root -g root -m 0755 /tmp/pve1-dash-helper /usr/local/sbin/pve1-dash-helper
-SSH_ORIGINAL_COMMAND=version /usr/local/sbin/pve1-dash-helper     # -> pve1-dash-helper 1
+SSH_ORIGINAL_COMMAND=version /usr/local/sbin/pve1-dash-helper     # -> pve1-dash-helper <protocol>, e.g. 1
 
 # Authorize the dashboard key for that script only
 pct exec 120 -- cat /etc/pve1-dash/ssh/id_ed25519.pub              # ssh-ed25519 AAAA... pve1-dash@ct120
@@ -269,7 +289,7 @@ Test it from the container, as the service user:
 ```bash
 pct exec 120 -- runuser -u pve1dash -- ssh -i /etc/pve1-dash/ssh/id_ed25519 \
   -o UserKnownHostsFile=/etc/pve1-dash/ssh/known_hosts -o StrictHostKeyChecking=yes root@192.168.1.10 version
-# -> pve1-dash-helper 1      (anything else, e.g. "denied" or a shell prompt, means something is wrong)
+# -> pve1-dash-helper <protocol>   (anything else, e.g. "denied" or a shell prompt, means something is wrong)
 ```
 
 ### 6. Optional: temperatures
@@ -328,7 +348,7 @@ Undo in the VM: `rm /usr/local/sbin/pve1-dash-guest-inventory` and delete the `p
 Needs **iOS/iPadOS 16.4 or newer**, the dashboard on **trusted HTTPS** (your reverse proxy), and a real
 `alerts.vapidSubject` email in the config.
 
-1. Open your public URL (e.g. `https://dash.home.lan`) in **Safari**.
+1. Open your public URL (e.g. `https://dash.example.com`) in **Safari**.
 2. Tap **Share** → **Add to Home Screen** → **Add**.
 3. Open **pve1** from the Home Screen (push never works in a Safari tab on iOS, only in the Home Screen app).
 4. Go to **Settings → Notifications → Enable on this device** and allow notifications when iOS asks.
@@ -348,9 +368,17 @@ pve1-dash-update --ref v1.2.0                    # inside the container: a speci
 ```
 
 It builds the new version next to the running one, swaps them, restarts, and rolls back automatically if the new
-version doesn't come up healthy (it checks `/healthz` on `listen.host`, or on 127.0.0.1 for `0.0.0.0`). It also
-updates Node.js within the 24.x line; a Node.js download or unpack that fails leaves the working Node.js alone. If it
-says the host helper changed, run on the host the command it prints, for example:
+version doesn't come up healthy (it checks `/healthz` on `listen.host`, or on 127.0.0.1 for `0.0.0.0`). Then it runs
+`pve1-dash-doctor`, so an update that runs but can no longer read Proxmox shows up right away (`--no-doctor` skips
+it; its findings never undo the update). It also updates Node.js within the 24.x line; a Node.js download or unpack
+that fails leaves the working Node.js alone.
+
+Before it downloads anything it checks for about 1 GiB of free disk (the build needs room next to the running
+version); with less it stops and prints the command to grow the disk on the host, e.g. `pct resize 120 rootfs +2G`.
+npm uses a throw-away cache, so updates don't slowly fill the disk. If the branch recorded in `install.env` no longer
+exists, it says so and tells you to use `--ref main`.
+
+If it says the host helper changed, run on the host the command it prints, for example:
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)" -- --update-helper
@@ -387,10 +415,12 @@ lm-sensors stays installed.
 | Host: `/var/log/pve1-dash-install.log`, `/var/log/pve1-dash-helper.diff` | installer log; the last helper diff shown by the installer |
 | Container: `/opt/pve1-dash` | the app (`/opt/pve1-dash.prev` = the previous version after an update) |
 | Container: `/opt/node` → `/opt/node-v24.x.y-linux-<arch>` | Node.js, linked into `/usr/local/bin` |
-| Container: `/etc/pve1-dash/config.yaml` | configuration (root:pve1dash, 0640) |
+| Container: `/usr/local/bin/pve1-dash-{update,doctor,config}` | update, self-test (read-only) and safe config editor |
+| Container: `/etc/pve1-dash/config.yaml` | configuration (root:pve1dash, 0640); edit it with `pve1-dash-config` |
+| Container: `/etc/pve1-dash/pve-root-ca.pem` | copy of Proxmox's cluster CA when the config verifies with `proxmox.tls.ca` |
 | Container: `/etc/pve1-dash/token` | API token secret (root:pve1dash, 0640) |
 | Container: `/etc/pve1-dash/ssh/` | dashboard key `id_ed25519` (pve1dash, 0600) and `known_hosts` |
-| Container: `/etc/pve1-dash/install.env` | the repo and ref used by `pve1-dash-update` and kept by installer re-runs |
+| Container: `/etc/pve1-dash/install.env` | the repo and ref used by `pve1-dash-update` and kept by installer re-runs, and the container's id |
 | Container: `/etc/pve1-dash/env` | optional environment overrides for the service (e.g. `PVE1_DASH_PORT=8081`) |
-| Container: `/var/lib/pve1-dash/` | VAPID keys + push devices (`push.json`), alert and uptime history |
+| Container: `/var/lib/pve1-dash/` | VAPID keys + push devices (`push.json`), alert and uptime history, `config.good.yaml` (the last config the dashboard started with; used when `config.yaml` is broken) |
 | Container: `/etc/systemd/system/pve1-dash.service` | the service; overrides go into `systemctl edit pve1-dash` |

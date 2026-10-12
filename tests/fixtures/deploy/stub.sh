@@ -24,6 +24,7 @@ case $tool in
     case "$*" in
       "-4 route get "*) out ip-route-get.txt || exit 2 ;;
       "-4 route show default") out ip-route-default.txt || : ;;
+      "-4 -o addr show") out ip-addr.txt || : ;;
       *) exit 2 ;;
     esac
     ;;

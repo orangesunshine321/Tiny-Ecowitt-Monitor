@@ -12,8 +12,17 @@ Recipes below: [Nginx Proxy Manager](#nginx-proxy-manager) · [plain nginx](#pla
 [Traefik](#traefik). Replace `dash.home.lan` with your name and `10.0.0.50` with the container's IP (the installer
 prints it; `pct exec <ctid> -- ip -4 addr show eth0` shows it again).
 
-After the proxy works, put the URL into `/etc/pve1-dash/config.yaml` as `publicUrl: https://dash.home.lan` (the
-installer asked for it) and `systemctl restart pve1-dash` inside the container.
+**Before you start:**
+
+- **The container's address must not move.** The proxy forwards to an IP address. If the container got its address by
+  DHCP (the installer's default), reserve it in your router for the container's MAC (the install summary prints it;
+  `pct config <ctid> | grep net0` shows `hwaddr=`), or make it static by re-running the installer with
+  `PVE1_DASH_IP=<address>/24 PVE1_DASH_GATEWAY=<router>` (applied in place). Otherwise a reboot can turn your
+  dashboard into a 502.
+- **`publicUrl`** in `/etc/pve1-dash/config.yaml` should be this URL (the installer asked for it; set it later with
+  `pve1-dash-config` in the container, or by re-running the installer with `PVE1_DASH_PUBLIC_URL=https://...`).
+- **`listen.allowedSources`**: if the dashboard only accepts your LAN (the installer's default, e.g. `10.10.10.0/24`),
+  the **proxy's own address** must be inside it, because the proxy is what connects. A proxy elsewhere gets HTTP 403.
 
 ## ⚡ Why HTTP/2 matters
 
@@ -27,7 +36,7 @@ in every recipe below (Caddy and Traefik do it by default).
 | Need | Why |
 |---|---|
 | Forward everything to `http://10.0.0.50:8080` | the app, the API, `/setup/guest.sh` and `/healthz` live on one port |
-| No buffering and a long read timeout for `/api/stream` | live updates; the server sends a heartbeat every 15 s and `X-Accel-Buffering: no` |
+| No buffering of `/api/stream`, read timeout above 15 s | live updates; the server sends `X-Accel-Buffering: no` (nginx and NPM honour it) and a heartbeat every 15 s |
 | Don't cache `/sw.js`, `/index.html`, `/manifest.webmanifest` | the server sends the right `Cache-Control` headers; a proxy cache that ignores them breaks updates of the app |
 | Pass `Host` and `X-Forwarded-Proto/For` | used for links when `publicUrl` is not set, and for logs |
 | Keep it on the LAN | there is no login; see [docs/SECURITY.md](../../docs/SECURITY.md) |
@@ -47,8 +56,8 @@ In the NPM web UI: **Hosts → Proxy Hosts → Add Proxy Host**.
 4. **Block Common Exploits:** on (fine either way).
 5. **Websockets Support: ON.** pve1-dash uses SSE, not WebSockets, but the toggle also switches on the HTTP/1.1
    upgrade headers and does no harm.
-6. **Access List:** "Publicly Accessible", or an access list that only allows your LAN (see
-   [Adding a login](#-adding-a-login-in-front)).
+6. **Access List:** one that only allows your LAN, e.g. `allow 10.10.10.0/24` + `deny all` (see
+   [Adding a login](#-adding-a-login-in-front)), or "Publicly Accessible" if the proxy is only reachable from your LAN.
 
 **SSL** tab:
 
@@ -58,22 +67,17 @@ In the NPM web UI: **Hosts → Proxy Hosts → Add Proxy Host**.
 3. **HTTP/2 Support:** ON.
 4. HSTS: optional.
 
-**Advanced** tab, **Custom Nginx Configuration** (NPM inserts it into the `server` block):
+**Advanced** tab: **leave it empty.** Nothing is needed there: the server switches nginx's buffering off for the live
+stream itself (`X-Accel-Buffering: no`), sends a heartbeat every 15 s (NPM's read timeout is 90 s), and NPM already
+speaks HTTP/1.1 to the backend.
 
-```nginx
-# pve1-dash live updates (Server-Sent Events): stream immediately, keep the connection open.
-location /api/stream {
-    include conf.d/include/proxy.conf;
-    proxy_buffering off;
-    proxy_cache off;
-    proxy_read_timeout 1h;
-}
-```
-
-`conf.d/include/proxy.conf` is NPM's own file with the `proxy_pass` and `X-Forwarded-*` lines, so this location
-behaves like the default one plus the streaming settings. (Built from NPM's templates and checked against its source;
-not run inside an NPM container. If NPM rejects it, save without the Advanced snippet: streaming still works because
-the server sends `X-Accel-Buffering: no`, it is just less explicit.)
+> ⚠️ **Never put a `location` block into the Advanced tab of a host that has an Access List.** NPM applies the access
+> list only inside the locations it generates itself, so a hand-written `location /api/stream { ... }` there would let
+> everyone read the live stream, which carries the whole snapshot (every guest, address, service and task), past your
+> allow-list. If you ever want explicit settings for a path, use the **Custom Locations** tab instead: location
+> `/api/stream`, scheme `http`, the same forward host and port, and in its gear-icon box
+> `proxy_buffering off; proxy_read_timeout 1h;`. Custom Locations keep the access list. (From NPM's templates and
+> source; not run inside an NPM container.)
 
 Save, open `https://dash.home.lan`, and check the live dot in the toolbar turns green.
 
@@ -191,7 +195,15 @@ pve1-dash itself has no login: it is read-only and meant for your LAN. If more p
 you'd like, restrict it at the proxy:
 
 - **IP allow-list (friendliest):** allow only your LAN/VPN ranges. NPM: Access Lists → Access tab with `allow
-  192.168.1.0/24` and `deny all`; nginx: `allow`/`deny` in the `server` block.
+  10.10.10.0/24` and `deny all`, picked on the proxy host's Details tab; nginx: `allow`/`deny` in the `server` block.
+  Two NPM caveats (see [docs/SECURITY.md](../../docs/SECURITY.md#lan-only-no-login)): the list doesn't cover
+  `location` blocks typed into the Advanced tab, and NPM trusts the `X-Real-IP` header from every private network,
+  so a device on another private subnet (an IoT VLAN) can pretend to be on your LAN. Optional hardening, untested
+  inside NPM: put only `set_real_ip_from 127.0.0.1;` into that host's Advanced tab (it replaces NPM's list of trusted
+  networks for this host).
+- **The dashboard's own allow-list** (`listen.allowedSources`) closes the direct way around the proxy
+  (`http://<container-ip>:8080`) and can't be fooled by headers; keep the proxy's address in it.
+- **The real fix for untrusted devices** is at the router: don't let the IoT VLAN reach your LAN at all.
 - **Proxy authentication:** NPM Access List with users, nginx `auth_basic`, Caddy `basic_auth`, Traefik `basicAuth`
   middleware, or an SSO forward-auth such as Authelia/Authentik. Note: how the iOS Home Screen app behaves with HTTP
   Basic auth (re-prompts, background push registration) is **UNVERIFIED**; an IP allow-list or SSO with long sessions
@@ -206,5 +218,14 @@ curl -sI https://dash.home.lan/ | grep -iE '^(HTTP|content-security-policy)'
 curl -sN https://dash.home.lan/api/stream | head -c 300   # should print "retry: 3000" and an event right away
 curl -s --http2 -o /dev/null -w '%{http_version}\n' https://dash.home.lan/   # 2 means HTTP/2 is on
 ```
+
+With an access list, check that it covers the live stream too, **from a machine outside the allowed network** that
+can still reach the proxy (e.g. a laptop on the IoT or guest VLAN):
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://dash.home.lan/api/stream   # must print 403
+```
+
+And inside the container, `pve1-dash-doctor` checks the dashboard end to end.
 
 Still stuck? [docs/TROUBLESHOOTING.md → "Live updates stop or never start"](../../docs/TROUBLESHOOTING.md#-live-updates-stop-or-never-start-sse-through-the-proxy).

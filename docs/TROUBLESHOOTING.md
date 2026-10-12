@@ -4,12 +4,19 @@ Small steps, one or two at a time. Each section starts with what you see, then w
 the least likely. Commands marked **(host)** run on the Proxmox host as root; **(CT)** runs inside the dashboard
 container (`pct enter <ctid>` from the host, or prefix the command with `pct exec <ctid> --`).
 
+**Start with the doctor.** On the Proxmox host: `pct exec <ctid> -- pve1-dash-doctor`. It is read-only, works while
+the service is down, checks every link (config, Proxmox reachability, TLS, token and every permission the dashboard
+uses, the SSH helper, push, disk and clock) and prints a copy-paste fix under each problem. The sections below explain
+the same problems in more depth.
+
 Jump to: [first checks](#-first-checks) · [token 401/403](#-token-401403) ·
 [TLS fingerprint mismatch](#-tls-fingerprint-mismatch-after-a-certificate-renewal) ·
 [SSH host key changed](#-ssh-host-key-changed) · [helper denied / no apps](#-helper-denied-or-apps--services-stay-empty) ·
 [guest agent](#-guest-agent-vm-shows-no-ip-or-no-apps) · [push on iPhone](#-push-notifications-dont-arrive-on-iphone) ·
 [live updates through the proxy](#-live-updates-stop-or-never-start-sse-through-the-proxy) ·
-[421 unknown host](#-unknown-host-http-421) · [alert times off by hours](#-times-in-alerts-are-off-by-some-hours) ·
+[421 unknown host](#-unknown-host-http-421) · [403 forbidden](#-forbidden-http-403) ·
+[config mistakes](#-a-config-mistake-config-invalid-or-running-with-the-last-good-configuration) ·
+[alert times off by hours](#-times-in-alerts-are-off-by-some-hours) ·
 [temperatures](#-temperatures-are-missing) · [disk health / sleeping HDDs](#-disk-health-updates-slowly-or-hdds-dont-stay-spun-down) ·
 [paused on an I/O error](#-a-vm-is-paused-on-an-io-error) · [installer](#-installer-problems) ·
 [not verified on real hardware](#-things-that-could-not-be-tested-on-real-proxmox)
@@ -17,6 +24,10 @@ Jump to: [first checks](#-first-checks) · [token 401/403](#-token-401403) ·
 ---
 
 ## 👀 First checks
+
+**Step 0.** Run the doctor **(host)**: `pct exec <ctid> -- pve1-dash-doctor`. Everything ✓? Then the problem is
+between your device and the proxy (see [live updates](#-live-updates-stop-or-never-start-sse-through-the-proxy)).
+Otherwise follow the fix it prints under the first ✗.
 
 **Step 1.** Is the service running? **(CT)**
 
@@ -37,7 +48,9 @@ Lines start with `[warn]` or `[error]` and the part that complained, e.g. `pve1-
 **Step 3.** In the dashboard, **Settings → Data sources** shows each collector with its last success and last error.
 The live dot in the toolbar opens the same list.
 
-After any config change: `systemctl restart pve1-dash` **(CT)**, then repeat step 2.
+Change the config with `pve1-dash-config` **(CT)**: it opens a copy in your editor, checks it with the dashboard's
+own loader (with the line number of any mistake), and only then saves it and restarts the service. After editing
+`config.yaml` by hand: `systemctl restart pve1-dash` **(CT)**, then repeat step 2.
 
 ---
 
@@ -118,7 +131,10 @@ Restart the dashboard **(CT)**.
 ## 🔒 TLS fingerprint mismatch after a certificate renewal
 
 **You see:** `Proxmox TLS fingerprint mismatch: server presented AB:CD:...` in the log. Typical after a Let's Encrypt
-renewal (every ~60-90 days), uploading a new certificate, or `pvecm updatecerts --force`.
+renewal (every ~60-90 days), uploading a new certificate, `pvecm updatecerts --force`, or Proxmox's own automatic
+renewal of its self-signed certificate (`pveupdate` renews it in the two weeks before it expires, every ~2 years, at
+night). New installs avoid the last one: they trust Proxmox's cluster CA instead of pinning the certificate when that
+verifies (`ca: /etc/pve1-dash/pve-root-ca.pem` in the config). Step 3 switches an older install over.
 
 **Step 1.** Get the fingerprint of the certificate pveproxy serves now **(host)**:
 
@@ -130,8 +146,7 @@ openssl s_client -connect 127.0.0.1:8006 </dev/null 2>/dev/null | openssl x509 -
 **Step 2.** Put it in the config **(CT)**, the part after `=`:
 
 ```bash
-nano /etc/pve1-dash/config.yaml        # proxmox → tls → fingerprint: "3F:9A:..."
-systemctl restart pve1-dash
+pve1-dash-config                       # proxmox → tls → fingerprint: "3F:9A:..."  (saves and restarts)
 ```
 
 (Re-running the installer does steps 1-2 for you. It keeps the branch or tag the container was installed from, so it
@@ -141,13 +156,15 @@ doesn't switch your code; and it warns when the host serves a custom/ACME certif
 
 - **Publicly trusted ACME certificate:** remove `fingerprint:` and make `proxmox.url` use the host name on the
   certificate, e.g. `https://pve1.example.com:8006` (the container must resolve it to the host's LAN IP).
-- **Self-signed Proxmox certificate:** trust the cluster CA instead, which survives renewals:
+- **Self-signed Proxmox certificate:** trust the cluster CA instead, which survives renewals. First check that it
+  verifies for the address in `proxmox.url` **(host)**; it must say `Verify return code: 0 (ok)`:
   ```bash
-  pct push <ctid> /etc/pve/pve-root-ca.pem /etc/pve1-dash/pve-root-ca.pem     # (host)
+  openssl s_client -connect 192.168.1.10:8006 -CAfile /etc/pve/pve-root-ca.pem -verify_ip 192.168.1.10 </dev/null 2>&1 | grep 'Verify return'
+  pct push <ctid> /etc/pve/pve-root-ca.pem /etc/pve1-dash/pve-root-ca.pem --perms 0644
   ```
-  then in the config replace `fingerprint:` with `ca: /etc/pve1-dash/pve-root-ca.pem`. The URL must use the node
-  name or the IP that is in the certificate (`openssl x509 -in /etc/pve/local/pve-ssl.pem -noout -ext subjectAltName`
-  **(host)** lists them).
+  then `pve1-dash-config` **(CT)** and replace `fingerprint: ...` with `ca: /etc/pve1-dash/pve-root-ca.pem`. If the
+  check says "IP address mismatch", the URL must use the node name or the IP that is in the certificate
+  (`openssl x509 -in /etc/pve/local/pve-ssl.pem -noout -ext subjectAltName` **(host)** lists them).
 
 ---
 
@@ -220,8 +237,7 @@ sshd -T | grep -i permitrootlogin            # yes, prohibit-password or forced-
 
 You should see one line `restrict,command="/usr/local/sbin/pve1-dash-helper" ssh-ed25519 AAAA... pve1-dash@ct<id>`
 per dashboard (options you added in front, like `from="..."`, are kept by the installer). Missing, duplicated or
-without `restrict,command=`? Refresh it **(host)** (before the merge into `main`, use
-`.../claude/homelab-dashboard-pve1-dizt16/deploy/install.sh` as the URL):
+without `restrict,command=`? Refresh it **(host)**:
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)" -- --update-helper
@@ -357,13 +373,16 @@ Works? The problem is the proxy; continue. Doesn't? See [First checks](#-first-c
 curl -sN https://dash.home.lan/api/stream | head -c 300
 ```
 
-Nothing for a long time, then a burst: the proxy is **buffering**. Add the `/api/stream` block with
-`proxy_buffering off` from [deploy/reverse-proxy/README.md](../deploy/reverse-proxy/README.md) (Nginx Proxy Manager:
-the Advanced tab).
+Nothing for a long time, then a burst: the proxy is **buffering**. The server already tells nginx not to buffer
+(`X-Accel-Buffering: no`), so this is rare. Plain nginx: add the `/api/stream` block with `proxy_buffering off` from
+[deploy/reverse-proxy/README.md](../deploy/reverse-proxy/README.md). Nginx Proxy Manager: use the **Custom
+Locations** tab (location `/api/stream`, same forward host and port, gear icon: `proxy_buffering off;
+proxy_read_timeout 1h;`), **never a `location` block in the Advanced tab**: NPM applies the host's Access List only
+inside its own locations, so an Advanced-tab location would let everyone past it.
 
 **Step 3.** Stream drops after about a minute: the proxy's **read timeout** is shorter than it should be. The server
-sends a heartbeat every 15 s, so nginx's default 60 s is fine, but some proxies or load balancers use less. Set
-`proxy_read_timeout 1h` (nginx/NPM) or the equivalent.
+sends a heartbeat every 15 s, so nginx's default 60 s (NPM: 90 s) is fine, but some proxies or load balancers use
+less. Set `proxy_read_timeout 1h` (nginx; NPM: in a Custom Location as above) or the equivalent.
 
 **Step 4.** Hangs with several tabs open: **HTTP/2 is off**, so the browser's 6-connections-per-host limit is used up
 by streams. Check:
@@ -388,20 +407,59 @@ away) rather than leaving it open in the background on cellular.
 
 ## 🚪 "Unknown host" (HTTP 421)
 
-**You see:** `{"error":"Unknown host", ...}` instead of the dashboard, and the log says
-`refused a request for host "..."`.
+**You see:** a "Unknown host" page (or `{"error":"Unknown host", ...}` from the API) instead of the dashboard, and the
+log says `refused a request for host "..."`. The page names the host it refused and the config line to add.
 
-The server only answers host names that can't be used for a DNS-rebinding attack (see
-[SECURITY.md](SECURITY.md#lan-only-no-login)): IP addresses, `localhost`, single-label names, `.lan`/`.local`/
-`.home.arpa`/`.internal` names, the host of `publicUrl`, and the names in `allowedHosts`. Add the name you use, e.g.
-for a public domain on your proxy or a Tailscale name:
+Once `publicUrl` or `allowedHosts` is set, the server only answers host names that can't be used for a DNS-rebinding
+attack (see [SECURITY.md](SECURITY.md#lan-only-no-login)): IP addresses, `localhost`, single-label names,
+`.lan`/`.local`/`.home.arpa`/`.internal` names, the host of `publicUrl`, and the names in `allowedHosts`. (With
+neither set, every name is accepted, and the doctor warns about it.) Add the name you use, e.g. a second name on your
+proxy or a Tailscale name, with `pve1-dash-config` **(CT)**:
 
 ```yaml
-publicUrl: https://dash.example.com          # usually enough when the proxy passes the Host header on
-allowedHosts: ["dash.example.com", "*.tail1234.ts.net"]
+publicUrl: https://dash.example.com          # usually enough: the proxy passes the Host header on
+allowedHosts: ["dash2.example.com", "*.tail1234.ts.net"]   # host names only; a pasted URL is reduced to its host
 ```
 
-Then `systemctl restart pve1-dash`.
+Or set `publicUrl` from the host, keeping the rest of the config: re-run the installer with
+`PVE1_DASH_PUBLIC_URL=https://dash.example.com` in front of the command.
+
+---
+
+## ⛔ Forbidden (HTTP 403)
+
+**You see:** HTTP 403 for every page, through the proxy or directly. The dashboard only accepts connections from the
+addresses in `listen.allowedSources` (the installer suggests your LAN, e.g. `10.10.10.0/24`). It checks the address
+the connection really comes from, never `X-Forwarded-For`; loopback and `/healthz` always work.
+
+**Step 1.** Through the reverse proxy, the connection comes from the **proxy**, so the proxy's address must be in the
+list. The 403 page names the address it refused; the log too **(CT)**: `journalctl -u pve1-dash -n 50 | grep 'refused a connection'`.
+
+**Step 2.** Add it (or its network) with `pve1-dash-config` **(CT)**:
+
+```yaml
+listen:
+  allowedSources: ["10.10.10.0/24", "10.20.0.5"]     # [] = everyone
+```
+
+Or from the host: re-run the installer with `PVE1_DASH_ALLOWED_SOURCES="10.10.10.0/24 10.20.0.5"` (or `any`).
+
+---
+
+## 📝 A config mistake ("config INVALID", or "running with the last good configuration")
+
+**You see:** the dashboard doesn't start after you edited `config.yaml` by hand, or it starts but the log and
+Settings → Data sources (the `config` entry) say it is running with the last good configuration.
+
+After every successful start the dashboard keeps a copy of the config as `/var/lib/pve1-dash/config.good.yaml`. When
+`config.yaml` later can't be read or has a mistake, it starts with that copy, so the dashboard stays up, and tells you
+which file and line is wrong.
+
+**Step 1.** See the mistake **(CT)**: `pve1-dash-config --check` (file, line and what is wrong), or run the doctor.
+
+**Step 2.** Fix it with `pve1-dash-config` **(CT)**: it only saves a copy that passes the same check, then restarts the
+dashboard. A YAML indentation slip (e.g. one space too few in front of `- name:`) is the usual cause; every option
+with its correct indentation is in `/opt/pve1-dash/deploy/config.example.yaml`.
 
 ---
 
@@ -468,6 +526,15 @@ subscription, first enable the `pve-no-subscription` repository (node → Update
 answers 401 without a subscription), then `apt update && apt full-upgrade`. **Step 2:** or run the installer with
 `PVE1_DASH_DEBIAN=12`, which works the same for pve1-dash.
 
+**The install stopped half-way because the shell closed** (the web UI's Shell panel was closed or replaced by a click
+in the tree) — run the same command again; it finds the container and continues. Next time use SSH, or open the
+Shell in its own window (the **>_ Shell** button's arrow → xterm.js).
+
+**The dashboard stops answering through the proxy (502) after a reboot** — the container got another address by
+DHCP, and the proxy still forwards to the old one. The install summary printed the container's MAC: reserve the
+address for it in your router, or make it static: re-run the installer with
+`PVE1_DASH_IP=<address>/24 PVE1_DASH_GATEWAY=<router>` (applied in place, the MAC stays).
+
 **"got no IPv4 address or DNS within 3 minutes"** — **Step 1:** `pct exec <ctid> -- ip -4 addr show eth0` **(host)**.
 No address: DHCP on that bridge/VLAN isn't answering. Re-run the installer with a static address,
 `PVE1_DASH_IP=192.168.1.60/24 PVE1_DASH_GATEWAY=192.168.1.1` (and `PVE1_DASH_BRIDGE=...` / `PVE1_DASH_VLAN=...` if those
@@ -483,9 +550,13 @@ re-run with `PVE1_DASH_BRIDGE=<existing bridge>` (applied to the existing contai
 (`pct destroy <ctid>`) and start over.
 
 **"... is not pve1-dash" / "could not download package.json" / "is not a branch or tag"** at the start — the ref
-doesn't hold pve1-dash. Until pve1-dash is merged into `main`, `main` still has the old Tiny Ecowitt app: install with
-`PVE1_DASH_REF=claude/homelab-dashboard-pve1-dizt16` and the installer URL of that branch (README.md). For a single
+doesn't hold pve1-dash (or doesn't exist). Leave `PVE1_DASH_REF` out to install `main`, or give a tag. For a single
 commit, give its full 40-character id.
+
+**"container ... follows claude/homelab-dashboard-pve1-dizt16"** on a re-run — the container was installed from the
+branch pve1-dash was developed on, before it was merged into `main`. Answer yes (or use `--yes`) to switch it to
+`main`. Inside the container, `pve1-dash-update` warns about the same thing; `pve1-dash-update --ref main` switches,
+and if that branch has been deleted it switches to `main` by itself.
 
 **"container ... was installed from <repository>"** on a re-run — the container records a repository other than the
 default (e.g. your fork). Answer yes to keep it, or with `--yes` pass `PVE1_DASH_REPO=<that repository>` (or the
@@ -525,9 +596,15 @@ on a known-good version, re-run with `PVE1_DASH_REF=<tag>`.
 `/etc/pve1-dash/env`. If you bound `listen.host` to an address the container doesn't have, fix it there.
 
 **An update failed** — `pve1-dash-update` restores the previous version automatically when the new one doesn't come up;
-the failed build stays in `/opt/pve1-dash.failed` for a look. Run it again later, or pin a known-good tag with
-`--ref`. A failed Node.js update (download, checksum, unpack, e.g. a full disk) never touches the working Node.js; the
-update says "keeping v24.x.y" and goes on.
+the failed build stays in `/opt/pve1-dash.failed` for a look (the next update removes it). Run it again later, or pin
+a known-good tag with `--ref`. A failed Node.js update (download, checksum, unpack, e.g. a full disk) never touches the
+working Node.js; the update says "keeping v24.x.y" and goes on.
+
+**"only N MiB free"** at the start of an update — the build needs about 1 GiB next to the running version. Grow the
+container's disk **(host)**: `pct resize <ctid> rootfs +2G` (it takes effect immediately), then run the update again.
+
+**"... is no longer a branch or tag"** from `pve1-dash-update` — the branch recorded in `/etc/pve1-dash/install.env`
+was deleted. Run `pve1-dash-update --ref main` (or a tag); the new ref is recorded once it runs.
 
 **`uninstall.sh --yes` changed nothing** (older versions) — they stopped at "Continue?". Current versions go ahead with
 `--yes`; `PVE1_DASH_CONFIRM=no` still stops them. The uninstaller removes one dashboard (`--ctid N` picks which) and

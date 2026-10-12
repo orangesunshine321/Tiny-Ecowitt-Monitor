@@ -1,7 +1,8 @@
 # pve1-dash configuration: every option, with its default value and examples.
 #
 # The installer writes a short /etc/pve1-dash/config.yaml with only what it needs; copy anything from here into that
-# file and restart:  systemctl restart pve1-dash   (problems show up in: journalctl -u pve1-dash -n 50)
+# file with  pve1-dash-config  in the container: it checks the file (with line numbers) before saving it, then restarts
+# the dashboard. Problems show up in  pve1-dash-doctor  and  journalctl -u pve1-dash -n 50.
 # Another location can be used with PVE1_DASH_CONFIG=/path/to/config.yaml.
 #
 # Lines without a comment marker show the default value unless the comment says "example". Options you leave out
@@ -19,15 +20,22 @@ title: pve1
 listen:
   host: 0.0.0.0
   port: 8080
+  # Who may connect at all: IP addresses or CIDRs, checked against the TCP peer address (never X-Forwarded-For, which
+  # anyone can send). Others get HTTP 403. Loopback (the doctor, the update tool) is always allowed and /healthz stays
+  # open for monitors. Behind a reverse proxy, the PROXY's address must be in the list: that is who connects. The
+  # installer offers the Proxmox host's network, e.g. ["10.10.10.0/24"]. Default: [] = everyone.
+  allowedSources: []
 
-# Example. Public HTTPS URL of the dashboard behind your reverse proxy. Needed for notification links (Web Push
-# requires absolute URLs) and for the guest setup command. No default.
+# Example. Public HTTPS URL of the dashboard behind your reverse proxy, e.g. https://dash.example.com. Needed for
+# notification links (Web Push requires absolute URLs) and for the guest setup command. A trailing slash is fine.
+# Set it as soon as you know the name, even before the proxy exists. No default.
 publicUrl: https://dash.home.lan
 
-# Extra host names (as typed in the browser, without port) the dashboard answers to. Requests for other names are
-# refused (HTTP 421), which blocks DNS-rebinding attacks from web pages. Always allowed: IP addresses, localhost,
-# single-label names, .lan/.local/.home.arpa/.internal names and the host of publicUrl. Add your proxy's site name
-# here if it is not publicUrl's host, e.g. ["dash.example.com"].
+# Extra host names (as typed in the browser, without port) the dashboard answers to. Once publicUrl or this list is
+# set, requests for other names are refused (HTTP 421), which blocks DNS-rebinding attacks from web pages. Always
+# allowed: IP addresses, localhost, single-label names, .lan/.local/.home.arpa/.internal names and the host of
+# publicUrl. With neither set, every name is accepted (the log and pve1-dash-doctor warn about it). Add a second
+# proxy name here, e.g. ["dash.example.com"]; a pasted URL is reduced to its host name.
 allowedHosts: []
 
 # IANA time zone for times in the dashboard and in notifications, e.g. "Europe/Berlin". Default: the TZ environment
@@ -154,12 +162,15 @@ services:
 
   # Docker containers with a published TCP port become tiles automatically.
   autoDiscoverDocker: true
-  # Example. Discovered containers to leave out: a container name, a compose service name, or "docker-<vmid>-<name>".
-  # Default: none.
+  # Well-known apps listening inside guests (Pi-hole, Home Assistant, Jellyfin, UniFi, Proxmox Backup Server, ...)
+  # become tiles automatically, from the inventory's listening ports and systemd units. Databases and SSH never do.
+  autoDiscoverPorts: true
+  # Example. Discovered entries to leave out: a container name, a compose service name, an app name, or the
+  # generated id ("docker-<vmid>-<name>", "port-<vmid>-<app>"). Default: none.
   hide:
     - watchtower
     - docker-102-portainer_agent
-  # Example. Adjust discovered containers, keyed by container name. Each field is optional:
+  # Example. Adjust discovered entries, keyed by container name, app name or generated id. Each field is optional:
   # name, icon, group, url (what the tile opens and checks), alert. Default: none.
   overrides:
     jellyfin:
@@ -179,6 +190,11 @@ services:
   slowMs: 1500
   # Consecutive failed checks before a service counts as down.
   afterFailures: 2
+  # Networks to prefer when a guest has several addresses (links and checks use the chosen one), e.g.
+  # ["10.10.10.0/24"]. Default: [] = the /24 of the Proxmox host's address first, then any private address.
+  preferSubnets: []
+  # Tiles warn when an https service's certificate expires within this many days.
+  certWarnDays: 14
 
 # The split-flap departure board (/board).
 board:
@@ -204,6 +220,10 @@ alerts:
     guestStopped:
       enabled: true
       watch: all
+      # How long it must stay stopped before it alerts (a reboot or a backup in stop mode stays quiet).
+      afterSeconds: 180
+      # A stop/shutdown/reboot task for that guest (you stopped it) means no push, only a quiet entry.
+      ignoreDeliberate: true
     # A service from the launcher went down (only those with alert: true).
     serviceDown:
       enabled: true
@@ -212,10 +232,12 @@ alerts:
       enabled: true
     backupFailed:
       enabled: true
-    # A guest has no backup newer than this many days.
+    # A guest has no backup newer than this many days. When backup jobs cover it, the limit is the longest job
+    # interval plus graceDays if that is longer (a weekly job: 7 + 1 days). A new guest gets one full period first.
     backupStale:
       enabled: true
       days: 7
+      graceDays: 1
     storageUsage:
       enabled: true
       warnPercent: 85
@@ -226,6 +248,21 @@ alerts:
       wearWarnPercent: 80
     zfsDegraded:
       enabled: true
+    # A guest file system (container root disk, or what the inventory reads inside guests) fills up, in percent.
+    guestDisk:
+      enabled: true
+      warnPercent: 85
+      critPercent: 95
+    # The Proxmox certificate, or an https service's certificate, expires within this many days.
+    certExpiry:
+      enabled: true
+      days: 14
+    # CPU or disk temperature above these values, in °C, read with lm-sensors on the host (the installer offers it).
+    # A drive that reports a higher warning limit of its own (NVMe) uses that one.
+    temperature:
+      enabled: true
+      cpuWarnC: 85
+      diskWarnC: 55
     # Off by default: a homelab almost always has some update pending.
     updatesAvailable:
       enabled: false
