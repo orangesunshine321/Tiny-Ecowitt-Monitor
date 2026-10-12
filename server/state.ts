@@ -1,5 +1,8 @@
 import { EventEmitter } from 'node:events';
-import type { AlertEvent, CollectorStatus, Snapshot, SnapshotKey, SnapshotMeta } from '../shared/types.js';
+import type { AlertEvent, CollectorStatus, Snapshot, SnapshotKey, SnapshotMeta, StreamEvent } from '../shared/types.js';
+
+/** The payload of a 'history' stream event (new samples only). */
+export type HistoryTick = Omit<Extract<StreamEvent, { type: 'history' }>, 'type'>;
 
 /**
  * Central in-memory state. Collectors write whole sections with `set()`; the HTTP layer streams a full snapshot on
@@ -8,6 +11,7 @@ import type { AlertEvent, CollectorStatus, Snapshot, SnapshotKey, SnapshotMeta }
  * Events:
  *  - 'patch'  (key: SnapshotKey, value)   a section changed
  *  - 'alert'  (event: AlertEvent)         an alert fired or resolved (for live in-app toasts)
+ *  - 'history' (tick: HistoryTick)        new history samples (node/guests/services) for the live stream
  */
 export class Store extends EventEmitter {
   private snap: Snapshot;
@@ -73,6 +77,14 @@ export class Store extends EventEmitter {
   /** Merge fields into meta (e.g. vapidPublicKey once push is initialised). */
   patchMeta(partial: Partial<SnapshotMeta>): void {
     this.set('meta', { ...this.snap.meta, ...partial });
+  }
+
+  /**
+   * Append-only history samples for the live stream (see StreamEvent 'history'). Collectors call this with the NEW
+   * samples of a tick; the SSE hub forwards them so patches don't have to resend whole history rings.
+   */
+  emitHistory(h: HistoryTick): void {
+    this.emit('history', h);
   }
 
   emitAlert(event: AlertEvent): void {
