@@ -181,6 +181,12 @@ services:
     sonarr:
       group: Media
       alert: false
+    # Overrides may also set how a discovered entry is checked (same forms as items[].check), the accepted HTTP
+    # statuses and whether a self-signed certificate is fine:
+    # pihole:
+    #   check: http://10.10.10.2/admin/
+    #   expectStatus: [200, 302]
+    #   insecureTls: false
 
   # Seconds between health checks.
   checkInterval: 30

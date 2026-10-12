@@ -2,6 +2,7 @@
  * SSH inventory diagnostics with a fake CommandRunner: helper OK / outdated / denied, host key mismatch, auth failure,
  * a key authorized without the forced command, timeouts, key files and the host-key pin, direct guests.
  */
+import { HELPER_PROTOCOL_VERSION } from '../server/inventory/innerScript.js';
 import { generateKeyPairSync } from 'node:crypto';
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -129,7 +130,7 @@ describe('ssh diagnostics', () => {
   });
 
   it('missing key and unpinned host → ssh.keys fail', async () => {
-    const c = await run(fake(() => ({ stdout: 'pve1-dash-helper 1\n', stderr: '', code: 0 })), {}, cfg({ privateKey: join(dir, 'nope'), host: { address: '10.10.10.9' } }));
+    const c = await run(fake(() => ({ stdout: `pve1-dash-helper ${HELPER_PROTOCOL_VERSION}\n`, stderr: '', code: 0 })), {}, cfg({ privateKey: join(dir, 'nope'), host: { address: '10.10.10.9' } }));
     expect(c['ssh.keys']?.status).toBe('fail');
     expect(c['ssh.keys']?.detail).toContain('does not exist');
     expect(c['ssh.keys']?.detail).toContain('has no key for 10.10.10.9');
@@ -137,7 +138,7 @@ describe('ssh diagnostics', () => {
 
   it('direct guests: failures listed; pinnedGuestsOnly never contacts unpinned guests', async () => {
     const config = cfg({ guests: [{ vmid: 108, address: '10.10.10.31' }, { vmid: 109, address: '10.10.10.32' }] });
-    const runner = fake((t) => (t.address === '10.10.10.31' ? { stdout: 'pve1-dash-guest-inventory 1\n', stderr: '', code: 0 } : t.address === '10.10.10.2' ? { stdout: 'pve1-dash-helper 1\n', stderr: '', code: 0 } : new Error('ssh 10.10.10.32: connection refused (is sshd running?)')));
+    const runner = fake((t) => (t.address === '10.10.10.31' ? { stdout: 'pve1-dash-guest-inventory 1\n', stderr: '', code: 0 } : t.address === '10.10.10.2' ? { stdout: `pve1-dash-helper ${HELPER_PROTOCOL_VERSION}\n`, stderr: '', code: 0 } : new Error('ssh 10.10.10.32: connection refused (is sshd running?)')));
     let c = await run(runner, {}, config);
     expect(c['ssh.guests']?.status).toBe('warn');
     expect(c['ssh.guests']?.detail).toContain('VM 109');

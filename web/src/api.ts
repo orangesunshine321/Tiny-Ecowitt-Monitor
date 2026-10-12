@@ -230,8 +230,9 @@ export function postPushTest(id: string, opts?: RequestOptions): Promise<{ ok: b
 }
 
 /** GET /api/diagnostics — the read-only self-test (same checks as `pve1-dash-doctor`). Can take a few seconds. */
-export function getDiagnostics(opts?: RequestOptions): Promise<DiagnosticsReport> {
-  return request('GET', '/api/diagnostics', undefined, { timeoutMs: 30_000, ...opts });
+export function getDiagnostics(opts?: RequestOptions & { fresh?: boolean }): Promise<DiagnosticsReport> {
+  const { fresh, ...rest } = opts ?? {};
+  return request('GET', fresh ? '/api/diagnostics?fresh=1' : '/api/diagnostics', undefined, { timeoutMs: 30_000, ...rest });
 }
 
 /**

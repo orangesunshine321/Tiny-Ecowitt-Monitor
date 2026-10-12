@@ -144,7 +144,7 @@ async function main(): Promise<void> {
   const health = createHealthService(ctx, checker ? { checker } : {});
   const alerts = createAlertService(ctx);
   const diagnostics = async (): Promise<DiagnosticsReport> => {
-    const report = await runDiagnostics({ config, appVersion, store, runner, live: true });
+    const report = await runDiagnostics({ config, appVersion, store, runner, live: true, configPath: loaded.path });
     return { ...report, checks: [configCheck(loaded), ...report.checks.filter((c) => c.id !== 'config.file')] };
   };
   const http = await createHttpServer(

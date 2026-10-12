@@ -79,7 +79,9 @@ export function DiagnosticsSection() {
     io.observe(rootRef.current);
     return () => io.disconnect();
   }, [wanted]);
-  const query = useAsync((signal) => getDiagnostics({ signal }), [], { enabled: wanted });
+  // "Run Again" bumps runs: later runs bypass the server's 15 s report cache (?fresh=1)
+  const [runs, setRuns] = useState(0);
+  const query = useAsync((signal) => getDiagnostics({ signal, fresh: runs > 0 }), [runs], { enabled: wanted });
   const report = query.data;
 
   // content above (devices, data sources) can grow after the first scroll to #diagnostics: land on it again once
@@ -166,7 +168,7 @@ export function DiagnosticsSection() {
               size="small"
               icon={<RotateCw size={14} strokeWidth={2.3} />}
               loading={running}
-              onClick={() => (wanted ? query.reload() : setWanted(true))}
+              onClick={() => (wanted ? setRuns((n) => n + 1) : setWanted(true))}
             >
               {report ? 'Run Again' : 'Run'}
             </Button>

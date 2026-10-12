@@ -253,7 +253,20 @@ const ServicesSchema = z
     hide: z.array(z.string()).default([]),
     /** optional overrides for discovered containers, keyed by container name */
     overrides: z
-      .record(z.string(), z.object({ name: z.string().optional(), icon: z.string().optional(), group: z.string().optional(), url: z.string().optional(), alert: z.boolean().optional() }))
+      .record(
+        z.string(),
+        z.object({
+          name: z.string().optional(),
+          icon: z.string().optional(),
+          group: z.string().optional(),
+          url: z.string().optional(),
+          alert: z.boolean().optional(),
+          /** same forms as services.items[].check: "http", "tcp://host:port", "https://…", "none" */
+          check: z.string().optional(),
+          expectStatus: z.array(z.number().int()).optional(),
+          insecureTls: z.boolean().optional(),
+        }),
+      )
       .default({}),
     /**
      * CIDRs to prefer when picking a guest's address for links and checks. Empty: the /24 of the Proxmox host's

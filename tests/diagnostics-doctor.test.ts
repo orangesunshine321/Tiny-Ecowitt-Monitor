@@ -2,6 +2,7 @@
  * runDiagnostics orchestration, the local checks (config, services, push, system, collectors), the text report, and
  * the pve1-dash-doctor CLI: standalone, merged with a live server, service down, broken config. Ports 8656-8658.
  */
+import { HELPER_PROTOCOL_VERSION } from '../server/inventory/innerScript.js';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -153,7 +154,7 @@ describe('runDiagnostics', () => {
       get: () => [{ vmid: 101 }],
       collectorStatus: () => [{ name: 'status', intervalSec: 5, lastSuccess: Date.now() }],
     } as unknown as Store;
-    const runner: CommandRunner = { run: async () => ({ stdout: 'pve1-dash-helper 1\n', stderr: '', code: 0 }), close() {} };
+    const runner: CommandRunner = { run: async () => ({ stdout: `pve1-dash-helper ${HELPER_PROTOCOL_VERSION}\n`, stderr: '', code: 0 }), close() {} };
     const config = base({ proxmox: { url: mock.url, tokenId: TOKEN, tokenSecret: SECRET }, inventory: { enabled: true, host: { address: '10.10.10.2' } } });
     const r = await runDiagnostics({ config, appVersion: '1.2.3', store, runner, live: true, network: false, uptimeMs: 600_000 });
     expect(r.appVersion).toBe('1.2.3');

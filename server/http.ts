@@ -73,6 +73,8 @@ export const RRD_MAX_POINTS_MAX = 2000;
 
 /** GET /api/diagnostics: results are shared for this long, and one run may take at most this long. */
 const DIAGNOSTICS_TTL_MS = 15_000;
+/** A fresh run (?fresh=1, the Diagnostics "Run Again" button) reuses a report younger than this. */
+const DIAGNOSTICS_FRESH_MIN_MS = 3_000;
 const DIAGNOSTICS_TIMEOUT_MS = 30_000;
 
 /** How long POST /api/inventory/refresh waits for fresh data before answering (results also arrive over SSE). */
@@ -1302,10 +1304,12 @@ export async function createHttpServer(ctx: AppContext, deps: HttpServerDeps, op
   const diagTimeoutMs = options.diagnosticsTimeoutMs ?? DIAGNOSTICS_TIMEOUT_MS;
   let diagCached: { at: number; report: DiagnosticsReport } | undefined;
   let diagRunning: Promise<DiagnosticsReport> | undefined;
-  const diagnosticsReport = (): Promise<DiagnosticsReport> => {
+  const diagnosticsReport = (fresh = false): Promise<DiagnosticsReport> => {
     const run = deps.diagnostics;
     if (!run) return Promise.reject(new HttpError(404, 'diagnostics are not available'));
-    if (diagCached && Date.now() - diagCached.at < DIAGNOSTICS_TTL_MS) return Promise.resolve(diagCached.report);
+    // "Run Again" asks for a fresh run; still at most one fresh run per DIAGNOSTICS_FRESH_MIN_MS (no login on this API)
+    const maxAge = fresh ? DIAGNOSTICS_FRESH_MIN_MS : DIAGNOSTICS_TTL_MS;
+    if (diagCached && Date.now() - diagCached.at < maxAge) return Promise.resolve(diagCached.report);
     // concurrent callers share one run; a slow run keeps going (and is cached) even when a caller gave up waiting
     diagRunning ??= Promise.resolve()
       .then(run)
@@ -1408,7 +1412,8 @@ export async function createHttpServer(ctx: AppContext, deps: HttpServerDeps, op
   };
 
   app.get('/api/diagnostics', async (request) => {
-    const report = await diagnosticsReport();
+    const fresh = (request.query as Record<string, unknown> | undefined)?.fresh === '1';
+    const report = await diagnosticsReport(fresh);
     return { ...report, checks: [...report.checks, ...httpChecks(request)] } satisfies DiagnosticsReport;
   });
 
