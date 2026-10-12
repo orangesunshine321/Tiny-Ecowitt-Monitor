@@ -40,6 +40,7 @@ import {
   taskLog,
   taskStatus,
   zfsDetail,
+  lvmThinList,
   zfsList,
 } from './pveStorage.js';
 
@@ -220,6 +221,7 @@ export function createPveRoutes(sim: DemoSim): Route[] {
   add('nodes/:node/disks/list', (p, q) => (node(p), disksList(q)), 450);
   add('nodes/:node/disks/smart', (p, q, now) => (node(p), diskSmart(sim, q, now)), 180);
   add('nodes/:node/disks/zfs', (p) => (node(p), zfsList()), 40);
+  add('nodes/:node/disks/lvmthin', (p) => (node(p), lvmThinList()), 30);
   add('nodes/:node/disks/zfs/:name', (p, _q, now) => (node(p), zfsDetail(sim, p.name!, now)), 40);
 
   // ── tasks
@@ -249,13 +251,20 @@ function matchRoute(routes: Route[], segments: string[]): { route: Route; params
 }
 
 /** HTTP reason phrases must be a single printable line. */
+/** pveproxy's idle timeout for keep-alive connections (`$self->{timeout} = 5`), never sent to the client. */
+export const PVE_IDLE_TIMEOUT_MS = 5_000;
+
 function reason(text: string): string {
   return text.split('\n')[0]!.replace(/[^\x20-\x7e]/g, '?').slice(0, 200) || 'Error';
 }
 
 function send(res: ServerResponse, status: number, body: unknown, reasonPhrase?: string): void {
   const json = JSON.stringify(body);
+  // Like pveproxy: "Connection: Keep-Alive" without a "Keep-Alive: timeout=" hint (setting the header ourselves stops
+  // Node from adding one), so clients must not keep idle sockets longer than the server's 5 s (see PVE_IDLE_TIMEOUT_MS).
+  const keepAlive = !/\bclose\b/i.test(res.req?.headers.connection ?? '');
   res.writeHead(status, reason(reasonPhrase ?? STATUS_CODES[status] ?? 'Unknown'), {
+    ...(keepAlive ? { Connection: 'Keep-Alive' } : {}),
     'Content-Type': 'application/json;charset=UTF-8',
     'Content-Length': Buffer.byteLength(json),
     'Cache-Control': 'max-age=0',
@@ -330,7 +339,8 @@ export async function startMockProxmox(opts: MockProxmoxOptions = {}): Promise<M
   };
 
   const server = createServer(handle);
-  server.keepAliveTimeout = 10_000;
+  // pveproxy (pve-http-server AnyEvent.pm) closes idle keep-alive connections after 5 s without announcing it.
+  server.keepAliveTimeout = PVE_IDLE_TIMEOUT_MS;
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(opts.port ?? 0, opts.host ?? '127.0.0.1', () => {

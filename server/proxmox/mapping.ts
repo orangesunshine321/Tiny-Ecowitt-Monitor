@@ -19,10 +19,10 @@ import type {
   Pressure,
   RrdPoint,
 } from '../../shared/types.js';
+import { isUnusableAddress, isVirtualInterface } from '../util/ipfilter.js';
 import {
   bool,
   isRecord,
-  isUninterestingAddress,
   num,
   numOr,
   parseCidr,
@@ -121,6 +121,10 @@ export function mapNodeStatus(nodeName: string, status: unknown, resource: Recor
   // pmxcfs drops pvestatd data older than 5 minutes; the node then reads "unknown" (§5.4).
   if (resource && str(resource.status) === 'unknown') {
     base.error = 'pvestatd data expired: Proxmox reports the node status as "unknown" (is pvestatd running?)';
+    base.errorKind = 'proxmox';
+    base.errorHint =
+      'pvestatd on the Proxmox host stopped reporting: check  systemctl status pvestatd  there and restart it (systemctl restart pvestatd). ' +
+      'Run pve1-dash-doctor in the dashboard container for a full check.';
   }
   return base;
 }
@@ -404,8 +408,8 @@ export function mapQemuConfig(raw: unknown): ParsedGuestConfig {
   if (memMiB !== undefined) config.memoryBytes = memMiB * MIB;
   const balloon = num(cfg.balloon);
   if (balloon !== undefined) config.balloonBytes = balloon * MIB;
-  const onboot = bool(cfg.onboot);
-  if (onboot !== undefined) config.onboot = onboot;
+  // PVE omits keys that equal their schema default: no `onboot` line means "do not start at boot".
+  config.onboot = bool(cfg.onboot) ?? false;
   const arch = str(cfg.arch);
   if (arch) config.arch = arch;
   const bios = str(cfg.bios);
@@ -455,10 +459,10 @@ export function mapLxcConfig(raw: unknown): ParsedGuestConfig {
   if (mem !== undefined) config.memoryBytes = mem * MIB;
   const swap = num(cfg.swap);
   if (swap !== undefined) config.swapBytes = swap * MIB;
-  const onboot = bool(cfg.onboot);
-  if (onboot !== undefined) config.onboot = onboot;
-  const unpriv = bool(cfg.unprivileged);
-  if (unpriv !== undefined) config.unprivileged = unpriv;
+  // Absent keys mean the schema default (pve-api-guests.md §3.4): onboot 0, unprivileged 0, i.e. a PRIVILEGED container
+  // (what PVE 8 creates unless "Unprivileged container" is ticked), which is worth showing as such.
+  config.onboot = bool(cfg.onboot) ?? false;
+  config.unprivileged = bool(cfg.unprivileged) ?? false;
   const arch = str(cfg.arch);
   if (arch) config.arch = arch;
   const ostype = str(cfg.ostype);
@@ -491,11 +495,10 @@ export function mapLxcConfig(raw: unknown): ParsedGuestConfig {
 
 // ─────────────────────────────────────────────────────────────── IP addresses
 
-const SKIP_IFACE = /^(lo|docker\d*|br-.*|veth.*|virbr\d*|cni\d*|flannel.*|hassio|Loopback Pseudo-Interface.*)$/i;
 
 function pushIp(out: GuestIp[], iface: string | undefined, addr: unknown, prefix: unknown, source: GuestIp['source']) {
   const parsed = parseCidr(addr);
-  if (!parsed || isUninterestingAddress(parsed.address, parsed.family)) return;
+  if (!parsed || isUnusableAddress(parsed.address)) return;
   const ip: GuestIp = { address: parsed.address, family: parsed.family, source };
   if (iface) ip.iface = iface;
   const p = parsed.prefix ?? num(prefix);
@@ -512,7 +515,7 @@ export function mapLxcInterfaces(raw: unknown): GuestIp[] {
   const out: GuestIp[] = [];
   for (const itf of records(raw)) {
     const name = str(itf.name);
-    if (!name || SKIP_IFACE.test(name)) continue;
+    if (!name || isVirtualInterface(name)) continue;
     const list = records(itf['ip-addresses']);
     if (list.length) {
       for (const a of list) pushIp(out, name, a['ip-address'], a.prefix, 'lxc-interfaces');
@@ -530,7 +533,7 @@ export function mapAgentInterfaces(raw: unknown): GuestIp[] {
   const out: GuestIp[] = [];
   for (const itf of records(result)) {
     const name = str(itf.name);
-    if (!name || SKIP_IFACE.test(name)) continue;
+    if (!name || isVirtualInterface(name)) continue;
     for (const a of records(itf['ip-addresses'])) pushIp(out, name, a['ip-address'], a.prefix, 'guest-agent');
   }
   return out;
@@ -567,7 +570,7 @@ export function mergeIps(o: { running: boolean; live?: GuestIp[]; inventory?: Gu
   const add = (list: GuestIp[] | undefined, source?: GuestIp['source']) => {
     for (const ip of list ?? []) {
       const key = ip.address.toLowerCase();
-      if (seen.has(key) || isUninterestingAddress(ip.address, ip.family)) continue;
+      if (seen.has(key) || isUnusableAddress(ip.address)) continue;
       seen.add(key);
       out.push(source ? { ...ip, source } : ip);
     }
@@ -801,4 +804,63 @@ export function mapRrd(raw: unknown, kind: 'node' | GuestType): RrdPoint[] {
   const points = [...byTime.values()].sort((a, b) => a.time - b.time);
   while (points.length && Object.keys(points[points.length - 1]!).length === 1) points.pop();
   return points;
+}
+
+/** Point budget of getRrd: the default, and the range the HTTP layer accepts for ?maxPoints. */
+export const RRD_DEFAULT_MAX_POINTS = 400;
+export const RRD_MIN_POINTS = 50;
+export const RRD_MAX_POINTS = 2000;
+
+/**
+ * Reduce an RRD series to at most `maxPoints` points for plotting (PVE 9 answers 1440 points for day/month/year, far more
+ * than a chart is wide). The time range is cut into maxPoints/2 equal buckets. A bucket with one sample keeps it; a
+ * bucket with several becomes two points, at its first and its last sample time, carrying per field the bucket's minimum
+ * and maximum in the order they occurred, so CPU and network peaks survive. Gaps survive as well: a field without any
+ * value in a bucket stays absent, and a bucket of empty (time-only) rows stays one time-only point. Plot by `time`:
+ * buckets are equal in time, not in sample count (PVE 9 series can mix resolutions after an 8 → 9 upgrade).
+ */
+export function downsampleRrd(points: RrdPoint[], maxPoints: number = RRD_DEFAULT_MAX_POINTS): RrdPoint[] {
+  const max = Math.max(2, Math.floor(maxPoints));
+  if (points.length <= max) return points;
+  const buckets = Math.floor(max / 2);
+  const first = points[0]!.time;
+  const span = points[points.length - 1]!.time - first;
+  if (!(span > 0)) return points.slice(-max);
+  const out: RrdPoint[] = [];
+  let i = 0;
+  for (let b = 0; b < buckets && i < points.length; b++) {
+    const end = b === buckets - 1 ? Infinity : first + (span * (b + 1)) / buckets;
+    const start = i;
+    while (i < points.length && points[i]!.time < end) i++;
+    if (i > start) emitBucket(points, start, i, out);
+  }
+  return out;
+}
+
+function emitBucket(points: RrdPoint[], start: number, end: number, out: RrdPoint[]): void {
+  if (end - start === 1) {
+    out.push(points[start]!);
+    return;
+  }
+  const a: RrdPoint = { time: points[start]!.time };
+  const z: RrdPoint = { time: points[end - 1]!.time };
+  const keys = new Set<RrdKey>();
+  for (let j = start; j < end; j++) for (const k of Object.keys(points[j]!)) if (k !== 'time') keys.add(k as RrdKey);
+  for (const k of keys) {
+    let minV = Infinity;
+    let maxV = -Infinity;
+    let minI = -1;
+    let maxI = -1;
+    for (let j = start; j < end; j++) {
+      const v = points[j]![k];
+      if (v === undefined) continue;
+      if (v < minV) [minV, minI] = [v, j];
+      if (v > maxV) [maxV, maxI] = [v, j];
+    }
+    if (minI < 0) continue;
+    a[k] = minI <= maxI ? minV : maxV;
+    z[k] = minI <= maxI ? maxV : minV;
+  }
+  out.push(a);
+  if (keys.size > 0) out.push(z); // a bucket of time-only rows stays a single gap marker
 }

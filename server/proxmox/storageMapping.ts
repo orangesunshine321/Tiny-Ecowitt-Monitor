@@ -8,6 +8,7 @@ import type {
   BackupJob,
   Guest,
   GuestType,
+  LvmThinPool,
   PhysicalDisk,
   SmartAttribute,
   SmartReport,
@@ -25,27 +26,86 @@ const DAY_MS = 86_400_000;
 
 // ─────────────────────────────────────────────────────────────── storage
 
-/** GET /nodes/{node}/storage. Inactive/disabled storages report total/used/avail = 0 and no used_fraction. */
-export function mapStorage(raw: unknown): StoragePool[] {
+/** This node's type=storage entries of a /cluster/resources answer (one entry per storage and node). */
+export function clusterStorageEntries(resources: unknown, node: string): Record<string, unknown>[] {
+  return records(resources).filter((r) => r.type === 'storage' && r.node === node && str(r.storage) !== undefined);
+}
+
+/**
+ * The Storage section from two sources (D23):
+ *  - `cluster`: the type=storage entries of /cluster/resources for this node. pvestatd refreshes them every 10 s and the
+ *    API serves them from memory, so they never block. Only enabled storages are listed. status "available" means
+ *    pvestatd could read the storage within the last 5 minutes (disk/maxdisk are then set); "unknown" means it could not.
+ *  - `node`: GET /nodes/{node}/storage, which activates every storage on the spot (NFS/CIFS/PBS checks can take 10 s
+ *    or more each when a NAS sleeps), so it is fetched less often and may be stale or missing. It adds `avail`, disabled
+ *    storages, and a fresher "inactive" verdict while /cluster/resources still shows the last values of a storage that
+ *    went away (pmxcfs keeps them for up to 5 minutes).
+ * Inactive storages report 0 sizes, as Proxmox itself does.
+ */
+export function mergeStorage(o: {
+  cluster: readonly Record<string, unknown>[];
+  node?: readonly Record<string, unknown>[];
+  /** the node listing is recent enough to trust its active/avail values */
+  nodeFresh: boolean;
+}): StoragePool[] {
+  const byId = (rows: readonly Record<string, unknown>[] | undefined) =>
+    new Map((rows ?? []).filter((r) => str(r.storage)).map((r) => [str(r.storage)!, r] as const));
+  const cluster = byId(o.cluster);
+  const node = byId(o.node);
+  const out: StoragePool[] = [];
+  for (const id of new Set([...cluster.keys(), ...node.keys()])) {
+    const c = cluster.get(id);
+    const n = node.get(id);
+    const fresh = o.nodeFresh ? n : undefined;
+    const clusterUp = c !== undefined && str(c.status) === 'available' && num(c.maxdisk) !== undefined;
+    let active: boolean;
+    let total = 0;
+    let used = 0;
+    let avail = 0;
+    if (clusterUp && !(fresh && bool(fresh.active) === false)) {
+      active = true;
+      total = numOr(c.maxdisk, 0);
+      used = numOr(c.disk, 0);
+      avail = fresh && bool(fresh.active) ? numOr(fresh.avail, Math.max(0, total - used)) : Math.max(0, total - used);
+    } else if (!clusterUp && fresh && bool(fresh.active)) {
+      // pvestatd has no data for it (yet), but the storage answered the node listing
+      active = true;
+      total = numOr(fresh.total, 0);
+      used = numOr(fresh.used, 0);
+      avail = numOr(fresh.avail, 0);
+    } else {
+      active = false;
+    }
+    out.push({
+      id,
+      type: str(c?.plugintype) ?? str(n?.type) ?? 'unknown',
+      content: splitComma(c?.content ?? n?.content).sort(),
+      active,
+      // /cluster/resources lists enabled storages only; a storage only the node listing knows is disabled (or not for this node)
+      enabled: c !== undefined ? true : (bool(n?.enabled) ?? false),
+      shared: bool(c?.shared) ?? bool(n?.shared) ?? false,
+      total,
+      used,
+      avail,
+      usedFraction: total > 0 ? round(used / total, 6) : 0,
+    });
+  }
+  return out.sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/** GET /nodes/{node}/disks/lvmthin (pve-api-storage.md §6): thin pools with data and metadata usage in bytes. */
+export function mapLvmThin(raw: unknown): LvmThinPool[] {
   return records(raw)
-    .filter((s) => str(s.storage))
-    .map((s): StoragePool => {
-      const total = numOr(s.total, 0);
-      const used = numOr(s.used, 0);
-      return {
-        id: str(s.storage)!,
-        type: str(s.type) ?? 'unknown',
-        content: splitComma(s.content).sort(),
-        active: bool(s.active) ?? false,
-        enabled: bool(s.enabled) ?? false,
-        shared: bool(s.shared) ?? false,
-        total,
-        used,
-        avail: numOr(s.avail, 0),
-        usedFraction: num(s.used_fraction) ?? (total > 0 ? round(used / total, 6) : 0),
-      };
+    .filter((p) => str(p.lv) && str(p.vg))
+    .map((p): LvmThinPool => {
+      const pool: LvmThinPool = { name: str(p.lv)!, vg: str(p.vg)!, size: numOr(p.lv_size, 0), used: numOr(p.used, 0) };
+      const metaSize = num(p.metadata_size);
+      if (metaSize !== undefined) pool.metadataSize = metaSize;
+      const metaUsed = num(p.metadata_used);
+      if (metaUsed !== undefined) pool.metadataUsed = metaUsed;
+      return pool;
     })
-    .sort((a, b) => a.id.localeCompare(b.id));
+    .sort((a, b) => `${a.vg}/${a.name}`.localeCompare(`${b.vg}/${b.name}`));
 }
 
 // ─────────────────────────────────────────────────────────────── ZFS
@@ -366,7 +426,8 @@ export function lastBackups(items: BackupItem[], guests: CoverageGuest[]): Map<n
 
 /**
  * Per-guest backup coverage. Templates are skipped (they are rarely backed up and would always read "stale").
- * `notInAnyJob` comes from /cluster/backup-info/not-backed-up (disabled jobs still count as covering).
+ * `notInAnyJob` comes from /cluster/backup-info/not-backed-up (disabled jobs still count as covering). A guest is stale
+ * when its newest backup is older than its threshold (`staleAfterDays`), or when it was never backed up.
  */
 export function computeCoverage(o: {
   guests: CoverageGuest[];
@@ -374,25 +435,34 @@ export function computeCoverage(o: {
   notBackedUp?: ReadonlySet<number>;
   staleDays: number;
   now: number;
+  /** per-guest stale threshold in days (from the schedules of the jobs covering it); default `staleDays` */
+  thresholds?: ReadonlyMap<number, number>;
+  /** newest failed backup attempt per guest (from vzdump task logs) */
+  failures?: ReadonlyMap<number, NonNullable<BackupCoverage['lastFailure']>>;
 }): BackupCoverage[] {
   const newest = lastBackups(o.items, o.guests);
   return o.guests
     .filter((g) => !g.template)
     .map((g): BackupCoverage => {
       const lb = newest.get(g.vmid);
+      const staleAfterDays = o.thresholds?.get(g.vmid) ?? o.staleDays;
       const c: BackupCoverage = {
         vmid: g.vmid,
         name: g.name,
         type: g.type,
         notInAnyJob: o.notBackedUp?.has(g.vmid) ?? false,
         stale: true,
+        staleAfterDays,
       };
       if (lb) {
         c.lastBackup = lb.time;
         c.lastBackupStorage = lb.storage;
         c.ageDays = round(Math.max(0, o.now - lb.time) / DAY_MS, 2);
-        c.stale = c.ageDays > o.staleDays;
+        c.stale = c.ageDays > staleAfterDays;
       }
+      // a failure only counts while no newer good backup exists
+      const failure = o.failures?.get(g.vmid);
+      if (failure && failure.time > (lb?.time ?? 0)) c.lastFailure = failure;
       return c;
     })
     .sort((a, b) => a.vmid - b.vmid);

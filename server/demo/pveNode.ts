@@ -221,6 +221,8 @@ export function aptVersions(): Obj[] {
     pkg('proxmox-kernel-helper', 'Function for various kernel maintenance tasks', '9.0.4'),
     pkg('proxmox-kernel-6.14', 'Latest Proxmox Kernel Image', '6.14.11-2', 'kernel'),
     pkg(`proxmox-kernel-${DEMO_NODE.kernel}-signed`, 'Proxmox Kernel Image (signed)', '6.14.11-2', 'kernel', 'amd64'),
+    // the previous kernel stays installed (proxmox-boot-tool keeps it as a fallback); older than the running one
+    pkg('proxmox-kernel-6.14.8-2-pve-signed', 'Proxmox Kernel Image (signed)', '6.14.8-2', 'kernel', 'amd64'),
     pkg('ceph-fuse', 'FUSE-based client for the Ceph distributed file system', '19.2.3-pve1', 'admin', 'amd64'),
     pkg('corosync', 'cluster engine daemon and utilities', '3.1.9-pve2', 'admin', 'amd64'),
     pkg('criu', 'checkpoint and restore in userspace', '4.1.1-1', 'admin', 'amd64'),

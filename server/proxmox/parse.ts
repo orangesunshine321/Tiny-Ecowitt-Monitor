@@ -149,13 +149,6 @@ export function parseCidr(v: unknown): ParsedAddress | undefined {
   return out;
 }
 
-/** Loopback, IPv6 link-local (fe80::/10), IPv4 link-local (169.254/16) and unspecified addresses are not useful to show. */
-export function isUninterestingAddress(address: string, family: 4 | 6): boolean {
-  const a = address.toLowerCase();
-  if (family === 4) return a.startsWith('127.') || a.startsWith('169.254.') || a === '0.0.0.0';
-  return a === '::1' || a === '::' || /^fe[89ab][0-9a-f]:/.test(a);
-}
-
 /** Round to `digits` decimals (keeps JSON small and stable for change detection). */
 export function round(n: number, digits = 4): number {
   const f = 10 ** digits;
