@@ -617,8 +617,11 @@ export type AlertKind =
   | 'disk_health'
   | 'zfs_degraded'
   | 'updates_available'
+  /** a filesystem inside a guest is filling up (LXC rootfs from PVE, any guest's mounts from the inventory) */
   | 'guest_disk'
+  /** the Proxmox node certificate or a service's (CA-signed) HTTPS certificate expires soon or has expired */
   | 'cert_expiry'
+  /** a host CPU or disk sensor stays above its limit */
   | 'temperature'
   | 'test';
 

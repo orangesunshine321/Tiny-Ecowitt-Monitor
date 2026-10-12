@@ -2,6 +2,9 @@
  * Alert engine: runs the rules, reconciles their conditions with the active alerts (fire / update / resolve), applies
  * the per-key notification cooldown and keeps the recent-history list. No timers or I/O here; the AlertService
  * (index.ts) schedules evaluations, persists `serialize()` and delivers the returned notifications.
+ *
+ * Acknowledging (snoozing) an active alert stops its pushes and takes it out of the device badges, until the snooze
+ * expires (a reminder is pushed then), its severity rises (pushed, snooze cleared) or it resolves (no recovery push).
  */
 import { randomUUID } from 'node:crypto';
 import type { AlertEvent, AlertKind, AlertSeverity, SnapshotKey } from '../../shared/types.js';
@@ -16,9 +19,12 @@ import {
   type RuleKind,
   type RuleMemory,
   type RulesConfig,
+  type StopInfo,
 } from './rules.js';
 
 export const RECENT_MAX = 200;
+/** Longest snooze: a year (longer means "until it resolves", which is `hours` omitted). */
+export const MAX_ACK_HOURS = 24 * 366;
 
 export interface ActiveAlert {
   event: AlertEvent;
@@ -26,6 +32,8 @@ export interface ActiveAlert {
   notified: boolean;
   /** highest severity pushed so far (escalations above it are pushed regardless of cooldown) */
   notifiedSeverity?: AlertSeverity;
+  /** shown in the app but never pushed (e.g. a guest shut down on purpose) */
+  quiet?: boolean;
 }
 
 export interface Notification {
@@ -40,6 +48,8 @@ export interface EvaluateInput {
   ready(key: SnapshotKey): boolean;
   /** IANA zone for clock times in alert texts (config.timezone); the process zone when omitted */
   timeZone?: string;
+  /** when this process started (rules' startup grace periods); the first evaluation's `now` when omitted */
+  startedAt?: number;
 }
 
 export interface EvaluateResult {
@@ -67,6 +77,8 @@ export interface AlertsFile {
   seenUpids: string[];
   tasksBaselined: boolean;
   backupIssues: BackupIssue[];
+  /** classified stops of guests still stopped: [vmid, info] */
+  stops?: [number, StopInfo][];
 }
 
 const KINDS: ReadonlySet<string> = new Set<AlertKind>([
@@ -104,6 +116,42 @@ function isAlertEvent(v: unknown): v is AlertEvent {
   );
 }
 
+/** A valid `acknowledged` value from untrusted JSON, or undefined. */
+function cleanAck(v: unknown): AlertEvent['acknowledged'] {
+  const a = v as Partial<NonNullable<AlertEvent['acknowledged']>> | null | undefined;
+  if (!a || typeof a !== 'object' || typeof a.at !== 'number' || !Number.isFinite(a.at)) return undefined;
+  if (a.until !== undefined && (typeof a.until !== 'number' || !Number.isFinite(a.until))) return undefined;
+  return a.until !== undefined ? { at: a.at, until: a.until } : { at: a.at };
+}
+
+function withAck<T extends AlertEvent>(e: T): T {
+  const out = { ...e };
+  const ack = cleanAck(out.acknowledged);
+  if (ack) out.acknowledged = ack;
+  else delete out.acknowledged;
+  return out;
+}
+
+function cleanStop(v: unknown): StopInfo | undefined {
+  const s = v as Partial<StopInfo> | null;
+  if (!s || (s.reason !== 'deliberate' && s.reason !== 'reboot') || typeof s.at !== 'number') return undefined;
+  const out: StopInfo = { reason: s.reason, at: s.at };
+  if (typeof s.by === 'string') out.by = s.by;
+  if (typeof s.type === 'string') out.type = s.type;
+  return out;
+}
+
+/** Error with an HTTP status (Fastify's default error handler uses `statusCode`). */
+export class AlertRequestError extends Error {
+  constructor(
+    message: string,
+    readonly statusCode: number,
+  ) {
+    super(message);
+    this.name = 'AlertRequestError';
+  }
+}
+
 function numberRecord(v: unknown): Map<string, number> {
   const out = new Map<string, number>();
   if (v && typeof v === 'object') for (const [k, n] of Object.entries(v)) if (typeof n === 'number' && Number.isFinite(n)) out.set(k, n);
@@ -128,6 +176,7 @@ export class AlertEngine {
   readonly mem: RuleMemory = emptyMemory();
   private readonly rules: readonly (readonly [RuleKind, Rule])[];
   private readonly newId: () => string;
+  private startedAt: number | undefined;
 
   constructor(private readonly opts: AlertEngineOptions) {
     this.rules = opts.rules ?? RULES;
@@ -136,6 +185,46 @@ export class AlertEngine {
 
   activeCount(): number {
     return this.active.size;
+  }
+
+  /** The active alert with this event id (or key). */
+  find(idOrKey: string): AlertEvent | undefined {
+    return this.findActive(idOrKey)?.event;
+  }
+
+  private findActive(idOrKey: string): ActiveAlert | undefined {
+    for (const a of this.active.values()) if (a.event.id === idOrKey) return a;
+    return this.active.get(idOrKey);
+  }
+
+  /**
+   * Snooze an active alert for `hours` (undefined: until it resolves). Returns the updated event, or undefined when no
+   * active alert has this id. Throws AlertRequestError(400) for an invalid duration.
+   */
+  acknowledge(idOrKey: string, hours: number | undefined, now: number): AlertEvent | undefined {
+    if (hours !== undefined && (typeof hours !== 'number' || !Number.isFinite(hours) || hours <= 0 || hours > MAX_ACK_HOURS)) {
+      throw new AlertRequestError(`hours must be a number above 0 and at most ${MAX_ACK_HOURS} (omit it to snooze until resolved)`, 400);
+    }
+    const a = this.findActive(idOrKey);
+    if (!a) return undefined;
+    const ack: NonNullable<AlertEvent['acknowledged']> = { at: now };
+    if (hours !== undefined) ack.until = Math.round(now + hours * 3600_000);
+    a.event = { ...a.event, acknowledged: ack };
+    this.replaceRecent(a.event);
+    return a.event;
+  }
+
+  /** Lift a snooze. Returns the updated event, or undefined when no active alert has this id. */
+  unacknowledge(idOrKey: string): AlertEvent | undefined {
+    const a = this.findActive(idOrKey);
+    if (!a) return undefined;
+    if (a.event.acknowledged) {
+      const next = { ...a.event };
+      delete next.acknowledged;
+      a.event = next;
+      this.replaceRecent(next);
+    }
+    return a.event;
   }
 
   /** Store section value: active sorted by severity then newest; recent newest first. */
@@ -148,6 +237,7 @@ export class AlertEngine {
 
   evaluate(input: EvaluateInput): EvaluateResult {
     const { now } = input;
+    this.startedAt ??= input.startedAt ?? now;
     const out: EvaluateResult = { emitted: [], notifications: [], changed: false };
     const touched = new Set<string>();
     const keptPrefixes: string[] = [];
@@ -157,8 +247,10 @@ export class AlertEngine {
       data: input.data,
       ready: input.ready,
       timeZone: input.timeZone,
+      startedAt: input.startedAt ?? this.startedAt,
       mem: this.mem,
       active: (key: string) => this.active.get(key)?.event,
+      activeKeys: (prefix: string) => [...this.active.keys()].filter((k) => k.startsWith(prefix)),
       wakeAt: (t: number) => {
         if (t > now && (out.wakeAt === undefined || t < out.wakeAt)) out.wakeAt = t;
       },
@@ -191,15 +283,38 @@ export class AlertEngine {
         this.upsert(cond, now, out);
       }
       const carryKeys = new Set(res.carryKeys ?? []);
+      const silent = new Set(res.silentResolve ?? []);
       const prefixes = res.carryAll ? [`${kind}:`] : (res.carryPrefixes ?? []);
       keptPrefixes.push(...prefixes);
       for (const [key, a] of [...this.active]) {
-        if (a.event.kind !== kind || produced.has(key) || carryKeys.has(key) || prefixes.some((p) => key.startsWith(p))) continue;
-        this.resolve(key, now, out);
+        if (a.event.kind !== kind || produced.has(key) || carryKeys.has(key)) continue;
+        if (!silent.has(key) && prefixes.some((p) => key.startsWith(p))) continue;
+        this.resolve(key, now, out, silent.has(key));
       }
     }
     // alerts of kinds no rule produces any more (older versions, 'test') resolve
     for (const [key, a] of [...this.active]) if (!handled.has(a.event.kind)) this.resolve(key, now, out);
+
+    // snoozes that ran out: the alert is back, with a reminder push
+    for (const a of this.active.values()) {
+      const until = a.event.acknowledged?.until;
+      if (until === undefined) continue;
+      if (until > now) {
+        ctx.wakeAt(until);
+        continue;
+      }
+      const next = { ...a.event };
+      delete next.acknowledged;
+      a.event = next;
+      this.replaceRecent(next);
+      out.changed = true;
+      if (!a.quiet) {
+        a.notified = true;
+        if (!a.notifiedSeverity || severityRank(next.severity) > severityRank(a.notifiedSeverity)) a.notifiedSeverity = next.severity;
+        this.lastNotified.set(next.key, now);
+        out.notifications.push({ event: next, recovery: false });
+      }
+    }
 
     // forget first-seen times of conditions that went away
     for (const key of [...this.since.keys()]) {
@@ -236,8 +351,9 @@ export class AlertEngine {
       };
       if (cond.path) ev.path = cond.path;
       const last = this.lastNotified.get(cond.key);
-      const notify = last === undefined || now - last >= this.opts.cooldownMs;
+      const notify = !cond.quiet && (last === undefined || now - last >= this.opts.cooldownMs);
       const a: ActiveAlert = { event: ev, notified: notify };
+      if (cond.quiet) a.quiet = true;
       if (notify) {
         a.notifiedSeverity = cond.severity;
         this.lastNotified.set(cond.key, now);
@@ -249,19 +365,23 @@ export class AlertEngine {
       out.changed = true;
       return;
     }
+    if (cond.quiet) cur.quiet = true;
+    else delete cur.quiet;
     if (sameText(cur.event, cond)) return;
     const prevRank = severityRank(cur.event.severity);
     const next: AlertEvent = { ...cur.event, severity: cond.severity, title: cond.title, body: cond.body };
     if (cond.path) next.path = cond.path;
     else delete next.path;
-    cur.event = next;
-    this.replaceRecent(next);
-    out.changed = true;
-    // An escalation above anything pushed so far is news: push it even inside the cooldown.
+    // An escalation above anything pushed so far is news: push it even inside the cooldown, and end a snooze.
     // (Text-only updates, e.g. a new usage percentage, are never pushed.)
     const rank = severityRank(cond.severity);
     const pushedRank = cur.notifiedSeverity ? severityRank(cur.notifiedSeverity) : -1;
-    if (rank > prevRank && rank > pushedRank) {
+    const escalated = rank > prevRank && rank > pushedRank && !cond.quiet;
+    if (escalated) delete next.acknowledged;
+    cur.event = next;
+    this.replaceRecent(next);
+    out.changed = true;
+    if (escalated) {
       cur.notified = true;
       cur.notifiedSeverity = cond.severity;
       this.lastNotified.set(cond.key, now);
@@ -270,14 +390,17 @@ export class AlertEngine {
     }
   }
 
-  private resolve(key: string, now: number, out: EvaluateResult): void {
+  /** `silent`: the subject is gone, no recovery push. Snoozed and quiet alerts also resolve without one. */
+  private resolve(key: string, now: number, out: EvaluateResult, silent = false): void {
     const a = this.active.get(key);
     if (!a) return;
     this.active.delete(key);
+    const snoozed = !!a.event.acknowledged;
     const ev: AlertEvent = { ...a.event, resolved: true, resolvedAt: now };
+    delete ev.acknowledged;
     this.replaceRecent(ev);
     out.emitted.push(ev);
-    if (a.notified) out.notifications.push({ event: ev, recovery: true });
+    if (a.notified && !silent && !snoozed && !a.quiet) out.notifications.push({ event: ev, recovery: true });
     out.changed = true;
   }
 
@@ -295,6 +418,7 @@ export class AlertEngine {
       seenUpids: [...this.mem.seenUpids],
       tasksBaselined: this.mem.tasksBaselined,
       backupIssues: [...this.mem.backupIssues.values()],
+      stops: [...this.mem.stops],
     };
   }
 
@@ -305,12 +429,13 @@ export class AlertEngine {
     if (Array.isArray(f.active)) {
       for (const a of f.active) {
         if (!a || !isAlertEvent(a.event) || a.event.resolved) continue;
-        const restored: ActiveAlert = { event: a.event, notified: a.notified === true };
+        const restored: ActiveAlert = { event: withAck(a.event), notified: a.notified === true };
         if (a.notifiedSeverity && SEVERITIES.has(a.notifiedSeverity)) restored.notifiedSeverity = a.notifiedSeverity;
+        if (a.quiet === true) restored.quiet = true;
         this.active.set(a.event.key, restored);
       }
     }
-    if (Array.isArray(f.recent)) this.recent = f.recent.filter(isAlertEvent).slice(0, RECENT_MAX);
+    if (Array.isArray(f.recent)) this.recent = f.recent.filter(isAlertEvent).slice(0, RECENT_MAX).map(withAck);
     this.since = numberRecord(f.since);
     this.lastNotified = numberRecord(f.lastNotified);
     if (Array.isArray(f.runningGuests)) for (const v of f.runningGuests) if (Number.isInteger(v)) this.mem.runningGuests.add(v);
@@ -321,7 +446,14 @@ export class AlertEngine {
       for (const b of f.backupIssues) {
         if (!b || typeof b.scope !== 'string' || typeof b.upid !== 'string' || typeof b.startTime !== 'number') continue;
         if (b.severity !== 'error' && b.severity !== 'warning') continue;
-        this.mem.backupIssues.set(b.scope, b);
+        this.mem.backupIssues.set(b.scope || b.upid, b);
+      }
+    }
+    if (Array.isArray(f.stops)) {
+      for (const entry of f.stops) {
+        if (!Array.isArray(entry) || !Number.isInteger(entry[0])) continue;
+        const info = cleanStop(entry[1]);
+        if (info) this.mem.stops.set(entry[0], info);
       }
     }
   }
