@@ -2,26 +2,30 @@
 # pve1-dash-update: update pve1-dash INSIDE its container. Installed as /usr/local/bin/pve1-dash-update by
 # deploy/lxc-setup.sh. Run as root in the container, or from the Proxmox host: pct exec <ctid> -- pve1-dash-update
 #
-# Usage: pve1-dash-update [--ref REF] [--repo URL] [--force] [--no-restart] [--skip-node]
+# Usage: pve1-dash-update [--ref REF] [--repo URL] [--force] [--no-restart] [--skip-node] [--no-doctor]
 #   --ref REF      branch, tag or full commit id to deploy (default: the one recorded in /etc/pve1-dash/install.env)
 #   --repo URL     git repository (default: recorded, else the GitHub repo)
 #   --force        rebuild even when the ref resolves to the commit already installed
 #   --no-restart   build and switch the code, but leave the service alone
 #   --skip-node    don't check nodejs.org for a newer Node.js 24.x
+#   --no-doctor    don't run the self-test (pve1-dash-doctor) after the update
 #
 # How it works: the new version is fetched and built in /opt/pve1-dash.new while the old one keeps running, then the
 # directories are swapped (the old one is kept as /opt/pve1-dash.prev) and the service restarts. If the dashboard
-# does not come back healthy, the previous version is restored automatically.
+# does not come back healthy, the previous version is restored automatically. Then pve1-dash-doctor checks the whole
+# chain (config, Proxmox API, SSH helper, push); its findings never undo the update.
 #
 # deploy/lxc-setup.sh sources this file for try_update_node, build_release, activate_release, install_system_files,
-# save_install_env and start_service, so keep those self-contained. main only runs when executed.
+# save_install_env, check_free_space and start_service, so keep those self-contained. main only runs when executed.
 
 set -Eeuo pipefail
 
 readonly DEFAULT_REPO='https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git'
+# The branch pve1-dash lived on before it was merged into main. Installs from that time still record it.
+readonly PREMERGE_REF='claude/homelab-dashboard-pve1-dizt16'
 readonly APP_DIR=/opt/pve1-dash
 readonly CONF_DIR=/etc/pve1-dash
-readonly INSTALL_ENV=/etc/pve1-dash/install.env
+readonly INSTALL_ENV=${PVE1_DASH_INSTALL_ENV:-/etc/pve1-dash/install.env}
 readonly SERVICE=pve1-dash
 readonly UNIT_PATH=/etc/systemd/system/pve1-dash.service
 readonly COMPAT_DROPIN=/etc/systemd/system/pve1-dash.service.d/10-lxc-compat.conf
@@ -41,6 +45,12 @@ die() {
 # Where Node.js versions and the node/npm links go. The variables exist for tests (tests/deploy-update.test.ts).
 readonly NODE_ROOT=${PVE1_DASH_NODE_ROOT:-/opt}
 readonly BIN_DIR=${PVE1_DASH_BIN_DIR:-/usr/local/bin}
+# The admin tools next to pve1-dash-update (wrappers from deploy/, see install_system_files).
+readonly DOCTOR_TOOL=$BIN_DIR/pve1-dash-doctor
+readonly CONFIG_TOOL=$BIN_DIR/pve1-dash-config
+# Free space an update needs next to the running version: node_modules with dev dependencies, the npm cache, maybe a
+# second Node.js while the old one is still in use.
+readonly MIN_FREE_MIB=${PVE1_DASH_MIN_FREE_MIB:-1024}
 
 # Node.js <major> LTS from the official tarball, verified against SHASUMS256.txt, unpacked to
 # /opt/node-v<version>-linux-<arch>, with /opt/node pointing at it and node/npm/npx/corepack linked into
@@ -156,17 +166,65 @@ fetch_source() {
 }
 
 # npm ci (with dev dependencies, without install scripts: nothing here needs them and ssh2's optional native addon
-# would otherwise try to compile), build web + server, then drop the dev dependencies.
+# would otherwise try to compile), build web + server, then drop the dev dependencies. npm gets a throw-away cache:
+# the default one (~/.npm) is never cleaned and grows with every update on a small container disk.
 build_release() {
-  local dir=$1
+  local dir=$1 cache rc=0
   export npm_config_update_notifier=false npm_config_fund=false npm_config_audit=false
+  cache=$(mktemp -d "${TMPDIR:-/tmp}/pve1-dash-npm.XXXXXX") || die 'cannot create a temporary directory for the npm cache'
+  (build_steps "$dir" "$cache") || rc=$?
+  rm -rf "$cache"
+  # Caches left by versions before the throw-away cache (nothing else in this container uses npm).
+  rm -rf "${HOME:-/root}/.npm/_cacache" 2>/dev/null || :
+  if ((rc != 0)); then exit "$rc"; fi
+}
+
+build_steps() {
+  local dir=$1
+  export npm_config_cache=$2
   say 'installing dependencies (npm ci) ...'
-  (cd "$dir" && npm ci --include=dev --ignore-scripts --no-audit --no-fund --loglevel=error) || die 'npm ci failed'
+  (cd "$dir" && npm ci --include=dev --ignore-scripts --no-audit --no-fund --loglevel=error) || die "npm ci failed$(space_hint "$dir")"
   say 'building the web app and the server ...'
-  (cd "$dir" && npm run build) || die 'npm run build failed (1 GiB of memory is recommended for the build)'
+  (cd "$dir" && npm run build) || die "npm run build failed (1 GiB of memory is recommended for the build)$(space_hint "$dir")"
   (cd "$dir" && npm prune --omit=dev --ignore-scripts --no-audit --no-fund --loglevel=error) || die 'npm prune failed'
   [[ -f $dir/dist/server/index.js ]] || die "the build did not produce $dir/dist/server/index.js"
+  [[ -f $dir/dist/server/doctor.js ]] || warn 'the build has no dist/server/doctor.js; pve1-dash-doctor will not work with this version'
   [[ -f $dir/dist/web/index.html ]] || warn 'the build has no dist/web/index.html; the dashboard will show a placeholder page'
+}
+
+# ───────────────────────────────────────────────────────────────────────── disk space
+
+# Free MiB on the file system that holds DIR (empty when df cannot tell).
+free_mib() { df -Pk "$1" 2>/dev/null | awk 'NR == 2 && $4 ~ /^[0-9]+$/ { print int($4 / 1024) }'; }
+
+# The pct command that grows this container's disk, with its id when install.env knows it.
+resize_hint() {
+  local ctid
+  ctid=$(recorded PVE1_DASH_CTID)
+  [[ $ctid =~ ^[0-9]{1,9}$ ]] || ctid='<ctid>'
+  printf 'pct resize %s rootfs +2G' "$ctid"
+}
+
+# " (only N MiB free ...)" for a failed build when the disk is (nearly) full, else nothing.
+space_hint() {
+  local free
+  free=$(free_mib "$1")
+  if [[ $free =~ ^[0-9]+$ ]] && ((free < 200)); then
+    printf ' (only %s MiB left on the disk: grow it on the Proxmox host with "%s")' "$free" "$(resize_hint)"
+  fi
+}
+
+# Stop before anything is downloaded when DIR's file system has less than NEED MiB free: a full disk otherwise shows
+# up half-way as an npm or tar error. The leftover of a failed earlier update goes first.
+check_free_space() {
+  local dir=$1 need=${2:-$MIN_FREE_MIB} free
+  if [[ -d $APP_DIR.failed ]]; then
+    rm -rf "$APP_DIR.failed" && say "removed $APP_DIR.failed (the build of an earlier update that did not start)"
+  fi
+  free=$(free_mib "$dir")
+  [[ $free =~ ^[0-9]+$ ]] || return 0
+  ((free >= need)) && return 0
+  die "only $free MiB free on $dir, and an update needs about $need MiB next to the running version. Free some space, or grow the container's disk on the Proxmox host: $(resize_hint)"
 }
 
 # Swap DIR into place as /opt/pve1-dash; the previous version becomes /opt/pve1-dash.prev.
@@ -184,18 +242,40 @@ rollback_release() {
   mv "$APP_DIR.prev" "$APP_DIR"
 }
 
-# The systemd unit and this update tool, from the active release.
+# The systemd unit, this update tool and the admin tools (pve1-dash-doctor, pve1-dash-config), from the active release.
 install_system_files() {
   local reload=0
   if ! cmp -s "$APP_DIR/deploy/pve1-dash.service" "$UNIT_PATH"; then
     install -m 0644 "$APP_DIR/deploy/pve1-dash.service" "$UNIT_PATH"
     reload=1
   fi
-  if ! cmp -s "$APP_DIR/deploy/update.sh" "$UPDATE_TOOL"; then
-    # install(1) writes a new file, so a running copy of this script keeps reading its old inode.
-    install -m 0755 "$APP_DIR/deploy/update.sh" "$UPDATE_TOOL"
-  fi
+  # install(1) writes a new file, so a running copy of this script keeps reading its old inode.
+  install_tool "$APP_DIR/deploy/update.sh" "$UPDATE_TOOL"
+  install_tool "$APP_DIR/deploy/pve1-dash-doctor.sh" "$DOCTOR_TOOL"
+  install_tool "$APP_DIR/deploy/pve1-dash-config.sh" "$CONFIG_TOOL"
   if ((reload)); then systemctl daemon-reload; fi
+}
+
+# install_tool SRC DEST: copy SRC to DEST (0755) when it differs; a release without SRC leaves DEST alone.
+install_tool() {
+  [[ -f $1 ]] || return 0
+  cmp -s "$1" "$2" || install -m 0755 "$1" "$2"
+}
+
+# Run the read-only self-test after an install or update. It never fails the caller: the report says what needs
+# attention, and the exit code only tells whether anything did.
+run_doctor() {
+  local rc=0
+  [[ -x $DOCTOR_TOOL ]] || return 0
+  printf '\n'
+  say 'checking config, Proxmox API, SSH helper and push (pve1-dash-doctor) ...'
+  timeout 180 "$DOCTOR_TOOL" || rc=$?
+  case $rc in
+    0) ok 'pve1-dash-doctor found nothing to fix' ;;
+    124) warn 'pve1-dash-doctor did not finish within 3 minutes; run it again later: pve1-dash-doctor' ;;
+    *) warn "pve1-dash-doctor found something to look at (see its report above; the dashboard itself is running). Run it again any time: pve1-dash-doctor" ;;
+  esac
+  return 0
 }
 
 # ───────────────────────────────────────────────────────────────────────── service
@@ -331,15 +411,34 @@ recorded() {
   sed -n "s/^$1=//p" "$INSTALL_ENV" | tail -n 1 | tr -d "\"'"
 }
 
+# save_install_env REPO REF [CTID]: the source to update from, and this container's id (kept from the earlier file
+# when not given) so fixes printed in the container can name the right "pct ..." command.
 save_install_env() {
-  local repo=$1 ref=$2
+  local repo=$1 ref=$2 ctid=${3-}
+  [[ $ctid =~ ^[0-9]{1,9}$ ]] || ctid=$(recorded PVE1_DASH_CTID)
+  [[ $ctid =~ ^[0-9]{1,9}$ ]] || ctid=''
   umask 022
-  printf '# Written by pve1-dash setup/update. Read by pve1-dash-update and install.sh --update-helper.\nPVE1_DASH_REPO=%s\nPVE1_DASH_REF=%s\n' \
-    "$repo" "$ref" >"$INSTALL_ENV.tmp"
+  {
+    printf '# Written by pve1-dash setup/update. Read by pve1-dash-update, pve1-dash-doctor and install.sh --update-helper.\n'
+    printf 'PVE1_DASH_REPO=%s\nPVE1_DASH_REF=%s\n' "$repo" "$ref"
+    if [[ -n $ctid ]]; then printf 'PVE1_DASH_CTID=%s\n' "$ctid"; fi
+  } >"$INSTALL_ENV.tmp"
   mv -f "$INSTALL_ENV.tmp" "$INSTALL_ENV"
 }
 
-usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; }
+# The ref to update to when REF (from install.env) names no branch or tag of REPO any more. The pre-merge branch of
+# the default repository moves to main (pve1-dash lives there now); anything else stops with the command to run.
+gone_ref_fallback() {
+  local repo=$1 ref=$2
+  if [[ $repo == "$DEFAULT_REPO" && $ref == "$PREMERGE_REF" ]]; then
+    warn "this container followed the branch $ref, which no longer exists; pve1-dash lives on main now: switching to main"
+    printf 'main\n'
+    return 0
+  fi
+  die "\"$ref\" (recorded in $INSTALL_ENV) is no longer a branch or tag of $repo. Update from main instead: pve1-dash-update --ref main"
+}
+
+usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; }
 
 on_error() {
   local code=$?
@@ -350,7 +449,7 @@ on_error() {
 }
 
 main() {
-  local repo='' ref='' force=0 restart=1 node=1 staging=$APP_DIR.new
+  local repo='' ref='' force=0 restart=1 node=1 doctor=1 staging=$APP_DIR.new ref_recorded=no
   while (($#)); do
     case $1 in
       --ref)
@@ -368,6 +467,7 @@ main() {
       --force) force=1 ;;
       --no-restart) restart=0 ;;
       --skip-node) node=0 ;;
+      --no-doctor) doctor=0 ;;
       -h | --help)
         usage
         exit 0
@@ -381,16 +481,29 @@ main() {
   [[ -d $APP_DIR ]] || die "$APP_DIR not found: pve1-dash is not installed here (run deploy/install.sh on the Proxmox host)."
   repo=${repo:-${PVE1_DASH_REPO:-$(recorded PVE1_DASH_REPO)}}
   repo=${repo:-$DEFAULT_REPO}
-  ref=${ref:-${PVE1_DASH_REF:-$(recorded PVE1_DASH_REF)}}
-  ref=${ref:-main}
+  if [[ -z $ref && -z ${PVE1_DASH_REF-} ]]; then
+    ref=$(recorded PVE1_DASH_REF)
+    if [[ -n $ref ]]; then ref_recorded=yes; fi
+  fi
+  ref=${ref:-${PVE1_DASH_REF:-main}}
   is_repo "$repo" || die "\"$repo\" does not look like a git URL"
   is_ref "$ref" || die "\"$ref\" is not a valid branch, tag or commit"
   exec 9>/run/pve1-dash-update.lock
   flock -n 9 || die 'another update is running'
 
-  local current target
+  local current target rc=0
   current=$(git -C "$APP_DIR" rev-parse HEAD 2>/dev/null) || current=''
-  target=$(remote_commit "$repo" "$ref") || target=''
+  target=$(remote_commit "$repo" "$ref") || rc=$?
+  if ((rc == 0)) && [[ -z $target && $ref_recorded == yes ]]; then
+    # git ls-remote worked but knows no such branch or tag: it was deleted (e.g. after a merge)
+    ref=$(gone_ref_fallback "$repo" "$ref") || exit 1
+    target=$(remote_commit "$repo" "$ref") || target=''
+  elif ((rc != 0)); then
+    target=''
+  fi
+  if [[ $ref_recorded == yes && $ref == "$PREMERGE_REF" && $repo == "$DEFAULT_REPO" ]]; then
+    warn "this container follows $ref, the branch pve1-dash was developed on; it now lives on main. Switch with: pve1-dash-update --ref main"
+  fi
   if ((!force)) && [[ -n $target && $target == "$current" ]]; then
     ok "already up to date ($ref = ${current:0:12})"
     if ((node)); then try_update_node; fi
@@ -398,6 +511,7 @@ main() {
   fi
 
   say "updating from ${current:0:12} to $ref${target:+ (${target:0:12})} ..."
+  check_free_space "${APP_DIR%/*}"
   if ((node)); then try_update_node; fi
   fetch_source "$repo" "$ref" "$staging"
   build_release "$staging"
@@ -427,6 +541,7 @@ main() {
   # Recorded only once the new version runs, so a rolled-back update keeps the old ref.
   save_install_env "$repo" "$ref"
   ok "pve1-dash ${version:-?} ($now) is installed"
+  if ((restart && doctor)); then run_doctor; fi
 
   local base prefix=''
   base=$(raw_base "$repo" "$ref") || base='<raw URL of the repo>'

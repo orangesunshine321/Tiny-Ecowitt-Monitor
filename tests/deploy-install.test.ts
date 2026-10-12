@@ -258,6 +258,52 @@ describe('TLS fingerprint', () => {
   });
 });
 
+describe('TLS: Proxmox cluster CA instead of a pin', () => {
+  it('trusts the CA only when openssl verifies the served certificate with it for the node address', () => {
+    const ca = sb.put('pve-root-ca.pem', '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n');
+    sb.put('openssl.txt', 'depth=1 CN = Proxmox Virtual Environment\nVerify return code: 0 (ok)\n');
+    expect(status('pve_ca_verifies', ['192.168.1.10', ca])).toBe(0);
+    expect(sb.calls().join('\n')).toContain(`openssl s_client -connect 192.168.1.10:8006 -CAfile ${ca} -verify_ip 192.168.1.10 -verify_return_error`);
+    sb.put('openssl.txt', 'Verify return code: 64 (IP address mismatch)\n');
+    expect(status('pve_ca_verifies', ['192.168.1.10', ca])).toBe(1);
+    sb.put('openssl.txt', 'Verify return code: 0 (ok)\n');
+    expect(status('pve_ca_verifies', ['192.168.1.10', join(sb.dir, 'missing.pem')])).toBe(1);
+  });
+
+  const facts = (verifies: boolean, cert = 'pve-ssl.pem', needConfig = 'yes') => {
+    const ca = sb.put('pve-root-ca.pem', '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n');
+    return sb.bash(
+      SCRIPT,
+      `PVE_ROOT_CA='${ca}' PVE1_DASH_NODE_IP=192.168.1.10 NEED_CONFIG=${needConfig} NODE=pve1
+       pve_cert_file() { echo /etc/pve/local/${cert}; }
+       cert_fingerprint() { echo AA:BB; }
+       served_fingerprint() { echo AA:BB; }
+       pve_ca_verifies() { [[ $2 == '${ca}' ]] && ${verifies ? 'true' : 'false'}; }
+       consider_public_ca() { echo consider; }
+       host_key_line() { echo 'ssh-ed25519 ${KEY_B64}'; }
+       collect_host_facts; printf 'fp=%s ca=[%s]\\n' "$TLS_FINGERPRINT" "$TLS_CA"`,
+    );
+  };
+
+  it('hands the CA to the setup for the default certificate, and still knows the pin for existing configs', () => {
+    const r = facts(true);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toContain("verifies with Proxmox's cluster CA for 192.168.1.10");
+    expect(r.stdout).toContain('fp=AA:BB ca=[-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----]');
+    const upgrade = facts(true, 'pve-ssl.pem', 'no');
+    expect(upgrade.stdout).toContain('TLS pin AA:BB');
+  });
+
+  it('pins when the CA does not verify, and never uses it for a custom or ACME certificate', () => {
+    const r = facts(false);
+    expect(r.stdout).toContain('TLS pin AA:BB');
+    expect(r.stdout).toContain('ca=[]');
+    const acme = facts(true, 'pveproxy-ssl.pem');
+    expect(acme.stdout).toContain('consider');
+    expect(acme.stdout).toContain('ca=[]');
+  });
+});
+
 describe('SSH keys', () => {
   it('accepts exactly one ed25519 public key line and drops its comment', () => {
     expect(ok('validate_pubkey', [`ssh-ed25519 ${KEY_B64} pve1-dash@ct120`])).toBe(`ssh-ed25519 ${KEY_B64}\n`);
@@ -428,12 +474,17 @@ describe('settings handed to the container', () => {
       `PVE1_DASH_REPO=https://github.com/a/b.git PVE1_DASH_REF=main P1D_CTID=120 P1D_NODE=pve1 P1D_NODE_IP=192.168.1.10
        P1D_TLS_FINGERPRINT=AB:CD P1D_PUBLIC_URL= P1D_VAPID_EMAIL=me@example.org
        P1D_HOST_KEY="ssh-ed25519 ${KEY_B64}" P1D_TOKEN_ID='pve1dash@pve!dashboard' P1D_TOKEN_SECRET=0b4c5d2e-1f3a
+       P1D_TLS_CA=$'-----BEGIN CERTIFICATE-----\\nMIIB+/=\\n-----END CERTIFICATE-----' P1D_ALLOWED_SOURCES='10.10.10.0/24 10.10.20.5'
        write_setup_env > env.txt
-       (unset P1D_HOST_KEY P1D_TOKEN_ID P1D_TOKEN_SECRET P1D_PUBLIC_URL; source ./env.txt; printf '%s|%s|%s|[%s]\\n' "$P1D_HOST_KEY" "$P1D_TOKEN_ID" "$P1D_TOKEN_SECRET" "$P1D_PUBLIC_URL")`,
+       (unset P1D_HOST_KEY P1D_TOKEN_ID P1D_TOKEN_SECRET P1D_PUBLIC_URL P1D_TLS_CA P1D_ALLOWED_SOURCES; source ./env.txt
+        printf '%s|%s|%s|[%s]|%s|%s\\n' "$P1D_HOST_KEY" "$P1D_TOKEN_ID" "$P1D_TOKEN_SECRET" "$P1D_PUBLIC_URL" "$P1D_TLS_CA" "$P1D_ALLOWED_SOURCES")`,
     );
     expect(r.status, r.stderr).toBe(0);
-    expect(r.stdout).toBe(`ssh-ed25519 ${KEY_B64}|pve1dash@pve!dashboard|0b4c5d2e-1f3a|[]\n`);
-    expect(sb.read('env.txt').split('\n').filter(Boolean)).toHaveLength(15); // incl. P1D_TIMEZONE
+    expect(r.stdout).toBe(
+      `ssh-ed25519 ${KEY_B64}|pve1dash@pve!dashboard|0b4c5d2e-1f3a|[]|-----BEGIN CERTIFICATE-----\nMIIB+/=\n-----END CERTIFICATE-----|10.10.10.0/24 10.10.20.5\n`,
+    );
+    // one line per setting (incl. P1D_TIMEZONE): the multi-line CA travels $'...'-quoted
+    expect(sb.read('env.txt').split('\n').filter(Boolean)).toHaveLength(17);
   });
 });
 
@@ -474,6 +525,15 @@ describe('validators', () => {
     expect(valid('is_hostname', '-dash')).toBe(false);
     expect(valid('is_memory', '1024')).toBe(true);
     expect(valid('is_memory', '256')).toBe(false);
+  });
+
+  it('accepts IPv4 networks or "any" for who may connect', () => {
+    for (const good of ['any', '10.10.10.0/24', '10.10.10.0/24 10.10.20.5', '10.10.10.0/24,10.10.20.5', '0.0.0.0/0']) {
+      expect(valid('is_allowed_sources', good), good).toBe(true);
+    }
+    for (const bad of ['', ' , ', '10.10.10.0/33', '10.10.10.256', 'lan', 'fd00::/8', '10.10.10.0/24;reboot']) {
+      expect(valid('is_allowed_sources', bad), bad).toBe(false);
+    }
   });
 
   it('accepts sane git refs and repos only', () => {
@@ -665,7 +725,7 @@ describe('token rotation happens late and only for a dead or unwanted secret', (
   });
 });
 
-describe('source: refs, commits and the pre-merge check', () => {
+describe('source: refs, commits and the pve1-dash check', () => {
   const ADVERT = 'github-info-refs.txt';
   const withRefs = `remote_refs() { parse_ref_advertisement < '${join(FIXTURES_DIR, ADVERT)}'; }`;
 
@@ -706,7 +766,7 @@ describe('source: refs, commits and the pre-merge check', () => {
     expect(bad.stderr).toContain('is not a branch or tag');
   });
 
-  it('fails fast, with the pre-merge hint, when the ref does not hold pve1-dash', () => {
+  it('fails fast when the ref does not hold pve1-dash (no stale pre-merge advice: main holds pve1-dash)', () => {
     const good = sb.bash(SCRIPT, `PVE1_DASH_REPO='${'https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git'}' PVE1_DASH_REF=main WORK_DIR='${sb.dir}'; check_source && echo fine`, {
       env: { PVE1_DASH_RAW_BASE: `file://${ROOT}` },
     });
@@ -718,7 +778,7 @@ describe('source: refs, commits and the pre-merge check', () => {
     });
     expect(old.status).toBe(1);
     expect(old.stderr).toContain('is not pve1-dash');
-    expect(old.stderr).toContain('PVE1_DASH_REF=claude/homelab-dashboard-pve1-dizt16');
+    expect(old.stderr).not.toContain('claude/homelab-dashboard-pve1-dizt16');
     const missing = sb.bash(SCRIPT, `PVE1_DASH_REPO='https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git' PVE1_DASH_REF=main WORK_DIR='${sb.dir}'; check_source`, {
       env: { PVE1_DASH_RAW_BASE: `file://${sb.dir}/nowhere` },
     });
@@ -754,6 +814,24 @@ describe('source: refs, commits and the pre-merge check', () => {
     const offline = adopt('v1.2.0', 'remote_refs() { return 1; }');
     expect(offline.stdout).toContain('ref=main');
     expect(offline.stderr).toContain('could not check');
+  });
+
+  it('moves a container that follows the old pre-merge branch to main (asked; --yes switches)', () => {
+    const UPSTREAM = 'https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git';
+    const adopt = (extra = '') => {
+      sb.put('pct-exec.txt', 'claude/homelab-dashboard-pve1-dizt16\n');
+      return sb.bash(SCRIPT, `${withRefs}; ASSUME_YES=1 ${extra} REPO_EXPLICIT=x REF_EXPLICIT= PVE1_DASH_REPO=${UPSTREAM} PVE1_DASH_REF=main
+        adopt_recorded_source 120; echo "ref=$PVE1_DASH_REF"`);
+    };
+    const yes = adopt();
+    expect(yes.status, yes.stderr).toBe(0);
+    expect(yes.stdout).toContain('ref=main');
+    expect(yes.stdout).toContain('switching container 120 to main');
+    expect(yes.stderr).toContain('before it was merged into main');
+    // declined: the recorded branch is checked like any other (the fixture repo does not have it, so main it is)
+    const no = adopt('PVE1_DASH_SWITCH_TO_MAIN=no');
+    expect(no.stdout).toContain('ref=main');
+    expect(no.stderr).toContain('not a branch or tag');
   });
 
   it('does not switch a fork install back to upstream silently, nor trust the recorded repository blindly', () => {
@@ -802,6 +880,21 @@ describe('network settings', () => {
     expect(status('ip_in_cidr', ['10.20.3.1', '10.20.0.50/16'])).toBe(0);
     expect(status('ip_in_cidr', ['10.20.0.1', '10.20.0.50/32'])).toBe(1);
     expect(status('ip_in_cidr', ['x', '10.20.0.50/24'])).toBe(1);
+  });
+
+  it("derives this host's network for the allow-list and the static-address example", () => {
+    sb.put('ip-addr.txt', [
+      '1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever preferred_lft forever',
+      '4: vmbr0    inet 10.10.10.2/24 brd 10.10.10.255 scope global vmbr0\\       valid_lft forever preferred_lft forever',
+      '5: vmbr1    inet 10.99.0.1/31 scope global vmbr1\\       valid_lft forever preferred_lft forever',
+    ].join('\n') + '\n');
+    expect(ok('host_network', ['10.10.10.2'])).toBe('10.10.10.0/24\n');
+    expect(status('host_network', ['10.99.0.1'])).toBe(1); // point-to-point: no LAN to name
+    expect(status('host_network', ['192.168.1.10'])).toBe(1);
+    expect(ok('cidr_network', ['172.16.5.9/12'])).toBe('172.16.0.0/12\n');
+    expect(ok('example_static_ip', ['10.10.10.0/24'])).toBe('10.10.10.60/24\n');
+    expect(ok('example_static_ip', ['10.0.0.0/16'])).toBe('10.0.0.60/16\n');
+    expect(ok('example_static_ip', [''])).toBe('192.168.1.60/24\n');
   });
 
   it("does not offer this host's gateway for a static address in another network (VLAN)", () => {
@@ -924,6 +1017,19 @@ describe('smoke test endpoint', () => {
     expect(ok('http_base', ['fd00::5', '8080'])).toBe('http://[fd00::5]:8080\n');
   });
 
+  it('does not wait for Proxmox data when listen.allowedSources keeps this host out (403)', () => {
+    const r = sb.bash(
+      SCRIPT,
+      `PVE1_DASH_NODE_IP=192.168.1.10
+       curl() { case "$*" in *healthz*) echo '{"ok":true}' ;; *'%{http_code}'*) echo 403 ;; *) echo "unexpected curl $*" >&2; return 22 ;; esac; }
+       sleep() { echo slept >&2; }
+       smoke_test 120 http://192.168.1.60:8080`,
+    );
+    expect(r.stdout).toContain('outside listen.allowedSources');
+    expect(r.stderr).not.toContain('unexpected curl');
+    expect(r.stderr).not.toContain('slept');
+  });
+
   it('reports a Proxmox 401 or TLS error from the first poll', () => {
     const snap = (collectors: object[]) => JSON.stringify({ meta: { collectors } });
     expect(ok('collector_summary', [], { input: snap([{ name: 'node', lastError: 'Proxmox GET /nodes/pve1/status: HTTP 401', intervalSec: 5 }]) })).toBe(
@@ -948,11 +1054,14 @@ describe('main (orchestration)', () => {
     sleep() { :; }
     wait_ct_network() { echo 192.168.1.60; }
     collect_host_facts() { TLS_FINGERPRINT='${FP}' HOST_KEY='ssh-ed25519 ${KEY_B64}'; }
-    run_lxc_setup() { echo "lxc-setup ct=$1 secret=[$TOKEN_SECRET] token=$TOKEN_ID ref=$PVE1_DASH_REF commit=$REF_COMMIT" >> '${log}'; }
+    run_lxc_setup() { echo "lxc-setup ct=$1 secret=[$TOKEN_SECRET] token=$TOKEN_ID ref=$PVE1_DASH_REF commit=$REF_COMMIT url=[\${PVE1_DASH_PUBLIC_URL-}] allowed=[\${PVE1_DASH_ALLOWED_SOURCES-}]" >> '${log}'; }
     install_host_helper() { echo "helper $1" >> '${log}'; }
     authorize_dashboard_key() { echo "authorize $1" >> '${log}'; }
     dashboard_endpoint() { echo '192.168.1.60 8081'; }
     smoke_test() { echo "smoke $2" >> '${log}'; }
+    run_ct_doctor() { echo "doctor $1" >> '${log}'; }
+    host_network() { echo 192.168.1.0/24; }
+    default_gateway() { echo 192.168.1.1; }
   `;
   const env = { PVE1_DASH_VAPID_EMAIL: 'me@example.org', PVE1_DASH_RAW_BASE: `file://${ROOT}` };
 
@@ -964,6 +1073,7 @@ describe('main (orchestration)', () => {
     sb.fixture('pvesm-status-rootdir.txt');
     sb.fixture('pvesm-status-vztmpl.txt');
     sb.fixture('pveum-token-add.json');
+    sb.put('pct-config-140.txt', 'arch: amd64\nnet0: name=eth0,bridge=vmbr0,hwaddr=BC:24:11:AA:BB:CC,ip=dhcp,type=veth\n');
     const r = sb.bash(
       SCRIPT,
       `${COMMON(log)}
@@ -978,13 +1088,51 @@ describe('main (orchestration)', () => {
     const at = (prefix: string) => calls.findIndex((c) => c.startsWith(prefix));
     expect(calls).toContain('pct_create name=eth0,bridge=vmbr0,ip=dhcp');
     expect(calls).toContain(
-      'lxc-setup ct=140 secret=[0b4c5d2e-1f3a-4b6c-8d9e-0a1b2c3d4e5f] token=pve1dash@pve!dashboard ref=release/1.x commit=1111111111111111111111111111111111111111',
+      'lxc-setup ct=140 secret=[0b4c5d2e-1f3a-4b6c-8d9e-0a1b2c3d4e5f] token=pve1dash@pve!dashboard ref=release/1.x commit=1111111111111111111111111111111111111111 url=[] allowed=[192.168.1.0/24]',
     );
     expect(at('pveum user token add')).toBeLessThan(at('lxc-setup'));
     expect(at('helper 140')).toBeGreaterThan(at('lxc-setup'));
-    expect(calls.at(-1)).toBe('smoke http://192.168.1.60:8081');
+    expect(at('doctor 140')).toBeGreaterThan(at('smoke http://192.168.1.60:8081'));
     expect(r.stdout).toContain('http://192.168.1.60:8081');
     expect(r.stdout).toContain('PVE1_DASH_REF=release/1.x bash -c');
+    // the plan and the summary: who may connect, the missing publicUrl, the DHCP address the proxy will point at
+    expect(r.stdout).toContain('Allowed from    192.168.1.0/24 and loopback');
+    expect(r.stdout).toContain('Only 192.168.1.0/24 may connect');
+    expect(r.stdout).toContain('Keep this shell open');
+    expect(r.stderr).toContain('publicUrl is not set');
+    expect(r.stderr).toContain('PVE1_DASH_PUBLIC_URL=https://dash.example.com PVE1_DASH_REF=release/1.x bash -c');
+    expect(r.stderr).toContain('got 192.168.1.60 by DHCP');
+    expect(r.stderr).toContain('MAC BC:24:11:AA:BB:CC');
+    expect(r.stderr).toContain('PVE1_DASH_IP=192.168.1.60/24 PVE1_DASH_GATEWAY=192.168.1.1 PVE1_DASH_REF=release/1.x bash -c');
+  });
+
+  it('new install with a public URL and "any": nothing to warn about, everyone may connect', () => {
+    const log = join(sb.dir, 'calls.log');
+    sb.put('pvesh-lxc.json', '[]');
+    sb.put('pvesh-resources.json', '[]');
+    sb.put('pvesh-nextid.txt', '140\n');
+    sb.fixture('pvesm-status-rootdir.txt');
+    sb.fixture('pvesm-status-vztmpl.txt');
+    sb.fixture('pveum-token-add.json');
+    sb.put('pct-config-140.txt', 'net0: name=eth0,bridge=vmbr0,hwaddr=BC:24:11:AA:BB:CC,ip=10.10.10.60/24,gw=10.10.10.1,type=veth\n');
+    const r = sb.bash(
+      SCRIPT,
+      `${COMMON(log)}
+       bridge_exists() { true; }
+       pct_create() { :; }
+       verify_token() { echo 200; }
+       main --yes`,
+      { env: { ...env, PVE1_DASH_PUBLIC_URL: 'https://dash.bgreen.cloud/', PVE1_DASH_ALLOWED_SOURCES: 'any', PVE1_DASH_IP: '10.10.10.60/24', PVE1_DASH_GATEWAY: '10.10.10.1' } },
+    );
+    expect(r.status, r.stderr).toBe(0);
+    expect(sb.calls()).toContain(
+      'lxc-setup ct=140 secret=[0b4c5d2e-1f3a-4b6c-8d9e-0a1b2c3d4e5f] token=pve1dash@pve!dashboard ref=main commit=6666666666666666666666666666666666666666 url=[https://dash.bgreen.cloud] allowed=[any]',
+    );
+    expect(r.stdout).toContain('Public URL      https://dash.bgreen.cloud');
+    expect(r.stdout).toContain('Allowed from    everyone');
+    expect(r.stderr).not.toContain('publicUrl is not set');
+    expect(r.stderr).not.toContain('by DHCP');
+    expect(r.stdout).not.toContain('may connect (listen.allowedSources)');
   });
 
   it('upgrade: keeps the recorded tag, and replaces a revoked secret only after the setup succeeded', () => {
@@ -998,6 +1146,7 @@ describe('main (orchestration)', () => {
       `${COMMON(log)}
        ct_sh() {
          case $2 in
+           *publicUrl*) return 1 ;;
            *PVE1_DASH_REF*) echo v1.2.0 ;;
            *PVE1_DASH_REPO*) echo https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git ;;
            'test -f'*) return 0 ;;
@@ -1012,9 +1161,11 @@ describe('main (orchestration)', () => {
       { env: { ...env, PVE1_DASH_VAPID_EMAIL: '' } },
     );
     expect(r.status, r.stderr).toBe(0);
+    // the existing config has no publicUrl: the summary says how to set it (no question under --yes)
+    expect(r.stderr).toContain('publicUrl is not set');
     const calls = sb.calls();
     const at = (prefix: string) => calls.findIndex((c) => c.startsWith(prefix));
-    expect(calls).toContain('lxc-setup ct=120 secret=[] token=pve1dash@pve!dashboard ref=v1.2.0 commit=5555555555555555555555555555555555555555');
+    expect(calls).toContain('lxc-setup ct=120 secret=[] token=pve1dash@pve!dashboard ref=v1.2.0 commit=5555555555555555555555555555555555555555 url=[] allowed=[]');
     expect(at('pveum user token remove')).toBeGreaterThan(at('lxc-setup'));
     expect(at('store-secret')).toBeGreaterThan(at('pveum user token add'));
     expect(at('restart')).toBeGreaterThan(at('store-secret'));

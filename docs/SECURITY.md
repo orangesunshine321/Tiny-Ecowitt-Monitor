@@ -146,11 +146,27 @@ So:
 1. Keep it on your LAN (or VPN: WireGuard/Tailscale for remote access). **Do not port-forward it** and don't publish it
    through a public tunnel without authentication.
 2. Put it behind your HTTPS reverse proxy ([deploy/reverse-proxy/README.md](../deploy/reverse-proxy/README.md)).
-3. If your LAN has other people, guests or IoT devices you don't trust, **add a gate at the proxy**: an IP allow-list
+3. **Let the dashboard itself refuse other networks:** `listen.allowedSources` (the installer offers the host's network,
+   e.g. `["10.10.10.0/24"]`) is checked on the TCP connection's real source address, never on `X-Forwarded-For`, and
+   everyone else gets 403 (loopback and `/healthz` excepted). This matters because the container's plain-HTTP port
+   8080 is reachable from every network routed to it, past any access list on the proxy. Behind a proxy, the proxy's
+   own address must be in the list (it is what connects).
+4. **Separate untrusted networks at the router.** An IoT VLAN that can reach your LAN can reach the proxy too. Block
+   IoT → LAN at the router/firewall; that is the real fix, and the allow-lists here are the second line.
+5. If your LAN has other people or guests you don't trust, **add a gate at the proxy** as well: an IP access list
    (friendliest with the iPhone Home Screen app) or SSO forward-auth (Authelia, Authentik). Plain HTTP Basic auth
    also works in browsers; its behaviour in the iOS Home Screen app is UNVERIFIED.
-4. The container listens on plain HTTP port 8080. If you can, let only the proxy reach it (Proxmox firewall on the
-   container: allow 8080 from the proxy's IP).
+
+**Nginx Proxy Manager access lists have two gaps** (from NPM's templates and nginx.conf, not tested inside NPM):
+
+- NPM applies a host's Access List only inside the `location` blocks it generates itself (the default one and the
+  **Custom Locations** tab). A `location` you type into the **Advanced** tab is not covered and skips the list. Put
+  per-path settings into Custom Locations instead; pve1-dash needs none.
+- NPM's `nginx.conf` trusts the `X-Real-IP` header from every private address (`set_real_ip_from 10.0.0.0/8;
+  172.16.0.0/12; 192.168.0.0/16`), so a client on any private network (an IoT VLAN, say) can claim to be
+  `10.10.10.5` for the access list. Optional hardening: in that proxy host's Advanced tab add only
+  `set_real_ip_from 127.0.0.1;` (a server-level `set_real_ip_from` replaces the inherited list, so `X-Real-IP` from LAN
+  clients is ignored). The dashboard's own `listen.allowedSources` doesn't have this problem: it never reads headers.
 
 **DNS rebinding.** Without a login, a web page on the internet could otherwise read the API through your browser by
 re-pointing its own host name at the dashboard's LAN address. The server therefore answers only requests whose `Host`
@@ -159,7 +175,8 @@ few similar private suffixes), the host of `publicUrl`, `listen.host`, the conta
 `allowedHosts` (exact, or `*.example.com` for subdomains). Everything else gets **421 Unknown host** (`/healthz`
 excepted). If you reach the dashboard under another public name, add it to `allowedHosts` or set `publicUrl`.
 
-`X-Forwarded-*` headers are trusted from any client (the proxy's address is not known in advance). Their only uses are
+`X-Forwarded-*` headers are trusted from any client (the proxy's address is not known in advance). They are never used
+for access decisions (`listen.allowedSources` uses the connection's address). Their only uses are
 log lines, the request origin recorded for push links (the browser's `Origin` header is preferred, and only accepted
 when its host passes the check above) and the URL inside `/setup/guest.sh` when `publicUrl` is unset (a forwarded host
 is used only when it passes the same check). A client that spoofs them only changes what it gets back itself.
@@ -208,16 +225,24 @@ X-Frame-Options: DENY
 
 ## TLS to Proxmox
 
-The installer pins the **SHA-256 fingerprint** of the certificate pveproxy serves (`proxmox.tls.fingerprint`). On
-every new connection the dashboard compares the certificate with the pin **before** it sends any request, so the token
-never goes to an impostor. TLS session resumption is off, so every connection is checked.
+The token is never sent before the Proxmox certificate checks out. There are three modes, and the installer picks one:
 
-The flip side: when the certificate is renewed (an ACME/Let's Encrypt cert every ~60-90 days, the self-signed one at
-most every 2 years or after `pvecm updatecerts --force`), the dashboard **fails closed** until you update the pin
-([TROUBLESHOOTING.md](TROUBLESHOOTING.md#-tls-fingerprint-mismatch-after-a-certificate-renewal)). If renewals are
-frequent, use `proxmox.tls.ca` with a copy of `/etc/pve/pve-root-ca.pem` instead (self-signed setup) or no TLS option
-at all (publicly trusted ACME certificate, with a `proxmox.url` host name that matches it). `insecure: true` exists
-but turns off all checks; avoid it.
+- **Proxmox's cluster CA** (`proxmox.tls.ca`, the default for a new install with Proxmox's own self-signed
+  certificate): the dashboard verifies the certificate against a copy of `/etc/pve/pve-root-ca.pem`, including that the
+  address in `proxmox.url` is one of its names, like a browser does with a public CA. The installer only chooses this
+  after `openssl s_client -CAfile ... -verify_ip <host address>` succeeded on the host. Proxmox renews the node
+  certificate by itself (`pveupdate`, in the two weeks before it expires) with the same CA and names, so nothing
+  breaks. Anyone who can sign with that CA could impersonate the host; its key lives in `/etc/pve/priv/` on the host.
+- **A pin** (`proxmox.tls.fingerprint`, when the CA check fails, or for existing installs): the dashboard compares the
+  certificate's SHA-256 fingerprint with the pin before it sends any request. The flip side: when the certificate is
+  renewed (an ACME/Let's Encrypt cert every ~60-90 days, the self-signed one at most every 2 years or after
+  `pvecm updatecerts --force`), the dashboard **fails closed** until you update the pin
+  ([TROUBLESHOOTING.md](TROUBLESHOOTING.md#-tls-fingerprint-mismatch-after-a-certificate-renewal), which also shows how
+  to switch to the CA).
+- **The public CAs** (no TLS option, a `proxmox.url` host name that matches a publicly trusted ACME certificate).
+
+TLS session resumption is off, so every connection is checked. `insecure: true` exists but turns off all checks;
+avoid it.
 
 When the host serves a custom or ACME certificate (`pveproxy-ssl.pem`), the installer warns that a pin breaks at every
 renewal and, for a new install, offers the public-CA mode: it asks for the host name on the certificate (proposing the
@@ -232,6 +257,8 @@ and that the name resolves to the host inside the container. Otherwise it pins a
 | Container `/etc/pve1-dash/ssh/id_ed25519` | dashboard SSH private key | pve1dash 0600 | **secret** (can run the helpers only) |
 | Container `/etc/pve1-dash/ssh/known_hosts` | pinned host keys (pve1 + learned VMs) | pve1dash 0600 | integrity matters |
 | Container `/etc/pve1-dash/config.yaml` | settings (no secrets unless you inline `tokenSecret`) | root:pve1dash 0640 | low |
+| Container `/etc/pve1-dash/pve-root-ca.pem` | copy of Proxmox's cluster CA certificate (public) | root 0644 | integrity matters |
+| Container `/var/lib/pve1-dash/config.good.yaml` | the last config the dashboard started with | pve1dash 0600 | low |
 | Container `/var/lib/pve1-dash/push.json` | VAPID key pair, push subscriptions (device endpoints) | pve1dash 0600 | **secret-ish**: lets someone send notifications to your devices. Never overwritten when unreadable; a corrupt copy is kept as `push.json.corrupt-<time>` |
 | Container `/var/lib/pve1-dash/alerts.json`, `health.json` | alert history, service uptime history | pve1dash 0600 | low |
 | Host `/usr/local/sbin/pve1-dash-helper` | the helper | root 0755 | integrity matters |
@@ -244,7 +271,8 @@ Back up the container like any other guest; `/var/lib/pve1-dash` is all the stat
 ## Supply chain and updates
 
 - The installer and update tool fetch code from the GitHub repository over HTTPS, at the ref you choose (`main` by
-  default; pin a tag with `PVE1_DASH_REF` / `pve1-dash-update --ref` if you prefer). The installer resolves the ref to
+  default; pin a tag with `PVE1_DASH_REF` / `pve1-dash-update --ref` if you prefer, so nothing merged later changes
+  what gets built). The installer resolves the ref to
   one commit up front: the container checks out exactly that commit, and the files the host downloads (the setup
   script, the reference copy of the helper) come from that commit's immutable URL. It stops right away if the ref does
   not contain pve1-dash.
@@ -259,6 +287,9 @@ Back up the container like any other guest; `/var/lib/pve1-dash` is all the stat
 - The service runs as the unprivileged user `pve1dash` with systemd sandboxing (read-only file system except its
   state, no capabilities, syscall filter, `NoNewPrivileges`). See the comments in `deploy/pve1-dash.service` for which
   options are on, which are deliberately off in an LXC, and why.
+- `pve1-dash-doctor` (run at the end of every install and update) is read-only: it only reads from the
+  Proxmox API, runs the helper's read-only commands, and never prints the token secret. The installer shows its
+  output with control characters escaped, like everything else that comes from the container.
 - Keep the container patched like any Debian system: `apt update && apt full-upgrade` inside it now and then (or
   install `unattended-upgrades`), and `pve1-dash-update` for the app and Node.js 24.x.
 
@@ -268,8 +299,7 @@ Back up the container like any other guest; `/var/lib/pve1-dash` is all the stat
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/uninstall.sh)"
 ```
 
-(before pve1-dash is merged into `main`: `.../claude/homelab-dashboard-pve1-dizt16/deploy/uninstall.sh`) removes one
-dashboard's key line, the helper (unless another dashboard on the node uses it) and, after asking, its API token (the
+removes one dashboard's key line, the helper (unless another dashboard on the node uses it) and, after asking, its API token (the
 user too when no other dashboard is left). A container you keep is stopped and taken off autostart, so it can't send
 false alerts. By hand: delete the `pve1-dash@ct<id>` line from `/root/.ssh/authorized_keys`,
 `rm /usr/local/sbin/pve1-dash-helper`, and remove the token (or the user) in Datacenter → Permissions.
