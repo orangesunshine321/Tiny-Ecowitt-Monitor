@@ -20,7 +20,7 @@
 
 set -Eeuo pipefail
 
-readonly DEFAULT_REPO='https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git'
+readonly DEFAULT_REPO='https://github.com/orangesunshine321/pve1_dashboard.git'
 # The branch pve1-dash lived on before it was merged into main. Installs from that time still record it.
 readonly PREMERGE_REF='claude/homelab-dashboard-pve1-dizt16'
 readonly APP_DIR=/opt/pve1-dash
@@ -59,6 +59,7 @@ readonly MIN_FREE_MIB=${PVE1_DASH_MIN_FREE_MIB:-1024}
 # Every step checks its own result: try_update_node runs this where errexit is off (a failed step there would
 # otherwise go unnoticed). The working version is only touched once the new one is unpacked and runs, and older
 # versions are only deleted after the switch is verified.
+# shellcheck disable=SC2120 # the major version argument is optional (the tests pass one)
 install_node() {
   local major=${1:-$NODE_MAJOR} dist arch sums line sha file version dest tmp current='' got prev old
   dist="${PVE1_DASH_NODE_DIST:-https://nodejs.org/dist}/latest-v${major}.x"
@@ -119,6 +120,7 @@ install_node() {
   if link_node_bins; then got=$("$BIN_DIR/node" --version 2>/dev/null) || got=''; fi
   if [[ $got != "$version" ]]; then
     if [[ -n $prev && -d $prev ]]; then
+      # shellcheck disable=SC2015 # best-effort rollback: any failed step just leaves it
       ln -sfn "$prev" "$NODE_ROOT/node.new" && mv -Tf "$NODE_ROOT/node.new" "$NODE_ROOT/node" && link_node_bins || :
     fi
     die "$BIN_DIR/node does not run Node.js $version after the switch (it printed \"$got\")${prev:+; switched back to $prev}"
@@ -134,6 +136,7 @@ install_node() {
 # a working Node.js exists.
 try_update_node() {
   local rc=0
+  # shellcheck disable=SC2119 # the default major version
   (install_node) || rc=$?
   if ((rc == 0)); then return 0; fi
   [[ -x $BIN_DIR/node ]] || die 'Node.js is not installed and could not be installed'
@@ -289,14 +292,17 @@ config_listen() {
     const y = require("yaml"), fs = require("fs");
     const c = y.parse(fs.readFileSync(process.argv[1], "utf8")) || {};
     const l = (c && typeof c.listen === "object" && c.listen) || {};
-    process.stdout.write(String(l.host || "") + " " + String(l.port || "") + "\n");' "$file" 2>/dev/null) || :
+    process.stdout.write(String(l.host || "-") + " " + String(l.port || "-") + "\n");' "$file" 2>/dev/null) || :
 }
 
 # "<host> <port>" the server listens on. PVE1_DASH_PORT in /etc/pve1-dash/env overrides the port, like the server.
 listen_endpoint() {
   local host='' port='' cport=''
   if [[ -f $CONF_DIR/env ]]; then port=$(sed -n 's/^PVE1_DASH_PORT=//p' "$CONF_DIR/env" | tr -d "\"' " | tail -n 1); fi
+  # config_listen prints "-" for an unset field: with an empty host, read would otherwise take the port as the host.
   read -r host cport <<<"$(config_listen "$CONF_DIR/config.yaml" "$APP_DIR")" || :
+  [[ $host == - ]] && host=''
+  [[ $cport == - ]] && cport=''
   port=${port:-$cport}
   [[ $host =~ ^[A-Za-z0-9.:_-]{1,253}$ ]] || host=0.0.0.0
   [[ $port =~ ^[0-9]{1,5}$ ]] || port=8080

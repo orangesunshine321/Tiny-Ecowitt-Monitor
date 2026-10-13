@@ -29,7 +29,7 @@ Something not working? Start with **`pct exec <ctid> -- pve1-dash-doctor`** on t
 On the Proxmox host, as root, over SSH or in the web UI's node → **Shell**:
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main/deploy/install.sh)"
 ```
 
 The install takes **5-10 minutes; keep the shell open.** The web UI's Shell panel ends the session (and the install)
@@ -61,7 +61,7 @@ Unattended, with environment variables (see `install.sh --help` for all of them)
 
 ```bash
 PVE1_DASH_VAPID_EMAIL=you@example.com PVE1_DASH_PUBLIC_URL=https://dash.example.com PVE1_DASH_ALLOWED_SOURCES=10.10.10.0/24 \
-  bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)" -- --yes
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main/deploy/install.sh)" -- --yes
 ```
 
 **TLS to Proxmox.** With the default self-signed certificate, the installer checks that the certificate on `:8006`
@@ -168,7 +168,7 @@ Easiest: let the setup script do it. It is the same script the installer runs, a
 
 ```bash
 # On the host: copy the script in and run it with your values
-curl -fsSL -o /tmp/lxc-setup.sh https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/lxc-setup.sh
+curl -fsSL -o /tmp/lxc-setup.sh https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main/deploy/lxc-setup.sh
 pct push 120 /tmp/lxc-setup.sh /root/lxc-setup.sh
 pct enter 120
 # now inside the container:
@@ -201,7 +201,7 @@ for b in node npm npx corepack; do ln -sfn /opt/node/bin/$b /usr/local/bin/$b; d
 
 # Service user and the app (built from source, then dev dependencies removed)
 useradd --system --user-group --home-dir /var/lib/pve1-dash --no-create-home --shell /usr/sbin/nologin pve1dash
-git clone --depth 1 --branch main https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git /opt/pve1-dash
+git clone --depth 1 --branch main https://github.com/orangesunshine321/pve1_dashboard.git /opt/pve1-dash
 cd /opt/pve1-dash
 npm ci --include=dev --ignore-scripts && npm run build && npm prune --omit=dev --ignore-scripts
 
@@ -225,7 +225,7 @@ install -m 0644 /opt/pve1-dash/deploy/pve1-dash.service /etc/systemd/system/
 install -m 0755 /opt/pve1-dash/deploy/update.sh /usr/local/bin/pve1-dash-update
 install -m 0755 /opt/pve1-dash/deploy/pve1-dash-doctor.sh /usr/local/bin/pve1-dash-doctor
 install -m 0755 /opt/pve1-dash/deploy/pve1-dash-config.sh /usr/local/bin/pve1-dash-config
-printf 'PVE1_DASH_REPO=https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git\nPVE1_DASH_REF=main\nPVE1_DASH_CTID=120\n' > /etc/pve1-dash/install.env
+printf 'PVE1_DASH_REPO=https://github.com/orangesunshine321/pve1_dashboard.git\nPVE1_DASH_REF=main\nPVE1_DASH_CTID=120\n' > /etc/pve1-dash/install.env
 systemctl daemon-reload && systemctl enable --now pve1-dash
 curl -s http://127.0.0.1:8080/healthz      # {"ok":true}
 pve1-dash-doctor                           # after step 5: every check should be ✓
@@ -266,7 +266,7 @@ container's copy only to compare (the container is less trusted than the host):
 # On the host. REF = the branch or tag the container was installed from (main, or a tag)
 REF=main
 curl -fsSL -o /tmp/pve1-dash-helper \
-  "https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/$REF/deploy/helpers/pve1-dash-helper"
+  "https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/$REF/deploy/helpers/pve1-dash-helper"
 pct pull 120 /opt/pve1-dash/deploy/helpers/pve1-dash-helper /tmp/pve1-dash-helper.ct
 cmp /tmp/pve1-dash-helper /tmp/pve1-dash-helper.ct && echo same     # different? update the container, or check REF
 install -o root -g root -m 0755 /tmp/pve1-dash-helper /usr/local/sbin/pve1-dash-helper
@@ -381,7 +381,7 @@ exists, it says so and tells you to use `--ref main`.
 If it says the host helper changed, run on the host the command it prints, for example:
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)" -- --update-helper
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main/deploy/install.sh)" -- --update-helper
 ```
 
 `--update-helper` compares the container's helper with the repository's copy at the branch or tag the container
@@ -394,7 +394,7 @@ if the Proxmox certificate changed, and rolls back like `pve1-dash-update` if th
 ## 🧹 Uninstalling
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/uninstall.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main/deploy/uninstall.sh)"
 # no questions: ... -- --yes     another container: ... -- --ctid 130
 ```
 

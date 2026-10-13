@@ -6,7 +6,7 @@
 
 [Unit]
 Description=pve1-dash - read-only Proxmox VE dashboard
-Documentation=https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor
+Documentation=https://github.com/orangesunshine321/pve1_dashboard
 After=network-online.target
 Wants=network-online.target
 

@@ -54,7 +54,7 @@ CA_FILE=/etc/pve1-dash/pve-root-ca.pem
 DATA_DIR=/var/lib/pve1-dash
 SVC_USER=pve1dash
 DEFAULT_TOKEN_ID='pve1dash@pve!dashboard'
-SETUP_REPO_DEFAULT='https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git'
+SETUP_REPO_DEFAULT='https://github.com/orangesunshine321/pve1_dashboard.git'
 PIN_ADDR=''
 
 say() { printf 'pve1-dash: %s\n' "$*"; }

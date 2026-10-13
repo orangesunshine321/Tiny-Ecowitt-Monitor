@@ -98,7 +98,7 @@ describe('deploy/config.example.yaml', () => {
     expect(cfg.services.overrides.jellyfin?.group).toBe('Media');
     expect(cfg.alerts.vapidSubject).toMatch(/^mailto:/);
     expect(cfg.alerts.vapidSubject).not.toContain('localhost');
-    expect(cfg.board).toEqual({ title: 'DEPARTURES', station: 'PVE1 CENTRAL', sound: false });
+    expect(cfg.board).toEqual({ title: 'SERVICE STATUS', station: 'PVE1', sound: false });
     expect(cfg.demo).toBe(false);
   });
 

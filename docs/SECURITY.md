@@ -296,7 +296,7 @@ Back up the container like any other guest; `/var/lib/pve1-dash` is all the stat
 ## Revoking everything
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/uninstall.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main/deploy/uninstall.sh)"
 ```
 
 removes one dashboard's key line, the helper (unless another dashboard on the node uses it) and, after asking, its API token (the

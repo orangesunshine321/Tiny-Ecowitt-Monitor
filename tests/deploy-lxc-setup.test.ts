@@ -480,7 +480,7 @@ save_install_env() { echo "save_install_env $*" >> "$ORDER"; }
   it('records the source only after the new version runs', () => {
     const r = run({ upgrade: true });
     expect(r.status, r.stderr).toBe(0);
-    expect(order().slice(-2)).toEqual(['start-ok', 'save_install_env https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git main 120']);
+    expect(order().slice(-2)).toEqual(['start-ok', 'save_install_env https://github.com/orangesunshine321/pve1_dashboard.git main 120']);
     expect(sb.read('app/version')).toBe('new\n');
   });
 

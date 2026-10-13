@@ -46,7 +46,7 @@ Routes are client-side (History API, with the server falling back to `index.html
 | `/guests` | Guests (VMs + LXCs) |
 | `/guests/:vmid` | Guest detail |
 | `/services` | Services launcher |
-| `/board` | Departure board (fullscreen) |
+| `/board` | Status board (fullscreen) |
 | `/storage` | Storage, ZFS and disks |
 | `/backups` | Backups |
 | `/tasks` | Tasks |
@@ -143,7 +143,7 @@ a calm solid gradient under Reduce Transparency.
 | `OsIcon` | maps an OS name to a dashboard-icons slug. Real slugs: `debian-linux`, `ubuntu-linux`, `alpine-linux`, `microsoft-windows`, `home-assistant`, `proxmox`. Falls back to a lucide icon. |
 | `RelativeTime` | auto-updating "2m ago"; absolute time in a `title` tooltip |
 | `Bytes` / `Percent` / `Rate` | formatters |
-| `MiniBoard` | compact split-flap departures used on Overview (implemented in `web/src/board/`) |
+| `MiniBoard` | compact split-flap service status used on Overview (implemented in `web/src/board/`) |
 
 Formatting:
 - Memory and disk use binary units labelled "GiB" (matching Proxmox).
@@ -171,7 +171,7 @@ Formatting:
 
   When nothing is wrong, show a friendly "All systems nominal" empty state.
 - **Guests card.** Running/stopped counts and the top 5 by CPU, with mini bars.
-- **Departures card.** `MiniBoard` with the 5 most relevant services (down first).
+- **Service status card.** `MiniBoard` with the 5 most relevant services (down first).
 - **Storage card.** A `Meter` per pool.
 - **Temperatures card.** Only when `hostInventory.temps` exists.
 
@@ -212,23 +212,26 @@ Formatting:
   - a 90-sample uptime strip and the `uptime24h` percentage.
 - Clicking a tile opens the URL in a new tab.
 - Filters: All / Problems / Docker / Configured, plus search.
-- A "Departure board" button opens `/board`.
+- A "Status board" button opens `/board`.
 
 ### Board (`/board`)
 
-The retro-futuristic split-flap departure board is fullscreen, with no app chrome; Esc or a glass "Done" button
+The retro-futuristic split-flap status board is fullscreen, with no app chrome; Esc or a glass "Done" button
 returns.
 
-- **Header:** "DEPARTURES · PVE1 CENTRAL" (from `meta.board`) and a live flip clock.
+- **Header:** "SERVICE STATUS · PVE1" (from `meta.board`) and a live flip clock.
+- **Words:** it looks like a station board but says plain things. The first version used train words (DEPARTURES,
+  ON TIME, CANCELLED, PLATFORM), which the owner found unreadable without knowing the joke, so they were replaced. The
+  code keeps the old identifiers (`departureRows`, `dest`, `platform`, `REMARK`).
 - **Columns:**
 
   | Column | Content |
   |---|---|
-  | TIME | last check, HH:MM |
-  | DESTINATION | service name, uppercase, truncated to fit |
-  | PLATFORM | guest name or vmid |
-  | REMARKS | ON TIME (up) · DELAYED (slow) · CANCELLED (down) · NOT IN SERVICE (paused) · BOARDING (unknown) |
-  | MS | latency |
+  | CHECKED | last check, HH:MM |
+  | SERVICE | service name, uppercase, truncated to fit |
+  | GUEST (ID when narrow) | guest name or vmid |
+  | STATUS | UP · SLOW · DOWN · STOPPED (paused: its guest is stopped) · UNKNOWN (not checked yet) |
+  | MS | response time |
 
 - **Look:**
   - deep charcoal flaps with warm amber/white characters, a hinge line and a subtle gap per cell;

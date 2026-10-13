@@ -1,5 +1,5 @@
-/** Settings → Appearance: theme, Reduce Transparency and the departure board's sound (all stored per device). */
-import { Binary, Contrast, Moon, Sun, SunMoon, TrainFront } from 'lucide-react';
+/** Settings → Appearance: theme, Reduce Transparency and the status board's sound (all stored per device). */
+import { Activity, Binary, Contrast, Moon, Sun, SunMoon } from 'lucide-react';
 import { ListGroup, ListRow, Toggle } from '../../components';
 import { playTestClack, unlockBoardAudio } from '../../board/audio';
 import { setPref, usePrefs, type ThemePref } from '../../prefs';
@@ -59,9 +59,9 @@ export function AppearanceSection() {
         accessory={<Toggle ariaLabel="Reduce Transparency" checked={reduceTransparency} onChange={(v) => setPref('reduceTransparency', v)} />}
       />
       <ListRow
-        icon={<TrainFront strokeWidth={2} />}
+        icon={<Activity strokeWidth={2} />}
         title="Board sound"
-        subtitle={isIphone() ? 'Mechanical clack on the departure board. Silent while iPhone is in Silent mode.' : 'Mechanical clack on the departure board.'}
+        subtitle={isIphone() ? 'Mechanical clack on the status board. Silent while iPhone is in Silent mode.' : 'Mechanical clack on the status board.'}
         wrap
         accessory={<Toggle ariaLabel="Board sound" checked={boardSound} onChange={setBoardSound} />}
       />

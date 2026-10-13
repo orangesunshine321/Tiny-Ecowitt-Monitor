@@ -60,7 +60,7 @@ describe('drum', () => {
 
 describe('departure rows', () => {
   it('maps every status to its remark and lamp', () => {
-    expect(REMARK).toEqual({ up: 'ON TIME', slow: 'DELAYED', down: 'CANCELLED', paused: 'NOT IN SERVICE', unknown: 'BOARDING' });
+    expect(REMARK).toEqual({ up: 'UP', slow: 'SLOW', down: 'DOWN', paused: 'STOPPED', unknown: 'UNKNOWN' });
     expect(LAMP).toEqual({ up: 'green', slow: 'amber', down: 'red', paused: 'gray', unknown: 'blink' });
     for (const word of Object.values(REMARK)) expect(REMARK_DRUM).toContain(word);
     expect(REMARK_DRUM[0]).toBe('');
@@ -89,11 +89,11 @@ describe('departure rows', () => {
       dest: 'sonarr',
       platformName: 'docker-media',
       platformId: '102',
-      remark: 'ON TIME',
+      remark: 'UP',
       lamp: 'green',
       ms: '28',
     });
-    expect(row.label).toBe('sonarr on docker-media: on time, 28 milliseconds');
+    expect(row.label).toBe('sonarr on docker-media: up, 28 milliseconds');
   });
 
   it('shows no latency for down, paused or unchecked services and caps it at 4 digits', () => {
@@ -107,21 +107,21 @@ describe('departure rows', () => {
 
   it('includes the failure reason in the accessible label of a problem row', () => {
     const row = toDepartureRow(svc({ id: 'x', name: 'jellyseerr', status: 'down', message: 'HTTP 503' }));
-    expect(row.label).toBe('jellyseerr: cancelled (HTTP 503)');
+    expect(row.label).toBe('jellyseerr: down (HTTP 503)');
     expect(row.platformName).toBe('');
   });
 
   it('summarises in board language', () => {
-    expect(boardSummary([])).toBe('No departures');
-    expect(boardSummary([svc({ id: 'a', name: 'a', status: 'up' })])).toBe('All on time');
+    expect(boardSummary([])).toBe('No services');
+    expect(boardSummary([svc({ id: 'a', name: 'a', status: 'up' })])).toBe('All up');
     expect(
       boardSummary([
         svc({ id: 'a', name: 'a', status: 'down' }),
         svc({ id: 'b', name: 'b', status: 'down' }),
         svc({ id: 'c', name: 'c', status: 'slow' }),
       ]),
-    ).toBe('2 cancelled · 1 delayed');
-    expect(boardSummary([svc({ id: 'a', name: 'a', status: 'paused' })])).toBe('Not in service');
+    ).toBe('2 down · 1 slow');
+    expect(boardSummary([svc({ id: 'a', name: 'a', status: 'paused' })])).toBe('All stopped');
   });
 });
 

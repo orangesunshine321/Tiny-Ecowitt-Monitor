@@ -1,5 +1,5 @@
 /**
- * Compact split-flap departures for the Overview card (DESIGN §4 MiniBoard): the same visual language as the
+ * Compact split-flap service status for the Overview card (DESIGN §4 MiniBoard): the same visual language as the
  * fullscreen board, with compact rows, no platform column, no sound and no paging.
  *
  * Contract: `MiniBoard({ services, rows })` shows the first `rows` services in the order given (callers pass them
@@ -52,7 +52,7 @@ export function MiniBoard({ services, rows = 5 }: MiniBoardProps) {
             data-mode="flat"
             style={{ ...boardVars(layout), width: layout.rowW, marginInline: 'auto' }}
             role="img"
-            aria-label={shown ? `Departures: ${summary}` : 'No departures'}
+            aria-label={shown ? `Service status: ${summary}` : 'No services'}
           >
             <BoardLabels layout={layout} compact />
             {list.map((row, i) => (
@@ -63,7 +63,7 @@ export function MiniBoard({ services, rows = 5 }: MiniBoardProps) {
           <div style={{ height: count * approxRowH + 18 }} />
         )}
       </div>
-      {shown === 0 && <div className="mb-empty">No departures scheduled</div>}
+      {shown === 0 && <div className="mb-empty">No services yet</div>}
     </div>
   );
 }

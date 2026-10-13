@@ -851,7 +851,7 @@ export function buildSampleSnapshot(now = Date.now()): Snapshot {
       inventoryEnabled: true,
       pushEnabled: true,
       vapidPublicKey: 'BDNasaRyQwtWXXx4ObqGA7C-ZxvO73DBMIywj0ZQwh8EFEbjSu3mtt8r9XAaOgFaCwxHV8eA0gdfbi8Lrm0xqUU',
-      board: { title: 'DEPARTURES', station: 'PVE1 CENTRAL', sound: false },
+      board: { title: 'SERVICE STATUS', station: 'PVE1', sound: false },
       thresholds: { storageWarnPercent: 85, storageCritPercent: 95, backupStaleDays: 7, slowMs: 1500, wearWarnPercent: 80 },
       collectors: buildCollectors(now),
     },
@@ -1247,7 +1247,7 @@ function sampleDiagnostics(now: number): DiagnosticsReport {
       title: 'API token',
       status: scenario === 'auth' ? 'fail' : 'ok',
       detail: scenario === 'auth' ? err!.error : "Token pve1dash@pve!dashboard is valid.",
-      fix: scenario === 'auth' ? 'PVE1_DASH_ROTATE_TOKEN=yes bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)"' : undefined,
+      fix: scenario === 'auth' ? 'PVE1_DASH_ROTATE_TOKEN=yes bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main/deploy/install.sh)"' : undefined,
     },
     {
       id: 'pve.acl',

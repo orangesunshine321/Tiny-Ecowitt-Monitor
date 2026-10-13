@@ -390,7 +390,7 @@ export const ConfigSchema = z.object({
   inventory: InventorySchema,
   services: ServicesSchema,
   board: z
-    .object({ title: z.string().default('DEPARTURES'), station: z.string().default('PVE1 CENTRAL'), sound: z.boolean().default(false) })
+    .object({ title: z.string().default('SERVICE STATUS'), station: z.string().default('PVE1'), sound: z.boolean().default(false) })
     .prefault({}),
   alerts: AlertsSchema,
   logLevel: z.enum(['debug', 'info', 'warn', 'error']).default('info'),

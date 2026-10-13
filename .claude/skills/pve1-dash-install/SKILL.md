@@ -8,7 +8,7 @@ description: "Use when installing pve1-dash on the Proxmox host pve1 for the fir
 The reference is `docs/SETUP.md` (every installer question, what it creates, manual install, updating,
 uninstalling). Use this skill for the order of work and the answers that fit this homelab. Each command says where it
 runs: **host** = pve1 as root, **CT** = the dashboard container (`pct exec <ctid> -- ...`), **LAN** = any machine on
-10.10.10.0/24.
+10.10.10.0/24 or 10.10.20.0/24.
 
 ## Ground rules
 
@@ -27,7 +27,7 @@ runs: **host** = pve1 as root, **CT** = the dashboard container (`pct exec <ctid
 
 ```bash
 # host or LAN: must print a number > 0 (the pre-merge main printed 0)
-curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh | grep -c PVE1_DASH_ALLOWED_SOURCES
+curl -fsSL https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main/deploy/install.sh | grep -c PVE1_DASH_ALLOWED_SOURCES
 ```
 
 (raw.githubusercontent.com caches branch URLs for a few minutes after a push.)
@@ -37,8 +37,8 @@ Facts to collect on the **host** (all read-only):
 | Command | Why |
 |---|---|
 | `pveversion` | PVE 8 or 9 (below 8 is refused; above 9 asks `PVE1_DASH_CONTINUE_UNTESTED`) |
-| `pvesm status --content rootdir` · `pvesm status --content vztmpl` | the storages that allow container disks (`local-lvm`/`local-zfs`) and templates (`local`); the installer lists them the same way |
-| `ip -br addr` and `ip route show default` | which bridge carries 10.10.10.0/24 (expected `vmbr0`), and the router IP |
+| `pvesm status --content rootdir` · `pvesm status --content vztmpl` | the storages that allow container disks (here: `local-lvm` is the default; also `nvme-thin`, `local-ssd`, `kingstonssd`) and templates (`local`); the installer lists them the same way |
+| `ip -br addr` and `ip route show default` | `vmbr0` (untagged = Main 10.10.20.0/24, pve1 = 10.10.20.241) and the router 10.10.20.1 |
 | `sshd -T \| grep -i permitrootlogin` | must be `yes`, `prohibit-password`, `without-password` or `forced-commands-only` (the installer only warns) |
 | `ls -l /etc/pve/local/pveproxy-ssl.pem` | present means a custom or ACME cert on :8006, and the installer will ask `PVE1_DASH_PVE_HOST`; absent means the default cert, so CA mode |
 | `timedatectl show -p Timezone --value` | becomes `timezone:` in a new config (override: `PVE1_DASH_TIMEZONE`) |
@@ -46,11 +46,10 @@ Facts to collect on the **host** (all read-only):
 
 Then ask the owner:
 
-1. What is the **Nginx Proxy Manager host's IP**? If it is outside 10.10.10.0/24, it must be added to the allowed sources.
-   Is **any port on the NPM host forwarded from the internet**, or does NPM serve any public site? (This decides the
-   Access List in section 5.)
-2. Should the container have a **static IP** (`10.10.10.<x>/24` plus gateway) or **DHCP with a router reservation**?
-   NPM forwards to this IP, so it must not move.
+1. Already answered for this homelab (see `CLAUDE.md` → This homelab): NPM = 10.10.10.13 (VM 102), and the UDM
+   **does forward WAN :80/:443 to NPM**, so the Access List in section 5 is mandatory.
+2. Already answered: static **10.10.20.5/24**, gateway 10.10.20.1 (outside the .6-.254 DHCP pool). NPM forwards to
+   this IP, so it must not move.
 3. Any preferred container ID? (The default is the next free one.)
 4. Do they want **lm-sensors** on the host for CPU temperatures? (The default is no.)
 
@@ -59,14 +58,14 @@ Then ask the owner:
 | Question | Answer here | Env var (unattended) |
 |---|---|---|
 | Container ID / hostname | next free / `pve1-dash` | `PVE1_DASH_CTID` / `PVE1_DASH_HOSTNAME` |
-| Disk storage / size / template storage | default (`local-lvm` or `local-zfs`) / 6 / `local` | `PVE1_DASH_STORAGE` / `PVE1_DASH_DISK` / `PVE1_DASH_TEMPLATE_STORAGE` |
+| Disk storage / size / template storage | `local-lvm` / 6 / `local` | `PVE1_DASH_STORAGE` / `PVE1_DASH_DISK` / `PVE1_DASH_TEMPLATE_STORAGE` |
 | Bridge / VLAN | `vmbr0` (confirm in pre-flight) / none | `PVE1_DASH_BRIDGE` / `PVE1_DASH_VLAN` |
-| IPv4 / gateway | `10.10.10.<x>/24` + router, or `dhcp` + reservation | `PVE1_DASH_IP` / `PVE1_DASH_GATEWAY` |
+| IPv4 / gateway | `10.10.20.5/24` + `10.10.20.1` | `PVE1_DASH_IP` / `PVE1_DASH_GATEWAY` |
 | Cores / memory / swap | 1 / 1024 / 512 (the build needs 1 GiB) | `PVE1_DASH_CORES` / `PVE1_DASH_MEMORY` / `PVE1_DASH_SWAP` |
-| Proxmox host IP | detected (pve1's 10.10.10.x) | `PVE1_DASH_NODE_IP` |
+| Proxmox host IP | detected (10.10.20.241) | `PVE1_DASH_NODE_IP` |
 | Public HTTPS URL | `https://dash.bgreen.cloud` | `PVE1_DASH_PUBLIC_URL` |
 | Email for Web Push | the owner's real address (they type it) | `PVE1_DASH_VAPID_EMAIL` |
-| Allow connections from | `10.10.10.0/24`, plus NPM's IP if it is outside | `PVE1_DASH_ALLOWED_SOURCES` |
+| Allow connections from | `10.10.10.0/24 10.10.20.0/24` (the installer's default, pve1's own /24, would leave out NPM) | `PVE1_DASH_ALLOWED_SOURCES` |
 | lm-sensors | the owner's choice | `PVE1_DASH_SENSORS` |
 | Host name on the certificate | only asked for a custom/ACME cert, and only when a **new** config is written: its DNS name (must resolve to pve1 inside the CT) | `PVE1_DASH_PVE_HOST` |
 
@@ -78,15 +77,15 @@ Three more work but are not listed there: `PVE1_DASH_TIMEZONE`, `PVE1_DASH_PROCE
 ## 3. Run it (owner, host)
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main/deploy/install.sh)"
 ```
 
 Unattended form, only if the owner wants it. They put in their own email:
 
 ```bash
 PVE1_DASH_VAPID_EMAIL=<their email> PVE1_DASH_PUBLIC_URL=https://dash.bgreen.cloud \
-PVE1_DASH_ALLOWED_SOURCES="10.10.10.0/24" PVE1_DASH_IP=10.10.10.<x>/24 PVE1_DASH_GATEWAY=<router ip> \
-  bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)" -- --yes
+PVE1_DASH_ALLOWED_SOURCES="10.10.10.0/24 10.10.20.0/24" PVE1_DASH_IP=10.10.20.5/24 PVE1_DASH_GATEWAY=10.10.20.1 \
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main/deploy/install.sh)" -- --yes
 ```
 
 Even with `--yes`, three questions come **after** "Go ahead?" and can still matter:
@@ -125,9 +124,8 @@ be able to resolve `dash.bgreen.cloud`. Until then, read their result as "not se
 Follow the NPM recipe in `deploy/reverse-proxy/README.md`, with these values:
 
 - **Details**: Domain `dash.bgreen.cloud`; scheme `http`; forward to `<container IP>` port `8080`; **Cache Assets OFF**;
-  Websockets ON; **Access List** `allow 10.10.10.0/24` + `deny all`. That is the only recommended setting. Use
-  "Publicly Accessible" only after the owner confirms that no port on the NPM host is forwarded from the internet
-  and NPM serves no public site. The dashboard sees NPM as the client, so whatever NPM lets in passes
+  Websockets ON; **Access List** `allow 10.10.10.0/24` + `allow 10.10.20.0/24` + `deny all` (named "LAN only"). This is
+  mandatory here: the UDM forwards WAN :443 to NPM, so "Publicly Accessible" would put the dashboard on the internet. The dashboard sees NPM as the client, so whatever NPM lets in passes
   `allowedSources`, and the app has no login.
 - **SSL**: the Let's Encrypt certificate (DNS challenge), Force SSL ON, **HTTP/2 ON**.
 - **Advanced tab: no `location` block, ever.** One there bypasses the Access List. Per-path settings go in Custom
@@ -153,7 +151,7 @@ A 403 has two possible sources, so read its body. The dashboard's own says `list
 allowed from this network" (HTML), and means NPM's IP is not in `listen.allowedSources`. Any other 403 page comes
 from NPM's Access List, so check that instead.
 
-LAN-only check, from a device **outside** 10.10.10.0/24 that can still reach NPM (a guest/IoT VLAN), and from a phone
+LAN-only check, from a device **outside** both LANs that can still reach NPM (a guest/IoT VLAN), and from a phone
 on mobile data with Wi-Fi off. Both commands must print 403 or fail to connect, and the page must not load:
 
 ```bash
@@ -168,7 +166,7 @@ separation or the hardening line.
 after a dashboard 403, read the 403 body (it names the address), or run
 `pct exec <ctid> -- journalctl -u pve1-dash --no-pager | grep 'refused a connection'` (host). To fix it (with OK),
 the owner runs `pct enter <ctid>`, then `pve1-dash-config`, and adds NPM's IP to `listen.allowedSources` (it validates,
-saves and restarts). Re-running the installer with `PVE1_DASH_ALLOWED_SOURCES="10.10.10.0/24 <npm ip>"` also works,
+saves and restarts). Re-running the installer with `PVE1_DASH_ALLOWED_SOURCES="10.10.10.0/24 10.10.20.0/24"` also works,
 but that is a full rebuild and upgrade (section 7), so offer it second, when an upgrade is wanted anyway.
 
 ## 6. Push on the owner's iPhone
@@ -204,7 +202,7 @@ If it fails, see `docs/TROUBLESHOOTING.md#-push-notifications-dont-arrive-on-iph
 - **Helper refresh**, when `pve1-dash-update` says the helper changed, or after a PR that changed the helper was
   merged (the notice appears only in the update that changed it), or whenever the CT and host helper hashes differ
   (`CLAUDE.md` → Gotchas) (host, ask first):
-  `bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)" -- --update-helper`.
+  `bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main/deploy/install.sh)" -- --update-helper`.
   When the container's helper differs from the repo copy, it shows a diff and asks on the terminal, which your Bash
   tool doesn't have, so it stops with "no terminal to ask". Then stop too: the owner reads
   `/var/log/pve1-dash-helper.diff` and re-runs the command in their own SSH or xterm.js terminal, because the helper
@@ -215,13 +213,14 @@ If it fails, see `docs/TROUBLESHOOTING.md#-push-notifications-dont-arrive-on-iph
   breaks at the next renewal (60-90 days). Switch by hand, with the owner's OK:
   1. (host) the installer's own test, which must print `Verify return code: 0 (ok)`:
      `openssl s_client -connect 127.0.0.1:8006 -servername <name> -verify_hostname <name> -CAfile /etc/ssl/certs/ca-certificates.crt </dev/null 2>&1 | grep 'Verify return'`
-  2. (host) `pct exec <ctid> -- getent ahostsv4 <name>` must return pve1's 10.10.10.x address.
+  2. (host) `pct exec <ctid> -- getent ahostsv4 <name>` must return pve1's 10.10.20.241 (note: the LAN wildcard `*.bgreen.cloud` points at NPM, so a
+     `*.bgreen.cloud` name needs its own record first).
   3. (CT) With `pve1-dash-config`: under `proxmox.tls`, remove the `ca:` or `fingerprint:` line, and set
      `proxmox.url` to `https://<name>:8006`. It saves and restarts.
 
   If step 1 fails, look at the names and chain the cert really has (host, read-only):
   `openssl s_client -connect 127.0.0.1:8006 </dev/null 2>/dev/null | openssl x509 -noout -ext subjectAltName -issuer`.
-  If step 2 fails (nothing, or a public IP), the owner adds a local or split-DNS record `<name>` → pve1's 10.10.10.x
+  If step 2 fails (nothing, or a public IP), the owner adds a local or split-DNS record `<name>` → 10.10.20.241
   on the router or DNS server the CT uses, then repeat step 2. The installer falls back to a pin in both cases. If the
   dashboard must come back first, a temporary pin with the doctor's `pve.tls` fix (its `sed` on `ca:`/`fingerprint:`)
   is fine with the owner's OK, but it breaks at the next renewal, so the switch must still be finished.
@@ -233,7 +232,7 @@ If it fails, see `docs/TROUBLESHOOTING.md#-push-notifications-dont-arrive-on-iph
 ## 8. Uninstall (destructive, needs explicit OK)
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/uninstall.sh)"   # host
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main/deploy/uninstall.sh)"   # host
 ```
 
 The owner runs it in their own terminal, like the installer, because it asks questions. It removes the container's

@@ -60,10 +60,10 @@ const span = (n: number, l: BoardLayout) => (n > 0 ? n * l.cellW + (n - 1) * l.c
 export function BoardLabels({ layout: l, compact }: { layout: BoardLayout; compact?: boolean }) {
   return (
     <div className="fb-labels" aria-hidden="true">
-      {l.time > 0 && <span style={{ width: span(l.time, l) }}>Time</span>}
-      <span style={{ width: span(l.dest, l) }}>{compact ? 'Service' : 'Destination'}</span>
-      {l.plat > 0 && <span style={{ width: span(l.plat, l) }}>{l.platMode === 'vmid' ? 'Plat' : 'Platform'}</span>}
-      <span style={{ width: l.lampW + l.remarkW, paddingLeft: l.lampW }}>Remarks</span>
+      {l.time > 0 && <span style={{ width: span(l.time, l) }}>Checked</span>}
+      <span style={{ width: span(l.dest, l) }}>Service</span>
+      {l.plat > 0 && <span style={{ width: span(l.plat, l) }}>{l.platMode === 'vmid' ? 'ID' : 'Guest'}</span>}
+      <span style={{ width: l.lampW + l.remarkW, paddingLeft: l.lampW }}>Status</span>
       {l.ms > 0 && (
         <span style={{ width: span(l.ms, l) }} data-align="right">
           ms
@@ -81,7 +81,7 @@ export interface BoardRowProps {
   group: FlapGroup;
 }
 
-/** One departure: TIME · DESTINATION · PLATFORM · ● REMARKS · MS. Decorative (the board has a text mirror). */
+/** One service: CHECKED · SERVICE · GUEST · ● STATUS · MS. Decorative (the board has a text mirror). */
 export const BoardRow = memo(function BoardRow({ row, index, layout: l, group }: BoardRowProps) {
   const destCol = l.time;
   const platCol = destCol + l.dest;

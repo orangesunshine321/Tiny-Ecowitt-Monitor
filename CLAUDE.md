@@ -2,8 +2,8 @@
 
 pve1-dash is a **read-only** homelab dashboard for one Proxmox VE node (pve1). It is a Node.js/Fastify server and a
 React PWA. It runs in its own unprivileged LXC container, reads Proxmox through a `PVEAuditor` API token, and looks
-inside guests through one SSH key that is pinned to a read-only helper script on the host. The repository is still
-called Tiny-Ecowitt-Monitor for historical reasons; everything before commit `6ace15e` is the old Windows app (plus
+inside guests through one SSH key that is pinned to a read-only helper script on the host. The repository was
+called Tiny-Ecowitt-Monitor until 2026-10-13 (GitHub redirects the old URL); everything before commit `6ace15e` is the old Windows app (plus
 an abandoned first scaffold, `af7fa62`).
 
 **New here? Read `docs/HANDOFF.md` first.** It covers project state, decisions, the first-install watch-list and the backlog.
@@ -24,7 +24,7 @@ of three places, and every command in the docs and skills says which one:
 
 | Place | How you reach it | What lives there |
 |---|---|---|
-| **Proxmox host** (pve1) | your shell | `pct`, `qm`, `pvesh`, `pveum`; the installer and uninstaller; `/usr/local/sbin/pve1-dash-helper`; `/root/.ssh/authorized_keys` (a symlink to the cluster-wide `/etc/pve/priv/authorized_keys`); `/var/log/pve1-dash-install.log` |
+| **Proxmox host** (pve1) | your shell | `pct`, `qm`, `pvesh`, `pveum`; the installer and uninstaller; `/usr/local/sbin/pve1-dash-helper`; `/root/.ssh/authorized_keys` (a symlink to `/etc/pve/priv/authorized_keys`, which would become cluster-wide if pve1 ever joins a cluster); `/var/log/pve1-dash-install.log` |
 | **Dashboard container** (tagged `pve1-dash`, hostname `pve1-dash`) | `pct exec <ctid> -- <cmd>` (`pct enter <ctid>` is interactive, so leave that to the owner) | the systemd service `pve1-dash`; `pve1-dash-doctor`, `pve1-dash-config` and `pve1-dash-update`; `/etc/pve1-dash/` (config, token, SSH key, `install.env`); `/var/lib/pve1-dash/` (state, push keys); `/opt/pve1-dash` (the app) |
 | **Dev environment** (a separate dev container or another machine, **not** the host) | see the `pve1-dash-develop` skill | `npm ci`, typecheck, tests, build, demo mode |
 
@@ -36,20 +36,46 @@ To find the dashboard CTID (host), use `pvesh get /nodes/pve1/lxc --output-forma
 `tags`. `pct list` (exact hostname `pve1-dash`, never a substring match) and
 `grep -o 'pve1-dash@ct[0-9]*' /root/.ssh/authorized_keys` also work.
 
-## This homelab
+## This homelab (verified on pve1, 2026-10-13)
 
-- Single node `pve1`. LAN `10.10.10.0/24`.
-- Dashboard URL `https://dash.bgreen.cloud`, served by Nginx Proxy Manager (NPM) on a **separate host** with a Let's
-  Encrypt certificate from a DNS challenge. NPM's IP is **not recorded yet**, and it must be inside
-  `listen.allowedSources`.
-- LAN only: not reachable from the internet, and there is no login in the app.
-- Push goes to an iPhone Home Screen web app (iOS 16.4+).
-- Repo `https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor`. The one-line installer fetches `deploy/install.sh`
-  from **main** and installs `main` by default.
-- Status: the code is complete. The **first real install on pve1 has not happened yet**.
-- Still unknown, so ask rather than assume: the PVE version (8 or 9), NPM's IP, the CTID, static IP or DHCP
-  reservation, whether `:8006` serves the default self-signed or an ACME certificate, and whether `vmbr0` is the LAN
-  bridge.
+- Single **standalone** node `pve1` (no cluster, no corosync), PVE **9.2.x**, `:8006` uses the default
+  Proxmox certificate (no `pveproxy-ssl.pem`; its SAN has 10.10.20.241, so the installer's CA mode verifies).
+- pve1 = **10.10.20.241/24** on `vmbr0` (untagged, not VLAN-aware, ports `bond0`), gateway **10.10.20.1** (UniFi
+  UDM Pro). Networks: **Main 10.10.20.0/24** (untagged: pve1, most CTs, DNS), **VLAN 2 "Adblocker" 10.10.10.0/24**
+  (NPM, the owner's iPhone, the Tailscale subnet router), VLAN 40 IoT 10.10.40.0/24 (firewalled off from both),
+  WireGuard 10.10.30.0/24. Main and VLAN 2 can reach each other. DHCP pools are .6-.254 on Main and VLAN 2, so a
+  static IP must be .2-.5 or a router reservation.
+- The dashboard CT: **CTID 126**, hostname `pve1-dash`, `vmbr0` untagged, static **10.10.20.5/24** gw 10.10.20.1.
+- Dashboard URL `https://dash.bgreen.cloud`, served by Nginx Proxy Manager (NPM): a Docker container in **VM 102 on
+  pve1, at 10.10.10.13** (VLAN 2). Let's Encrypt certificate from a Cloudflare DNS challenge. LAN DNS (Technitium,
+  10.10.20.191 + 10.10.10.118) has a wildcard `*.bgreen.cloud -> 10.10.10.13`; public DNS has no record for it.
+- **NPM IS reachable from the internet:** the UDM forwards WAN :80/:443 to 10.10.10.13. Any NPM host without an
+  Access List answers internet clients who send the right Host header. The dashboard has no login, so its NPM host
+  **must** use an Access List that allows only `10.10.10.0/24` and `10.10.20.0/24` and denies everything else.
+  NPM trusts `X-Real-IP` only from private sources; the IoT VLAN can't reach NPM.
+- `listen.allowedSources` = `10.10.10.0/24 10.10.20.0/24` (NPM, the owner's devices on both LANs, Tailscale clients
+  which arrive SNATed as 10.10.10.249, and the CT itself for the doctor's proxy check).
+- **VM 102 is never entered with `qm guest exec`:** its qemu-guest-agent has wedged twice on large output (recovery
+  needs the console). It is listed in the host-only skip file `/etc/pve1-dash-helper.skip` (see the helper). VM 107
+  (OMV NAS) has no agent and is skipped anyway.
+- **Installed 2026-10-13** (main `f1a3e65`), doctor 29/29. Host-local deviations from main, all needed until the
+  `fix/pve1-local-setup` branch is pushed and merged:
+  - `/usr/local/sbin/pve1-dash-helper` is the **branch** copy (skip-file support). Re-running the installer or
+    `--update-helper` from main puts main's helper back and VM 102 gets entered again: afterwards re-run
+    `install -m 0755 deploy/helpers/pve1-dash-helper /usr/local/sbin/pve1-dash-helper` from this checkout on the branch.
+  - The CT config has `listen.host: 0.0.0.0` set explicitly: without it, main's `update.sh` builds
+    `http://8080:8080/healthz` and every install/update "fails" its health check (fixed on the branch).
+  - CT 126 DNS = Technitium (`pct set --nameserver "10.10.20.191 10.10.10.118"`). The installer copied the host's
+    `/etc/resolv.conf`, whose first server, the UDM (10.10.20.1), answers `*.bgreen.cloud` with no records, so the
+    doctor's proxy check couldn't resolve dash.bgreen.cloud. pve1 itself has the same quirk (host DNS is not ours to
+    change): from the host, test with `curl --resolve dash.bgreen.cloud:443:10.10.10.13 ...`.
+  - OpenSSH 10 `PerSourcePenalties`: failed logins from the CT (e.g. before its key is authorized) make sshd drop its
+    connections for a while ("kex_exchange_identification: Connection reset by peer"). It clears by itself.
+- Push goes to an iPhone Home Screen web app (iOS 16.4+). Local use only: one owner, no scaling concerns.
+- Repo `https://github.com/orangesunshine321/pve1_dashboard`. The one-line installer fetches `deploy/install.sh`
+  from **main** and installs `main` by default. The host checkout keeps its old path,
+  `/root/Tiny-Ecowitt-Monitor`. It pushes over SSH with a deploy key for this repo only (`/root/.ssh/pve1-dash-deploy`,
+  set as the checkout's `core.sshCommand`); fetches use HTTPS.
 
 ## Hard rules
 
@@ -182,7 +208,7 @@ are both **2** and must change together; no test checks this. The inner guest sc
 `deploy/helpers/pve1-dash-guest-inventory`, `deploy/helpers/pve1-dash-helper` and `server/inventory/innerScript.ts`
 (enforced by `tests/inventory-scripts.test.ts`). **Any** byte change to the host helper needs a helper refresh on
 the host after the container is updated: the one-liner
-`bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)" -- --update-helper`,
+`bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main/deploy/install.sh)" -- --update-helper`,
 or `bash deploy/install.sh --update-helper` from a checkout on an up-to-date `main`. `pve1-dash-update` prints the exact
 command, but only in the update that changed the helper (see Shipping a change); the sha256 comparison in Gotchas works
 any time. When the container's helper differs from the repo copy, `--update-helper` shows a diff and asks on the
