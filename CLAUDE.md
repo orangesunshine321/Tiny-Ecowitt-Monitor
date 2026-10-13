@@ -33,7 +33,8 @@ owner's explicit OK. How the owner puts git, this checkout and Claude Code (nati
 in `docs/HANDOFF.md` → Bootstrap on pve1.
 
 To find the dashboard CTID (host), use `pvesh get /nodes/pve1/lxc --output-format json` and look for `pve1-dash` in
-`tags`. `pct list` (hostname `pve1-dash`) and `grep -o 'pve1-dash@ct[0-9]*' /root/.ssh/authorized_keys` also work.
+`tags`. `pct list` (exact hostname `pve1-dash`, never a substring match) and
+`grep -o 'pve1-dash@ct[0-9]*' /root/.ssh/authorized_keys` also work.
 
 ## This homelab
 
@@ -184,16 +185,19 @@ the host after the container is updated: the one-liner
 `bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)" -- --update-helper`,
 or `bash deploy/install.sh --update-helper` from a checkout on an up-to-date `main`. `pve1-dash-update` prints the exact
 command, but only in the update that changed the helper (see Shipping a change); the sha256 comparison in Gotchas works
-any time. Spec: `docs/HELPER_PROTOCOL.md`.
+any time. When the container's helper differs from the repo copy, `--update-helper` shows a diff and asks on the
+terminal, which the Bash tool doesn't have, so it stops with "no terminal to ask". Then stop too: the owner reads
+`/var/log/pve1-dash-helper.diff` and re-runs the command in their own SSH or xterm.js terminal. Never preset
+`PVE1_DASH_TRUST_CT_HELPER=yes` to get past it (`--yes` answers no there). Spec: `docs/HELPER_PROTOCOL.md`.
 
 ## Shipping a change
 
 1. Agree on the change with the owner. Then `git fetch origin && git switch -c fix/<topic> origin/main`.
 2. Edit, then run the gate in the dev environment (`npm ci && npm run typecheck && npm test && npm run build`; `bash -n` for scripts).
 3. Commit (with a repo-local author identity, see the develop skill), and push the branch after the owner OKs it.
-4. Optional: try it on the real dashboard (host, with confirmation, long timeout) with `pct exec <ctid> -- pve1-dash-update --ref fix/<topic>`, then read the doctor output. If it says the host helper changed (or the hashes in Gotchas differ), run the printed `--update-helper` command now (with the owner's OK), or write down that main will need it. A dev-container session has no `pct`: hand this step and step 6 to the owner or the host session.
+4. Optional: try it on the real dashboard (host, with confirmation, long timeout) with `pct exec <ctid> -- pve1-dash-update --ref fix/<topic>`, then read the doctor output. If it says the host helper changed (or the hashes in Gotchas differ), run the printed `--update-helper` command now (with the owner's OK; if it stops at a question, see Helper protocol rule), or write down that main will need it. A dev-container session has no `pct`: hand this step and step 6 to the owner or the host session.
 5. Open a PR into `main` (`gh pr create`, or the compare URL that `git push` printed). Merge only with the owner's OK, as a merge commit (`gh pr merge <n> --merge`, or "Create a merge commit" on GitHub), like PR #1.
-6. Move the container back (host, ask first, long timeout): `pct exec <ctid> -- pve1-dash-update --ref main`. If the PR changed `deploy/helpers/pve1-dash-helper`, compare the helper hashes (Gotchas) and run the main `--update-helper` one-liner if they differ; don't wait for a notice: when the branch was deployed in step 4, none appears here.
+6. Move the container back (host, ask first, long timeout): `pct exec <ctid> -- pve1-dash-update --ref main`. If the PR changed `deploy/helpers/pve1-dash-helper`, compare the helper hashes (Gotchas) and run the main `--update-helper` one-liner if they differ (if it stops at a question, see Helper protocol rule); don't wait for a notice: when the branch was deployed in step 4, none appears here.
 7. Delete the branch only after the container no longer follows it. Then bring the checkouts back to main: `git switch main && git pull --ff-only` on the host checkout (and in the dev container), with the owner's OK if there are local changes.
 
 ## Skills and docs

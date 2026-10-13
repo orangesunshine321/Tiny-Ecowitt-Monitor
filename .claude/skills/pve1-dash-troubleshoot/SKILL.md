@@ -151,8 +151,10 @@ pct exec <ctid> -- curl -s --max-time 40 'http://127.0.0.1:8080/api/diagnostics?
   in the cluster-wide file. If the owner still wants it, they run
   `cat /root/.ssh/authorized_keys.pve1-dash.bak > /root/.ssh/authorized_keys` in their own SSH/xterm.js shell (it
   writes through the symlink; never replace the link itself). Claude must not run it: it is owner-only, and the Edit
-  deny rules for `/root/.ssh` and `/etc/pve` in `.claude/settings.json` show the intent, although they don't
-  technically block a Bash redirection. Don't work around that.
+  deny rules for `/root/.ssh` and `/etc/pve` in `.claude/settings.json` also deny Claude a Bash redirection or `tee`
+  into that file, so the restore stays owner-run. Don't work around that (for example with `sh -c` or a script). The
+  same rules cover `/etc/ssh` and `/etc/network`, so host changes there, such as the `PermitRootLogin` fix in the
+  Helper-denied section of `docs/TROUBLESHOOTING.md`, are owner-run for the same reason.
 
 ## Collecting a log bundle for the owner
 

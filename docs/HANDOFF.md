@@ -12,13 +12,17 @@ shell. The native installer needs no Node.js, so nothing Node-related lands on t
 ```bash
 apt update && apt install -y git        # add gh too if the agent should push from the host (see the develop skill)
 git clone https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git /root/Tiny-Ecowitt-Monitor
-curl -fsSL https://claude.ai/install.sh | bash   # Claude Code's native installer; open a new shell if `claude` isn't found
+curl -fsSL https://claude.ai/install.sh | bash   # Claude Code's native installer (puts `claude` in ~/.local/bin)
 cd /root/Tiny-Ecowitt-Monitor && claude          # log in when asked
 ```
 
-If `apt update` fails with 401 from `enterprise.proxmox.com` (no subscription), enable the `pve-no-subscription`
-repository first (node → Updates → Repositories), then run the first line again. Before the first commit from any
-checkout, set a repo-local author identity (develop skill → GitHub credentials).
+If `apt update` fails with 401 from `enterprise.proxmox.com` (no subscription), open node → Updates → Repositories,
+add the `pve-no-subscription` repository **and disable the enterprise entries** (`pve-enterprise` and, if listed, the
+Ceph enterprise one), then run the first line again. While any enterprise entry stays enabled, `apt update` keeps
+failing and `&&` skips the install. The native installer doesn't add `~/.local/bin` to PATH, and root's default
+profile on Proxmox doesn't either, so if `claude` isn't found, run the line the installer prints,
+`echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && . ~/.bashrc`, or start `~/.local/bin/claude`. Before
+the first commit from any checkout, set a repo-local author identity (develop skill → GitHub credentials).
 
 The project's `.claude/settings.json` starts sessions in **Manual** mode and sets `"disableAutoMode": "disable"` (and
 `disableBypassPermissionsMode`), so auto mode is removed from the Shift+Tab cycle. That lock and the ask/deny rules
@@ -53,9 +57,10 @@ when it writes the file itself. For development in a separate container instead 
   `1.0`, is the old Tiny Ecowitt Windows app, so never install it.
 - **Code:** complete. The pre-install improvement round was developed on `claude/homelab-dashboard-pve1-dizt16`
   (last code commit `afd742a`) and went into `main` through PR #2, together with this handoff kit (step 2 above
-  checks that `main` has it). PR #2 was **squash-merged**, so `main` has the whole round as one commit; the
-  individual commits named below are only on that branch. That branch
-  name is hard-coded as the old pre-merge branch in `deploy/install.sh` and `deploy/update.sh`, so never reuse it.
+  checks that `main` has it). PR #2 was **squash-merged**, so `main` has the whole round as one commit; the PR #2
+  commits named below (`03e0c7a`, `d5d9310` → `afd742a`) are only on that branch and in PR #2
+  (`git fetch origin pull/2/head`), while the PR #1 commits are on `main`. That branch name is hard-coded as the old
+  pre-merge branch in `deploy/install.sh` and `deploy/update.sh`, so never reuse it.
 - **Tests:** 76 vitest files. The last full run had 1402 passed and 3 skipped (2 for missing shellcheck, 1 because it
   ran as root). Typecheck was clean. There is no CI.
 - **Real hardware:** never installed. The first install on pve1 is the next step.
@@ -170,4 +175,6 @@ such as `D70` in a commit message can't be looked up. Each backlog row stands on
   Which GitHub credentials should the local agent use, and which author name and GitHub noreply address should its
   commits carry?
 - Should `claude/homelab-dashboard-pve1-dizt16` be deleted on GitHub now that it is merged? No container records it
-  yet, so it's safe either way.
+  yet, so the installer doesn't care either way. But it is the only branch that holds the PR #2 commits named in this
+  page (`03e0c7a`, `d5d9310` → `afd742a`; PR #2 was squash-merged): after deleting it they are reachable only through
+  PR #2 on GitHub (`git fetch origin pull/2/head`, or the PR's Commits tab). The PR #1 commits are on `main`.

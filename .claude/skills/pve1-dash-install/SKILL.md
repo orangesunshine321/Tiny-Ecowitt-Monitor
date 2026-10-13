@@ -1,6 +1,6 @@
 ---
 name: pve1-dash-install
-description: Use when installing pve1-dash on the Proxmox host pve1 for the first time, re-running the installer (upgrade, repair, static IP, publicUrl or allowedSources change, token rotation), refreshing the host helper, setting up Nginx Proxy Manager and DNS for dash.bgreen.cloud, enabling Web Push on the owner's iPhone, verifying an install with pve1-dash-doctor, or uninstalling the dashboard. Other config edits (launcher tiles, alert rules, polling, board title): see pve1-dash-troubleshoot.
+description: "Use when installing pve1-dash on the Proxmox host pve1 for the first time, re-running the installer (upgrade, repair, static IP, publicUrl or allowedSources change, token rotation), refreshing the host helper, setting up Nginx Proxy Manager and DNS for dash.bgreen.cloud, enabling Web Push on the owner's iPhone, verifying an install with pve1-dash-doctor, or uninstalling the dashboard. Other config edits (launcher tiles, alert rules, polling, board title): see pve1-dash-troubleshoot."
 ---
 
 # Installing and maintaining pve1-dash on pve1
@@ -205,8 +205,10 @@ If it fails, see `docs/TROUBLESHOOTING.md#-push-notifications-dont-arrive-on-iph
   merged (the notice appears only in the update that changed it), or whenever the CT and host helper hashes differ
   (`CLAUDE.md` → Gotchas) (host, ask first):
   `bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)" -- --update-helper`.
-  If the container differs from the repo copy, it shows a diff (`/var/log/pve1-dash-helper.diff`). Have the owner read
-  it before answering yes, because the helper runs as root.
+  When the container's helper differs from the repo copy, it shows a diff and asks on the terminal, which your Bash
+  tool doesn't have, so it stops with "no terminal to ask". Then stop too: the owner reads
+  `/var/log/pve1-dash-helper.diff` and re-runs the command in their own SSH or xterm.js terminal, because the helper
+  runs as root. Never preset `PVE1_DASH_TRUST_CT_HELPER=yes` to get past it (`--yes` answers no there).
 - **Token rotation** (revokes the old secret, ask first): `PVE1_DASH_ROTATE_TOKEN=yes` in front of the one-liner.
 - **`:8006` moved to an ACME certificate after the install**: `PVE1_DASH_PVE_HOST` only applies when a new config is
   written. On an existing install, a re-run (with or without it) pins the new certificate instead, and that pin

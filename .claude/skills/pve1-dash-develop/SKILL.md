@@ -1,6 +1,6 @@
 ---
 name: pve1-dash-develop
-description: Use when fixing a pve1-dash bug in the code, adding or improving a feature, working on the HANDOFF backlog, or otherwise changing pve1-dash code, docs or deploy scripts. Covers setting up a dev environment without polluting the Proxmox host, running typecheck/tests/build, demo mode and ?sample UI work, screenshots, the checklists for config keys, alert kinds, helper/protocol changes, routes and CSS, deploying a branch to the dashboard container, and the branch → PR → merge flow including GitHub credentials. Not for config-only changes (launcher tiles, alert thresholds, polling intervals, board title): those are pve1-dash-config edits, see pve1-dash-troubleshoot.
+description: "Use when fixing a pve1-dash bug in the code, adding or improving a feature, working on the HANDOFF backlog, or otherwise changing pve1-dash code, docs or deploy scripts. Covers setting up a dev environment without polluting the Proxmox host, running typecheck/tests/build, demo mode and ?sample UI work, screenshots, the checklists for config keys, alert kinds, helper/protocol changes, routes and CSS, deploying a branch to the dashboard container, and the branch → PR → merge flow including GitHub credentials. Not for config-only changes (launcher tiles, alert thresholds, polling intervals, board title): those are pve1-dash-config edits, see pve1-dash-troubleshoot."
 ---
 
 # Developing pve1-dash
@@ -24,10 +24,12 @@ Offer the owner these options. Recommend A or B and let them choose:
   there, and the host session keeps install, troubleshooting and deploys. Setup (owner, after the container below
   exists and the repo is cloned in it): `pct enter <devid>` on the host, then inside it
   `curl -fsSL https://claude.ai/install.sh | bash` (the native installer), `cd /root/pve1-dash && claude`, and log in
-  when asked. Claude Code's documented minimum is 4 GB RAM, so create this container with `--memory 4096`. That
-  session has no `pct`: for host steps (deploying a branch, `--update-helper`, moving the container back), it stops
-  after the push and asks the owner to run the step in the host session, with the exact branch and what to check,
-  then continues from their result.
+  when asked. The installer doesn't add `~/.local/bin` to PATH, so if `claude` isn't found, run
+  `echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && . ~/.bashrc` or start `~/.local/bin/claude`. Claude
+  Code's documented minimum is 4 GB RAM, so create this container with `--memory 4096`. That session has no `pct`:
+  for host steps (deploying a branch, `--update-helper`, moving the container back), it stops after the push and asks
+  the owner to run the step in the host session, with the exact branch and what to check, then continues from their
+  result.
 - **B. One host session and a dev container used only for building and testing.** Edit and commit on the host, then
   copy the working tree into the dev container and run the gate there (recipe below).
 - **C. Another machine** with Node 22.12+, running **Linux**, ideally as root. The deploy tests run the real scripts
@@ -38,12 +40,13 @@ Offer the owner these options. Recommend A or B and let them choose:
 ### Creating a dev container (host, needs the owner's OK)
 
 Use the same tools and flags as the installer's `pct create`. **Do not tag it `pve1-dash`**: the installer and
-uninstaller find the dashboard by that tag. Sizes are suggestions, and the template name comes from the first command:
+uninstaller find the dashboard by that tag. Keep `pve1-dash` out of its hostname too, so a look at `pct list` can't
+mix the two up. Sizes are suggestions, and the template name comes from the first command:
 
 ```bash
 pveam list local                                    # host: e.g. local:vztmpl/debian-13-standard_..._amd64.tar.zst
 # host; --memory 4096 for option A (Claude Code runs inside), 2048 is enough for option B (build and test only)
-pct create <devid> <template volid> --hostname pve1-dash-dev --cores 2 --memory 4096 --swap 512 \
+pct create <devid> <template volid> --hostname p1d-dev --cores 2 --memory 4096 --swap 512 \
   --rootfs <storage>:16 --net0 name=eth0,bridge=vmbr0,ip=dhcp --unprivileged 1 --features nesting=1 \
   --ostype debian --start 1
 pct exec <devid> -- apt-get update                  # host, then:
@@ -263,7 +266,11 @@ It needs Chromium at `/opt/pw-browsers/chromium`. File names drop the query stri
    - Unset any exported `PVE1_DASH_REF`/`PVE1_DASH_REPO` first.
    - Read the doctor output it prints, and check the commit with `pct exec <ctid> -- git -C /opt/pve1-dash rev-parse HEAD`.
    - If it says the host helper changed (or the CT and host helper hashes differ), run the printed `--update-helper`
-     command (from the branch's `install.sh`) now with the owner's OK, or write down that main will need it.
+     command (from the branch's `install.sh`) now with the owner's OK, or write down that main will need it. When the
+     container's helper differs from the repo copy, it shows a diff and asks on the terminal, which your Bash tool
+     doesn't have, so it stops with "no terminal to ask". Then stop too: the owner reads
+     `/var/log/pve1-dash-helper.diff` and re-runs the command in their own SSH or xterm.js terminal. Never preset
+     `PVE1_DASH_TRUST_CT_HELPER=yes` to get past it (`--yes` answers no there).
    - Remember that the rollback only catches a server that doesn't listen.
 5. Open a PR into `main` (`gh pr create --base main --head fix/<topic>`, or without `gh` the owner opens the compare
    URL that `git push` printed) with "What's in it" and "Testing" sections.
@@ -273,7 +280,8 @@ It needs Chromium at `/opt/pw-browsers/chromium`. File names drop the query stri
    owner merges in the web UI with "Create a merge commit".
 7. Move the container back to main (host, ask, long timeout): `pct exec <ctid> -- pve1-dash-update --ref main`. If the
    PR changed `deploy/helpers/pve1-dash-helper`, compare the CT and host helper hashes and run the main
-   `--update-helper` one-liner if they differ; don't wait for a notice: after the trial in step 4 none appears here.
+   `--update-helper` one-liner if they differ (if it stops at a question, handle it as in step 4); don't wait for a
+   notice: after the trial in step 4 none appears here.
    Delete the branch only after the container follows main again, or later updates stop with "no longer a branch or
    tag". Then `git switch main && git pull --ff-only` in the dev checkout and on the host checkout (ask first if
    either has local changes), so the next session loads the merged `CLAUDE.md`, skills and settings.
