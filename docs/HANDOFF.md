@@ -126,7 +126,8 @@ sandboxing in an unprivileged LXC, and iOS details. Also unverified:
 5. The container IP must not move: use a static IP or a DHCP reservation, because NPM forwards to it.
 6. NPM settings: Cache Assets OFF, HTTP/2 ON, and no `location` block in the Advanced tab
    ([recipe](../deploy/reverse-proxy/README.md#nginx-proxy-manager)). NPM trusts `X-Real-IP` from every private
-   address, so a client on an IoT VLAN can claim a 10.10.10.x address and pass the Access List
+   address, so a client on another private network can claim a LAN address and pass the Access List (here the IoT
+   VLAN is firewalled off from NPM, and internet clients keep their public source address)
    ([SECURITY.md → LAN only](SECURITY.md#lan-only-no-login)). Run the spoof test in the install skill, section 5.
 7. Watch the first ✗ in the doctor output. Watch the journal for `226/NAMESPACE` or `EPERM` (the systemd sandbox),
    and for the pmxcfs `authorized_keys` rewrite (the backup is in `/root/.ssh/authorized_keys.pve1-dash.bak`).
@@ -135,6 +136,28 @@ sandboxing in an unprivileged LXC, and iOS details. Also unverified:
    That only applies when a new config is written. If the cert changes to ACME later, a re-run pins it (which breaks
    at the next renewal), so switch by hand: install skill, section 7.
 10. iPhone push works only from the Home Screen app. Never delete `push.json`.
+
+## ✅ First install on pve1 (2026-10-13)
+
+Installed from main `f1a3e65` into CT 126; the doctor reports 29 ok, 0 warnings. What the real host showed:
+
+- **Bug, fixed on `fix/pve1-local-setup`:** `config_listen` printed `" 8080"` for a config without `listen.host` (the
+  installer never writes one), `read` took `8080` as the host, and the health check probed `http://8080:8080/healthz`.
+  So the very first install "failed" in step 6 although the service was healthy. Workaround on main: set
+  `listen.host: 0.0.0.0` in the config and re-run.
+- **OpenSSH 10 PerSourcePenalties:** the service starts in step 6 and tries the helper before step 7 authorizes its
+  key; the failed logins get the CT penalized ("Connection reset by peer" for a few minutes). Harmless, self-clearing,
+  but the smoke test and doctor show it. Idea: don't start inventory until the key is authorized, or have the
+  installer authorize the key before starting the service.
+- **The CT inherits the host's resolv.conf.** If the host's first resolver doesn't serve the LAN names (here the UDM),
+  set the CT's `nameserver` explicitly.
+- **New: `/etc/pve1-dash-helper.skip`** (host-only, one vmid per line): the helper never enters those guests. pve1 lists
+  VM 102, whose qemu-guest-agent has wedged twice on large output; `docker ps` plus units came to about 60 KB base64
+  per sweep there.
+- Verified on real hardware: pmxcfs `authorized_keys` rewrite, `pveum` token create, PVEAuditor-only permissions, CA-mode
+  TLS on PVE 9.2, the unprivileged Debian 13 CT with the systemd sandbox (no 226/NAMESPACE), ssh2 against OpenSSH 10,
+  `pct exec ... pve1-dash-doctor` with an explicit PATH.
+- Not run: the vitest suite (needs Node, which never goes on the host). Run it in a dev CT before merging the branch.
 
 ## 🗒️ Backlog and ideas
 
@@ -164,17 +187,12 @@ such as `D70` in a commit message can't be looked up. Each backlog row stands on
 
 ## ❓ Open questions for the owner
 
-- What is the IP of the Nginx Proxy Manager host? Is it inside 10.10.10.0/24?
-- Is any port on the NPM host forwarded from the internet, or does NPM serve any public site? Until that is known, the
-  NPM Access List (`allow 10.10.10.0/24`, `deny all`) is required for dash.bgreen.cloud.
-- Is pve1 on PVE 8 or 9? Does `:8006` serve the default certificate or an ACME one?
-- Should the container use a static IP or a DHCP reservation, and which gateway? Is `vmbr0` the LAN bridge, without a VLAN?
-- How does `dash.bgreen.cloud` resolve on the LAN (split DNS or a local record)? Can the container resolve it? (The
-  doctor's proxy checks need that.)
-- Where should development happen: a dev container on pve1, another machine, or (only if they want it) the host?
-  Which GitHub credentials should the local agent use, and which author name and GitHub noreply address should its
-  commits carry?
-- Should `claude/homelab-dashboard-pve1-dizt16` be deleted on GitHub now that it is merged? No container records it
-  yet, so the installer doesn't care either way. But it is the only branch that holds the PR #2 commits named in this
-  page (`03e0c7a`, `d5d9310` → `afd742a`; PR #2 was squash-merged): after deleting it they are reachable only through
-  PR #2 on GitHub (`git fetch origin pull/2/head`, or the PR's Commits tab). The PR #1 commits are on `main`.
+Answered on pve1 on 2026-10-13 (details in `CLAUDE.md` → This homelab): NPM = 10.10.10.13 (VM 102 on pve1); the UDM
+**forwards WAN :80/:443 to NPM**, so the "LAN only" Access List (`10.10.10.0/24` + `10.10.20.0/24`, deny all) is
+mandatory; PVE 9.2.x with the default `:8006` certificate; CT 126 at static 10.10.20.5/24 on untagged `vmbr0`
+(Main); `dash.bgreen.cloud` resolves through Technitium's `*.bgreen.cloud` wildcard to NPM. Development happens in a
+throwaway dev CT, never on the host. Still open:
+
+- Which GitHub credentials should a local agent use to push, and which author identity? (The host checkout has none.)
+- Should `claude/homelab-dashboard-pve1-dizt16` be deleted on GitHub? It is the only branch with the PR #2 commits
+  (`03e0c7a`, `d5d9310` → `afd742a`); after deleting it they are reachable only through PR #2.

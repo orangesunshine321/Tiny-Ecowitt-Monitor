@@ -59,7 +59,7 @@ Add `openssh-server` only if the real-sshd suite should run (it also needs root 
 Clone for option A (host):
 `pct exec <devid> -- git clone https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git /root/pve1-dash`. The Vite
 and demo servers bind `0.0.0.0`, so a dev container exposes them to the LAN while they run. That is fine on
-10.10.10.0/24, but stop them when done.
+the home LANs (10.10.10.0/24, 10.10.20.0/24), but stop them when done.
 
 Node.js 24 (tests need 22.12+), **dev container only, never on the host**: `install_node` has no host guard, so run
 bare on pve1 it would install Node into `/opt` and link node/npm/npx into `/usr/local/bin` on the hypervisor. It is
@@ -305,5 +305,5 @@ The local agent needs its own access to push: `gh` (installed in the dev contain
 - If the SSH key must live on the host, the owner creates it and prints its `.pub` in their own shell.
   `.claude/settings.json` denies Claude edits under `/root/.ssh` and reads of the private key files there.
 - Never commit tokens or keys, never put them in the repo's git config or in docs, and never echo them.
-- On the host, `/root/.ssh/authorized_keys` is the cluster-wide pmxcfs file. Creating a key pair in `/root/.ssh` doesn't
+- On the host, `/root/.ssh/authorized_keys` is the pmxcfs file `/etc/pve/priv/authorized_keys` (cluster-wide only if pve1 joins a cluster). Creating a key pair in `/root/.ssh` doesn't
   touch it, but never edit that file for GitHub.

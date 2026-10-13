@@ -38,6 +38,10 @@ readonly APT_LISTS=/var/lib/apt/lists
 readonly BOOT_DIR=/boot
 readonly KERNEL_PIN=/etc/kernel/proxmox-boot-pin
 readonly KERNEL_NEXT_PIN=/etc/kernel/next-boot-pin
+# Host-only list of guests that are never entered (one vmid per line, # starts a comment). For guests whose agent
+# should not run the inventory every sweep, e.g. a VM whose qemu-guest-agent has wedged on large output. The
+# container can't change it; a missing file skips nothing.
+readonly SKIP_FILE=/etc/pve1-dash-helper.skip
 
 # The command line comes from sshd (forced command) or, for manual runs, from the arguments.
 CMDLINE=${SSH_ORIGINAL_COMMAND:-$*}
@@ -407,6 +411,8 @@ error_text() { # <exit code> <stderr file> <timeout seconds>
 inspect_guest() { # <vmid> <lxc|qemu> <base path>
   local vmid=$1 type=$2 base=$3 transport limit rc cfg size
   local out=$base.out err=$base.err
+  # Skipped guests write no block, like a VM without the agent ($vmid is digits only, checked by the caller).
+  if [[ -r $SKIP_FILE ]] && grep -qE "^[[:space:]]*$vmid[[:space:]]*(#.*)?$" "$SKIP_FILE"; then return 0; fi
   if [[ $type == lxc ]]; then
     transport=pct-exec
     limit=$GUEST_TIMEOUT

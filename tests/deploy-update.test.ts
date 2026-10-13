@@ -233,8 +233,15 @@ describe('health check address', () => {
     const cfg = sb.put('config.yaml', 'listen:\n  host: 192.168.1.60   # LAN only\n  port: 8081\n');
     expect(sb.call(SCRIPT, 'config_listen', [cfg, ROOT]).stdout).toBe('192.168.1.60 8081\n');
     const none = sb.put('none.yaml', 'title: pve1\n');
-    expect(sb.call(SCRIPT, 'config_listen', [none, ROOT]).stdout).toBe(' \n');
+    expect(sb.call(SCRIPT, 'config_listen', [none, ROOT]).stdout).toBe('- -\n');
     expect(sb.call(SCRIPT, 'config_listen', [cfg, join(sb.dir, 'no-app')]).stdout).toBe('');
+  });
+
+  it('keeps the port when the config sets only listen.port (the installer writes no listen.host)', () => {
+    // Regression: config_listen printed " 8080" and read took 8080 as the host -> http://8080:8080/healthz.
+    const r = sb.bash(SCRIPT, 'config_listen() { printf -- "- 8080\\n"; }; listen_endpoint');
+    expect(r.status, r.stderr).toBe(0);
+    if (!existsSync('/etc/pve1-dash/env')) expect(r.stdout).toBe('0.0.0.0 8080\n');
   });
 
   it('falls back to 0.0.0.0:8080 without a config', () => {

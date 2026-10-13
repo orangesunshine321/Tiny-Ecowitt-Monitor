@@ -1764,7 +1764,7 @@ authorize_dashboard_key() {
   key=$(validate_pubkey "$pub") || die "the dashboard public key in container $ctid is malformed; refusing to authorize it."
   if [[ ! -d /root/.ssh ]]; then install -d -m 0700 /root/.ssh; fi
   if [[ -L $AUTHORIZED_KEYS ]]; then
-    say "$AUTHORIZED_KEYS links to $(readlink "$AUTHORIZED_KEYS") (shared by all cluster nodes)"
+    say "$AUTHORIZED_KEYS links to $(readlink "$AUTHORIZED_KEYS") (shared by all nodes if clustered)"
   fi
   authorize_key_file "$AUTHORIZED_KEYS" "$key" "$ctid"
   check_sshd_root_login

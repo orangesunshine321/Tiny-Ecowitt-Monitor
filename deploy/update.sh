@@ -289,14 +289,17 @@ config_listen() {
     const y = require("yaml"), fs = require("fs");
     const c = y.parse(fs.readFileSync(process.argv[1], "utf8")) || {};
     const l = (c && typeof c.listen === "object" && c.listen) || {};
-    process.stdout.write(String(l.host || "") + " " + String(l.port || "") + "\n");' "$file" 2>/dev/null) || :
+    process.stdout.write(String(l.host || "-") + " " + String(l.port || "-") + "\n");' "$file" 2>/dev/null) || :
 }
 
 # "<host> <port>" the server listens on. PVE1_DASH_PORT in /etc/pve1-dash/env overrides the port, like the server.
 listen_endpoint() {
   local host='' port='' cport=''
   if [[ -f $CONF_DIR/env ]]; then port=$(sed -n 's/^PVE1_DASH_PORT=//p' "$CONF_DIR/env" | tr -d "\"' " | tail -n 1); fi
+  # config_listen prints "-" for an unset field: with an empty host, read would otherwise take the port as the host.
   read -r host cport <<<"$(config_listen "$CONF_DIR/config.yaml" "$APP_DIR")" || :
+  [[ $host == - ]] && host=''
+  [[ $cport == - ]] && cport=''
   port=${port:-$cport}
   [[ $host =~ ^[A-Za-z0-9.:_-]{1,253}$ ]] || host=0.0.0.0
   [[ $port =~ ^[0-9]{1,5}$ ]] || port=8080

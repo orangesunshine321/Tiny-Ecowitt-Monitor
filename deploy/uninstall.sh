@@ -5,7 +5,7 @@
 #
 # Removes what install.sh added to the host for ONE dashboard container (the one tagged pve1-dash on this node, or
 # --ctid N). Other pve1-dash dashboards in the cluster keep working:
-#   - that container's line in /root/.ssh/authorized_keys (= /etc/pve/priv/authorized_keys, shared by the cluster),
+#   - that container's line in /root/.ssh/authorized_keys (= /etc/pve/priv/authorized_keys, shared by all nodes if clustered),
 #     plus lines of pve1-dash containers that no longer exist;
 #   - /usr/local/sbin/pve1-dash-helper, unless another pve1-dash container on this node still needs it;
 #   - (asks, default yes) that container's API token; the user pve1dash@pve too when no other dashboard is left;

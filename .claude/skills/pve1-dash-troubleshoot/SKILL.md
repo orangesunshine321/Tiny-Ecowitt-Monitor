@@ -7,7 +7,7 @@ description: Use when something about the pve1-dash dashboard is wrong or unclea
 
 The symptom-first guide is `docs/TROUBLESHOOTING.md`. This skill is the triage method that goes with it.
 **host** = pve1 as root; **CT** = run through `pct exec <ctid> -- ...` from the host; **LAN** = a machine on
-10.10.10.0/24.
+10.10.10.0/24 or 10.10.20.0/24.
 
 ## How to work
 
