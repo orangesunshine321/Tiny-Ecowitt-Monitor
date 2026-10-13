@@ -1,6 +1,7 @@
 .shell-toasts {
   position: fixed;
-  z-index: 100;
+  /* above sheets (80), popovers (90) and Spotlight (95); below the Matrix boot sequence (250) */
+  z-index: 120;
   top: calc(var(--safe-top) + 10px);
   left: 0;
   right: 0;

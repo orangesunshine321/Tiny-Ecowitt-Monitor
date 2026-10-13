@@ -17,6 +17,7 @@ import {
   isVapidKeyMismatch,
   MAX_DEVICES,
   MAX_PAYLOAD_BYTES,
+  migrateKinds,
   navigateUrl,
   notificationText,
   pushOptions,
@@ -216,7 +217,8 @@ describe('prefs', () => {
     const p = defaultPrefs();
     expect(p.kinds).not.toContain('updates_available');
     expect(p.kinds).toContain('service_down');
-    expect(p.kinds).toHaveLength(9);
+    expect(p.kinds).toEqual(expect.arrayContaining(['guest_disk', 'cert_expiry', 'temperature']));
+    expect(p.kinds).toHaveLength(12);
     expect(p).toMatchObject({ minSeverity: 'warning', recoveries: true });
   });
 
@@ -356,8 +358,8 @@ describe('createPushService', () => {
   it('subscribe upserts by endpoint; devices() never exposes the endpoint', async () => {
     const push = createPushService(makeCtx(dataDir));
     const sub = subscription();
-    const dev = await push.subscribe({ subscription: sub, name: "Brandon's iPhone" });
-    expect(dev).toMatchObject({ name: "Brandon's iPhone", endpointHost: 'web.push.apple.com', prefs: defaultPrefs() });
+    const dev = await push.subscribe({ subscription: sub, name: "Owner's iPhone" });
+    expect(dev).toMatchObject({ name: "Owner's iPhone", endpointHost: 'web.push.apple.com', prefs: defaultPrefs() });
     const again = await push.subscribe({ subscription: { ...sub, keys: subscription().keys }, name: 'iPhone', prefs: { minSeverity: 'critical' } });
     expect(again.id).toBe(dev.id);
     expect(again.prefs.minSeverity).toBe('critical');
@@ -521,13 +523,13 @@ describe('createPushService', () => {
 
   it('replacesId renews a subscription in place: same id, name and prefs, new endpoint, no duplicate', async () => {
     const push = createPushService(makeCtx(dataDir));
-    const first = await push.subscribe({ subscription: subscription(), name: "Brandon's iPhone", prefs: { kinds: ['backup_failed'], minSeverity: 'critical' } });
+    const first = await push.subscribe({ subscription: subscription(), name: "Owner's iPhone", prefs: { kinds: ['backup_failed'], minSeverity: 'critical' } });
     await push.updatePrefs(first.id, { recoveries: false });
     // Safari dropped the subscription: the app made a new one and posts it with its stored device id
     const renewedSub = subscription();
     const renewed = await push.subscribe({ subscription: renewedSub, name: 'iPhone', replacesId: first.id, origin: 'https://dash.example.net' });
     expect(renewed.id).toBe(first.id);
-    expect(renewed).toMatchObject({ name: "Brandon's iPhone", prefs: { kinds: ['backup_failed'], minSeverity: 'critical', recoveries: false } });
+    expect(renewed).toMatchObject({ name: "Owner's iPhone", prefs: { kinds: ['backup_failed'], minSeverity: 'critical', recoveries: false } });
     expect(push.devices()).toHaveLength(1);
     expect(readEndpoint(first.id)).toBe(renewedSub.endpoint);
     // the next alert goes to the new endpoint only
@@ -736,5 +738,99 @@ describe('createPushService', () => {
   function readEndpoint(id: string): string {
     const pushFile = JSON.parse(readFileSync(join(dataDir, 'push.json'), 'utf8')) as { devices: { id: string; subscription: { endpoint: string } }[] };
     return pushFile.devices.find((d) => d.id === id)!.subscription.endpoint;
+  }
+});
+
+describe('quiet hours, snoozed badges and new kinds', () => {
+  const at = (hhmm: string) => Date.UTC(2026, 9, 10, Number(hhmm.slice(0, 2)), Number(hhmm.slice(3, 5)));
+
+  it('sanitizePrefs accepts valid quiet hours, drops invalid ones, and null turns them off', () => {
+    const base = defaultPrefs();
+    const q = sanitizePrefs({ quietHours: { start: '22:00', end: '07:00', allowCritical: true, timeZone: 'Europe/Berlin' } }, base);
+    expect(q.quietHours).toEqual({ start: '22:00', end: '07:00', allowCritical: true, timeZone: 'Europe/Berlin' });
+    expect(sanitizePrefs({ quietHours: { start: '25:00', end: '07:00' } }, base).quietHours).toBeUndefined();
+    expect(sanitizePrefs({ quietHours: { start: '22:00', end: '07:00', timeZone: 'Mars/Olympus' } }, base).quietHours).toEqual({
+      start: '22:00',
+      end: '07:00',
+      allowCritical: true,
+    });
+    expect(sanitizePrefs({ minSeverity: 'info' }, q).quietHours).toEqual(q.quietHours); // kept when not mentioned
+    expect(sanitizePrefs({ quietHours: null }, q).quietHours).toBeUndefined();
+  });
+
+  it('inside quiet hours (wrapping midnight) only fresh critical alerts come through, when allowed', () => {
+    const prefs = sanitizePrefs({ quietHours: { start: '22:00', end: '07:00', allowCritical: true, timeZone: 'UTC' } }, defaultPrefs());
+    const night = { now: at('23:30') };
+    expect(wantsNotification(prefs, event({ severity: 'warning' }), false, night)).toBe(false);
+    expect(wantsNotification(prefs, event({ severity: 'critical' }), false, night)).toBe(true);
+    expect(wantsNotification(prefs, event({ severity: 'critical' }), true, night)).toBe(false); // recoveries wait
+    expect(wantsNotification(prefs, event({ severity: 'warning' }), false, { now: at('06:59') })).toBe(false);
+    expect(wantsNotification(prefs, event({ severity: 'warning' }), false, { now: at('07:00') })).toBe(true);
+    expect(wantsNotification(prefs, event({ severity: 'warning' }), false, { now: at('12:00') })).toBe(true);
+    const strict = { ...prefs, quietHours: { ...prefs.quietHours!, allowCritical: false } };
+    expect(wantsNotification(strict, event({ severity: 'critical' }), false, night)).toBe(false);
+    // the device's zone wins over the server's; without one the server's zone (config.timezone) applies
+    const local = sanitizePrefs({ quietHours: { start: '22:00', end: '07:00', allowCritical: false } }, defaultPrefs());
+    expect(wantsNotification(local, event(), false, { now: at('21:30'), timeZone: 'Europe/Berlin' })).toBe(false); // 23:30 in Berlin
+    expect(wantsNotification(local, event(), false, { now: at('21:30'), timeZone: 'UTC' })).toBe(true);
+    // test notifications always go through
+    expect(wantsNotification(strict, event({ kind: 'test', severity: 'info' }), false, night)).toBe(true);
+  });
+
+  it('badges leave out snoozed alerts until the snooze ends', () => {
+    const now = at('12:00');
+    const active = [
+      event({ key: 'service_down:a', severity: 'critical' }),
+      event({ key: 'service_down:b', severity: 'critical', acknowledged: { at: now - 1000 } }),
+      event({ key: 'service_down:c', severity: 'critical', acknowledged: { at: now - 1000, until: now + 1000 } }),
+      event({ key: 'service_down:d', severity: 'critical', acknowledged: { at: now - 2000, until: now - 1000 } }),
+    ];
+    expect(badgeFor(defaultPrefs(), active, now)).toBe(2); // a and d (its snooze ran out)
+  });
+
+  it('kinds added by an update are switched on for devices saved before them; removed ones stay removed', () => {
+    const legacy = defaultPrefs().kinds.filter((k) => !['guest_disk', 'cert_expiry', 'temperature', 'backup_stale'].includes(k));
+    expect(migrateKinds({ ...defaultPrefs(), kinds: legacy }, undefined).kinds).toEqual([...legacy, 'guest_disk', 'cert_expiry', 'temperature']);
+    const seen = [...defaultPrefs().kinds, 'updates_available'];
+    expect(migrateKinds({ ...defaultPrefs(), kinds: legacy }, seen).kinds).toEqual(legacy);
+  });
+});
+
+describe('createPushService: new device kinds and quiet hours', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'pve1-dash-push-kinds-'));
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('a device record from before the new kinds gets them on restart, and records which kinds it has seen', async () => {
+    const first = createPushService(makeCtx(dir));
+    const dev = await first.subscribe({ subscription: subscription(), name: 'iPhone', prefs: { kinds: ['service_down', 'guest_stopped'] } });
+    first.flush();
+    const file = JSON.parse(readFileSync(join(dir, 'push.json'), 'utf8'));
+    expect(file.devices[0].kindsSeen).toContain('temperature');
+    delete file.devices[0].kindsSeen; // as written by the previous version
+    writeFileSync(join(dir, 'push.json'), JSON.stringify(file));
+    const again = createPushService(makeCtx(dir));
+    expect(again.device(dev.id)!.prefs.kinds).toEqual(['service_down', 'guest_stopped', 'guest_disk', 'cert_expiry', 'temperature']);
+  });
+
+  it('notify honours quiet hours (config.timezone when the device has no zone)', async () => {
+    const send = vi.spyOn(webpush, 'sendNotification').mockResolvedValue({ statusCode: 201, body: '', headers: {} });
+    vi.spyOn(Date, 'now').mockReturnValue(at('23:00'));
+    const push = createPushService(makeCtx(dir, { timezone: 'UTC' }));
+    await push.subscribe({ subscription: subscription(), name: 'iPhone', prefs: { quietHours: { start: '22:00', end: '07:00', allowCritical: true } } });
+    await push.notify(event({ severity: 'warning' }), { recovery: false });
+    expect(send).not.toHaveBeenCalled();
+    await push.notify(event({ severity: 'critical' }), { recovery: false });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(push.devices()[0]!.prefs.quietHours).toEqual({ start: '22:00', end: '07:00', allowCritical: true });
+  });
+
+  function at(hhmm: string) {
+    return Date.UTC(2026, 9, 10, Number(hhmm.slice(0, 2)), Number(hhmm.slice(3, 5)));
   }
 });

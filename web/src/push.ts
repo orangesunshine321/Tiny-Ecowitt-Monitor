@@ -31,6 +31,11 @@ export interface StoredDevice {
   name: string;
   /** set when the server no longer knows this device (removed elsewhere or expired); cleared by subscribe() */
   lost?: boolean;
+  /**
+   * The device's alert preferences as the server last reported them (subscribe, prefs update, resync). The app badge
+   * counts with them, so it matches the `app_badge` the server puts into this device's pushes.
+   */
+  prefs?: PushPrefs;
 }
 
 export type PushPermission = NotificationPermission | 'unsupported';
@@ -93,10 +98,22 @@ export function getStoredDevice(): StoredDevice | null {
     if (typeof v.id !== 'string' || !v.id) return null;
     const d: StoredDevice = { id: v.id, name: typeof v.name === 'string' ? v.name : '' };
     if (v.lost === true) d.lost = true;
+    if (isPrefs(v.prefs)) d.prefs = v.prefs;
     return d;
   } catch {
     return null;
   }
+}
+
+function isPrefs(p: unknown): p is PushPrefs {
+  if (!p || typeof p !== 'object') return false;
+  const v = p as Partial<PushPrefs>;
+  return Array.isArray(v.kinds) && typeof v.minSeverity === 'string' && typeof v.recoveries === 'boolean';
+}
+
+/** What to remember about a device the server returned. */
+function deviceRecord(device: PushDevice): StoredDevice {
+  return { id: device.id, name: device.name, ...(isPrefs(device.prefs) ? { prefs: device.prefs } : {}) };
 }
 
 /** Convenience: the stored device id. */
@@ -223,7 +240,7 @@ export async function subscribe(name: string, prefs?: Partial<PushPrefs>): Promi
     prefs,
     ...(previous ? { replacesId: previous.id } : {}),
   });
-  storeDevice({ id: device.id, name: device.name });
+  storeDevice(deviceRecord(device));
   return device;
 }
 
@@ -255,7 +272,7 @@ export async function sendTest(id: string | null = getDeviceId()): Promise<{ ok:
 export async function updatePrefs(prefs: Partial<PushPrefs>, name?: string, id: string | null = getDeviceId()): Promise<PushDevice> {
   if (!id) throw new Error('Notifications are not enabled on this device.');
   const device = await postPushPrefs({ id, prefs, name });
-  if (id === getDeviceId()) storeDevice({ id: device.id, name: device.name });
+  if (id === getDeviceId()) storeDevice(deviceRecord(device));
   return device;
 }
 
@@ -292,7 +309,8 @@ export async function resyncPushSubscription(): Promise<ResyncResult> {
     }
     const sub = await subscriptionFor(reg, meta.vapidPublicKey);
     const device = await postPushSubscribe({ subscription: sub.toJSON(), name: known.name || stored.name || defaultDeviceName(), replacesId: stored.id });
-    storeDevice({ id: device.id, name: device.name });
+    // prefs may have been changed from another device's Settings: keep ours current for the badge
+    storeDevice(deviceRecord({ ...device, prefs: device.prefs ?? known.prefs }));
     return 'ok';
   } catch {
     return 'error'; // best effort; Settings shows the real state

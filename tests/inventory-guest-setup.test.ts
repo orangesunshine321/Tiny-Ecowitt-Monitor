@@ -128,7 +128,7 @@ describe('running the setup script (installs below PVE1_DASH_SETUP_ROOT)', () =>
     expect(first.stderr).toBe('');
     expect(first.status).toBe(0);
     expect(first.stdout).toContain('pve1-dash: installed /usr/local/sbin/pve1-dash-guest-inventory');
-    expect(first.stdout).toContain('pve1-dash: self-test: pve1-dash-guest-inventory 1');
+    expect(first.stdout).toContain('pve1-dash: self-test: pve1-dash-guest-inventory 2');
     expect(first.stdout).toContain('authorized the dashboard key');
 
     const helper = join(root, 'usr/local/sbin/pve1-dash-guest-inventory');

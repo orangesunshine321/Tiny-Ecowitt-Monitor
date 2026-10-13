@@ -1,12 +1,20 @@
 import { useMemo } from 'react';
 import type { Guest, GuestInventory } from '../../../../shared/types';
-import { OsIcon, Sparkline, StatusBadge, Table, toneOf, type TableColumn } from '../../components';
+import { OsIcon, Sparkline, StatusBadge, Table, severityTone, toneOf, type TableColumn, type Thresholds } from '../../components';
 import { formatBytes, formatBytesOf, formatDuration, formatPercent } from '../../format';
-import { TagList, TypeBadge } from './GuestBits';
-import { fraction, primaryIp } from './guestUtil';
+import { TagList, TypeBadge, UpdateFlags } from './GuestBits';
+import { fraction, guestUpdates, primaryIp, rootDisk } from './guestUtil';
 
-/** The Guests list view: a sortable macOS-style table; rows open the guest. */
-export function GuestTable({ guests, inventory }: { guests: Guest[]; inventory: Record<string, GuestInventory> }) {
+/** The Guests list view on Mac and iPad: a sortable macOS-style table; rows open the guest. */
+export function GuestTable({
+  guests,
+  inventory,
+  diskThresholds,
+}: {
+  guests: Guest[];
+  inventory: Record<string, GuestInventory>;
+  diskThresholds?: Thresholds;
+}) {
   const columns = useMemo<TableColumn<Guest>[]>(
     () => [
       {
@@ -20,6 +28,7 @@ export function GuestTable({ guests, inventory }: { guests: Guest[]; inventory: 
               <span className="gx-tname-name">{g.name}</span>
               <span className="gx-tname-sub">
                 <TypeBadge type={g.type} /> <span className="gx-tname-vmid">{g.vmid}</span>
+                <UpdateFlags info={g.template ? undefined : guestUpdates(inventory[String(g.vmid)])} compact />
               </span>
             </span>
           </span>
@@ -60,19 +69,28 @@ export function GuestTable({ guests, inventory }: { guests: Guest[]; inventory: 
         header: 'Disk',
         align: 'right',
         hideBelow: 'iphone',
-        // qemu: PVE reports no usage (always 0) → only the allocated size, dimmed, sorted last
-        sortValue: (g) => (g.type === 'lxc' && g.status === 'running' ? fraction(g.disk, g.maxdisk) : null),
-        cell: (g) =>
-          g.type === 'lxc' && g.status === 'running' ? (
-            formatBytesOf(g.disk, g.maxdisk)
-          ) : (
+        // the root filesystem: containers from Proxmox or df, VMs only from the inventory's df (Proxmox reports 0);
+        // otherwise the allocated size, dimmed, sorted last
+        sortValue: (g) => (g.status === 'running' ? (rootDisk(g, inventory[String(g.vmid)])?.fraction ?? null) : null),
+        cell: (g) => {
+          const root = g.status === 'running' ? rootDisk(g, inventory[String(g.vmid)]) : undefined;
+          if (root) {
+            const tone = severityTone(root.fraction, diskThresholds);
+            return (
+              <span className="gx-tdisk" data-tone={tone === 'ok' ? undefined : tone} title={`${formatPercent(root.fraction)} used`}>
+                {formatBytesOf(root.used, root.size)}
+              </span>
+            );
+          }
+          return (
             <span
               className="t-label-3"
               title={g.type === 'qemu' ? 'Allocated size. Proxmox doesn’t report disk usage inside VMs.' : 'Allocated size'}
             >
               {g.maxdisk > 0 ? formatBytes(g.maxdisk) : '–'}
             </span>
-          ),
+          );
+        },
       },
       {
         key: 'ip',
@@ -108,7 +126,7 @@ export function GuestTable({ guests, inventory }: { guests: Guest[]; inventory: 
         cell: (g) => <TagList tags={g.tags} max={2} />,
       },
     ],
-    [inventory],
+    [inventory, diskThresholds],
   );
 
   return (

@@ -23,6 +23,14 @@ const VMS = [
   { id: 'qemu/200', type: 'qemu', vmid: 200, node: 'pve2', name: 'other-node', status: 'running', template: 0 },
 ];
 
+/** this node's storages as /cluster/resources lists them (pvestatd's cache) */
+const STORAGE = [
+  { id: 'storage/pve1/local', type: 'storage', node: 'pve1', storage: 'local', plugintype: 'dir', content: 'iso,backup,vztmpl', status: 'available', disk: 50, maxdisk: 100, shared: 0 },
+  { id: 'storage/pve1/local-zfs', type: 'storage', node: 'pve1', storage: 'local-zfs', plugintype: 'zfspool', content: 'images,rootdir', status: 'available', disk: 100, maxdisk: 1000, shared: 0 },
+  { id: 'storage/pve1/pbs', type: 'storage', node: 'pve1', storage: 'pbs', plugintype: 'pbs', content: 'backup', status: 'available', disk: 1, maxdisk: 10, shared: 1 },
+  { id: 'storage/pve2/local', type: 'storage', node: 'pve2', storage: 'local', plugintype: 'dir', content: 'iso', status: 'available', disk: 5, maxdisk: 10, shared: 0 },
+];
+
 function route(path: string, q: URLSearchParams): { status: number; body: unknown; reason?: string } {
   const ok = (data: unknown, extra: Record<string, unknown> = {}) => ({ status: 200, body: { data, ...extra } });
   const err = (status: number, message: string, reason?: string) => ({ status, body: { data: null, message: `${message}\n` }, reason });
@@ -33,7 +41,9 @@ function route(path: string, q: URLSearchParams): { status: number; body: unknow
       return ok(
         q.get('type') === 'vm'
           ? VMS
-          : [...VMS, { id: 'node/pve1', type: 'node', node: 'pve1', status: 'online', cpu: 0.12, maxcpu: 16, mem: 1, maxmem: 2, uptime: 99 }, { id: 'storage/pve1/local', type: 'storage', storage: 'local' }],
+          : q.get('type') === 'storage'
+            ? STORAGE
+            : [...VMS, { id: 'node/pve1', type: 'node', node: 'pve1', status: 'online', cpu: 0.12, maxcpu: 16, mem: 1, maxmem: 2, uptime: 99 }, ...STORAGE],
       );
     case '/nodes/pve1/status':
       return ok({
@@ -46,7 +56,9 @@ function route(path: string, q: URLSearchParams): { status: number; body: unknow
     case '/nodes/pve1/rrddata':
       return q.get('timeframe') === 'hour'
         ? ok([{ time: NOW_S - 120, cpu: 0.1, netin: 5000, netout: 6000 }, { time: NOW_S - 60, cpu: 0.12, netin: 7000.5, netout: 8000.25 }])
-        : err(400, 'Parameter verification failed.');
+        : q.get('timeframe') === 'day' // PVE 9: 1440 one-minute points
+          ? ok(Array.from({ length: 1440 }, (_, i) => ({ time: NOW_S - (1440 - i) * 60, cpu: i === 700 ? 0.97 : 0.1, netin: 1000 })))
+          : err(400, 'Parameter verification failed.');
     case '/nodes/pve1/qemu/100/rrddata':
       return ok([{ time: NOW_S - 60, cpu: 0.05, mem: 1e9, maxmem: 4e9, disk: 0, netin: 12 }]);
     case '/nodes/pve1/qemu/100/config':
@@ -274,10 +286,12 @@ describe('createProxmoxService (against a mock PVE 8 API)', () => {
         ips: [{ iface: 'enp0s18', address: '10.10.20.20', family: 4, prefix: 24, source: 'inventory' }], services: [], containers: [], ports: [],
       },
     });
+    // re-merged with the next status poll (one guests frame per tick), at the latest after status interval + 1 s
+    await waitForSections(ctx, ['guests'], () => ctx.store.get('guests').find((g) => g.vmid === 100)?.osName !== undefined, 8000);
     const haos = ctx.store.get('guests').find((g) => g.vmid === 100)!;
     expect(haos.osName).toBe('Home Assistant OS 16.2');
     expect(haos.ips).toEqual([{ iface: 'enp0s18', address: '10.10.20.20', family: 4, prefix: 24, source: 'inventory' }]);
-  });
+  }, 20_000);
 
   it('prefers the SSH host helper for backups and updates', async () => {
     const ctx = makeCtx();
@@ -324,6 +338,13 @@ describe('createProxmoxService (against a mock PVE 8 API)', () => {
     expect(guestRrd).toEqual([{ time: (NOW_S - 60) * 1000, cpu: 0.05, memUsed: 1e9, memTotal: 4e9, netIn: 12 }]);
     await expect(svc.getRrd({ kind: 'guest', vmid: 4242 }, 'hour')).rejects.toMatchObject({ status: 404 });
     await expect(svc.getRrd({ kind: 'node' }, 'decade' as never)).rejects.toMatchObject({ status: 400 });
+    // PVE 9 day series: reduced to the point budget (default 400, ?maxPoints=50..2000) with the CPU peak kept
+    const day = await svc.getRrd({ kind: 'node' }, 'day');
+    expect(day.length).toBeLessThanOrEqual(400);
+    expect(Math.max(...day.map((p) => p.cpu ?? 0))).toBe(0.97);
+    expect(await svc.getRrd({ kind: 'node' }, 'day', { maxPoints: 5000 })).toHaveLength(1440); // clamped to 2000
+    expect((await svc.getRrd({ kind: 'node' }, 'day', { maxPoints: 10 })).length).toBeLessThanOrEqual(50); // clamped to 50
+    await expect(svc.getRrd({ kind: 'node' }, 'day', { maxPoints: Number.NaN })).rejects.toMatchObject({ status: 400 });
 
     const log = await svc.getTaskLog(UPID_OK, 5);
     expect(log).toEqual({ upid: UPID_OK, lines: ['line 8', 'line 9', 'line 10', 'line 11', 'line 12'], total: 12 }); // tail

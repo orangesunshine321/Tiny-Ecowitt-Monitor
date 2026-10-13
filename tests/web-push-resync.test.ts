@@ -145,7 +145,8 @@ describe('resyncPushSubscription', () => {
     expect(env.subscribeCalls).toHaveLength(0);
     expect(env.posts).toHaveLength(1);
     expect(env.posts[0]!.body).toMatchObject({ replacesId: 'dev-1', subscription: { endpoint: 'https://web.push.apple.com/abc' } });
-    expect(getStoredDevice()).toEqual({ id: 'dev-1', name: 'iPhone' });
+    // the device's prefs are remembered so the app badge counts the same alerts as this device's pushes
+    expect(getStoredDevice()).toEqual({ id: 'dev-1', name: 'iPhone', prefs: { kinds: ['service_down'], minSeverity: 'critical', recoveries: false } });
   });
 
   it('replaces a subscription bound to an old VAPID key (it could only ever get 403s)', async () => {
@@ -205,7 +206,7 @@ describe('subscribe (Enable / Turn On Again)', () => {
     expect(stale.unsubscribe).toHaveBeenCalledOnce();
     expect(env.posts[0]!.body.subscription).toMatchObject({ endpoint: 'https://web.push.apple.com/new-1' });
     expect(env.posts[0]!.body).not.toHaveProperty('replacesId');
-    expect(getStoredDevice()).toEqual({ id: d.id, name: 'iPhone' });
+    expect(getStoredDevice()).toEqual({ id: d.id, name: 'iPhone', prefs: { kinds: ['service_down'], minSeverity: 'critical', recoveries: false } });
   });
 
   it('sends the previous device id so a known device is updated in place, and clears the lost flag', async () => {
@@ -214,7 +215,7 @@ describe('subscribe (Enable / Turn On Again)', () => {
     const d = await subscribe('iPhone');
     expect(env.posts[0]!.body).toMatchObject({ replacesId: 'dev-1' });
     expect(d.id).toBe('dev-new');
-    expect(getStoredDevice()).toEqual({ id: 'dev-new', name: 'iPhone' });
+    expect(getStoredDevice()).toEqual({ id: 'dev-new', name: 'iPhone', prefs: { kinds: ['service_down'], minSeverity: 'critical', recoveries: false } });
   });
 });
 

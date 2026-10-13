@@ -14,6 +14,11 @@ export type InventoryView =
   /** not running; `stale` is what was seen while it last ran (if anything) */
   | { kind: 'stopped'; stale?: GuestInventory }
   | { kind: 'windows'; error?: string }
+  /**
+   * can't be inspected by design (the server says `inspectable: 'unsupported'`): HAOS with guest-exec disabled, a VM with
+   * no agent and no SSH target. Informational, never a failure.
+   */
+  | { kind: 'unsupported'; reason: InventoryReason }
   /** a VM without an enabled guest agent and not configured for direct SSH */
   | { kind: 'no-agent' }
   /** nothing collected yet; `sweepError` is the last failure of the inventory collector, if any */
@@ -42,7 +47,7 @@ export function explainInventoryError(error: string | undefined, guest: Pick<Gue
   const raw = (error ?? '').trim();
   const e = raw.toLowerCase();
   const haos = /home assistant/i.test(guest.osName ?? '');
-  if (/guest-exec/.test(e) && /disabled/.test(e)) {
+  if (/guest-exec/.test(e) && /disabl/.test(e)) {
     return {
       title: 'Commands are disabled in this VM’s guest agent',
       message: haos
@@ -96,6 +101,25 @@ export function explainInventoryError(error: string | undefined, guest: Pick<Gue
   };
 }
 
+/** Why a guest the server marked `inspectable: 'unsupported'` can't be looked into (worded as a fact, not an error). */
+export function explainUnsupported(error: string | undefined, guest: Pick<Guest, 'osName' | 'config' | 'type'>): InventoryReason {
+  const known = explainInventoryError(error, guest);
+  if (known.title !== 'Inventory collection failed') return known;
+  const raw = (error ?? '').trim() || undefined;
+  if (guest.type === 'qemu' && !guest.config?.agentEnabled) {
+    return {
+      title: 'This VM can’t be looked into',
+      message: 'It has no QEMU guest agent and no direct SSH target, so pve1-dash can’t list its apps. Resources, IPs and backups still work.',
+      raw,
+    };
+  }
+  return {
+    title: 'This guest can’t be looked into',
+    message: 'pve1-dash has no way to run its read-only inventory here. Resources, IPs and backups still work.',
+    raw,
+  };
+}
+
 /** Decide what the Apps segment shows for this guest. */
 export function inventoryView(
   guest: Pick<Guest, 'type' | 'status' | 'template' | 'osName' | 'config'>,
@@ -104,6 +128,10 @@ export function inventoryView(
 ): InventoryView {
   if (!opts.enabled && !inv) return { kind: 'disabled' };
   if (guest.template) return { kind: 'template' };
+  if (inv?.inspectable === 'unsupported' && !(inv.ok && hasInventoryData(inv))) {
+    if (isWindows(guest) || /windows/i.test(inv.error ?? '')) return { kind: 'windows', error: inv.error };
+    return { kind: 'unsupported', reason: explainUnsupported(inv.error, guest) };
+  }
   // Windows can never be inspected, running or not (unless an earlier collection somehow has data)
   if (isWindows(guest) && !(inv && hasInventoryData(inv))) return { kind: 'windows', error: inv?.error };
   if (guest.status !== 'running') return { kind: 'stopped', stale: inv && hasInventoryData(inv) ? inv : undefined };

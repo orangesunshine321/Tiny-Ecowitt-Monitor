@@ -1,9 +1,10 @@
 /** Small presentational pieces shared by the Guests grid, table and the Guest detail page. */
-import { Box, Monitor, Search, X } from 'lucide-react';
+import { ArrowDownToLine, Box, Monitor, RotateCw, Search, X } from 'lucide-react';
 import { useId, type ChangeEvent } from 'react';
 import type { GuestType } from '../../../../shared/types';
 import { TagChip } from '../../components';
-import { typeLabel, typeName } from './guestUtil';
+import { formatDateTime } from '../../format';
+import { needsUpdates, typeLabel, typeName, updatesText, type GuestUpdateInfo } from './guestUtil';
 import './Guests.css';
 
 /** Neutral VM / CT capsule (not a status colour). */
@@ -82,5 +83,42 @@ export function SearchField({
         </button>
       )}
     </div>
+  );
+}
+
+/** "12 pending updates (4 security) · apt · checked 12 Oct, 09:14" for tooltips and screen readers. */
+export function updatesTitle(info: GuestUpdateInfo): string {
+  const n = info.count ?? 0;
+  const parts = [`${n} pending update${n === 1 ? '' : 's'}${info.security ? ` (${info.security} security)` : ''}`];
+  if (info.manager) parts.push(info.manager);
+  if (info.checkedAt !== undefined) parts.push(`package lists from ${formatDateTime(info.checkedAt)}`);
+  return parts.join(' · ');
+}
+
+const REBOOT_TITLE = 'A reboot is pending inside this guest (a new kernel or libraries were installed)';
+
+/**
+ * Pending package updates and reboot-required flags of a guest (from its inventory). `compact` shows only icons and
+ * the count (lists and tables); the full text is in the tooltip and for screen readers.
+ */
+export function UpdateFlags({ info, compact }: { info: GuestUpdateInfo | undefined; compact?: boolean }) {
+  if (!info || !needsUpdates(info)) return null;
+  const n = info.count ?? 0;
+  return (
+    <span className="gx-flags">
+      {n > 0 && (
+        <span className="gx-flag" data-tone={info.security ? 'warn' : 'info'} title={updatesTitle(info)}>
+          <ArrowDownToLine size={11} strokeWidth={2.6} aria-hidden="true" />
+          {compact ? <span aria-hidden="true">{n}</span> : updatesText(info)}
+          {compact && <span className="sr-only">{updatesTitle(info)}</span>}
+        </span>
+      )}
+      {info.rebootRequired && (
+        <span className="gx-flag" data-tone="info" title={REBOOT_TITLE}>
+          <RotateCw size={11} strokeWidth={2.6} aria-hidden="true" />
+          {compact ? <span className="sr-only">Reboot required</span> : 'Reboot required'}
+        </span>
+      )}
+    </span>
   );
 }

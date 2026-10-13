@@ -1,15 +1,37 @@
-import { ChevronLeft, Search } from 'lucide-react';
+import { Binary, ChevronLeft, Search } from 'lucide-react';
 import { useEffect, useRef } from 'react';
+import { IconButton } from '../components/IconButton';
 import { ToolbarGroup } from '../components/Toolbar';
 import { shortcutLabel } from '../hooks/useHotkey';
+import { toggleMatrixTheme } from '../hooks/useTheme';
+import { usePrefs } from '../prefs';
 import { Link } from '../router';
 import { LiveIndicator } from './LiveIndicator';
 import './TopBar.css';
 import { shellUi, useShellUi } from './uiStore';
 
 /**
- * Fixed top bar over the content column. Hosts the page toolbar (portal target), the global group (Spotlight +
- * Live), the back button and the compact title; shows the scroll-edge effect when content scrolls beneath it.
+ * Toolbar quick toggle for the Matrix theme: flips Matrix on, or back to the theme the user had before it
+ * (prefs.themeBeforeMatrix), with a crossfade. Lit (aria-pressed) while Matrix is on.
+ */
+export function MatrixToggle() {
+  const on = usePrefs((p) => p.theme === 'matrix');
+  return (
+    <IconButton
+      className="shell-matrix-toggle"
+      icon={<Binary size={17} strokeWidth={2.2} aria-hidden="true" />}
+      label="Matrix theme"
+      title={on ? 'Matrix theme: on' : 'Matrix theme'}
+      pressed={on}
+      onClick={toggleMatrixTheme}
+    />
+  );
+}
+
+/**
+ * Fixed top bar over the content column. Hosts the page toolbar (portal target), the global group (Spotlight, the
+ * Matrix toggle and Live), the back button and the compact title; shows the scroll-edge effect when content scrolls
+ * beneath it.
  */
 export function TopBar() {
   const barRef = useRef<HTMLDivElement>(null);
@@ -103,6 +125,7 @@ export function TopBar() {
               <span className="shell-search-label">Search</span>
               <kbd className="ui-kbd">{shortcutLabel('k')}</kbd>
             </button>
+            <MatrixToggle />
             <LiveIndicator />
           </ToolbarGroup>
         </div>

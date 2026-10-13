@@ -16,6 +16,13 @@ export interface CoverageSummary {
   stale: number;
   never: number;
   notInAnyJob: number;
+  /** guests whose most recent backup attempt failed (newer than their last good backup; D26) */
+  failed: number;
+}
+
+/** The guest's latest backup attempt failed (and no good backup came after it). */
+export function lastBackupFailed(c: Pick<BackupCoverage, 'lastFailure' | 'lastBackup'>): boolean {
+  return !!c.lastFailure && (c.lastBackup === undefined || c.lastFailure.time > c.lastBackup);
 }
 
 export function summarizeCoverage(coverage: readonly BackupCoverage[]): CoverageSummary {
@@ -23,35 +30,39 @@ export function summarizeCoverage(coverage: readonly BackupCoverage[]): Coverage
   let stale = 0;
   let never = 0;
   let notInAnyJob = 0;
+  let failed = 0;
   for (const c of coverage) {
+    if (lastBackupFailed(c)) failed++;
     if (c.lastBackup === undefined) never++;
     else if (c.stale) stale++;
     else covered++;
     if (c.notInAnyJob) notInAnyJob++;
   }
-  return { total: coverage.length, covered, stale, never, notInAnyJob };
+  return { total: coverage.length, covered, stale, never, notInAnyJob, failed };
 }
 
 /** Tone of the overall coverage: everything covered → ok; anything never backed up → crit; else warn. */
 export function coverageTone(s: CoverageSummary): 'ok' | 'warn' | 'crit' {
-  if (s.total === 0 || s.covered === s.total) return 'ok';
-  if (s.never > 0) return 'crit';
+  if (s.total === 0 || (s.covered === s.total && !s.failed)) return 'ok';
+  if (s.never > 0 || s.failed > 0) return 'crit';
   return 'warn';
 }
 
 /** Status pills for one guest (never colour alone: each has a label). */
 export function coverageBadges(c: BackupCoverage): StatusInfo[] {
   const out: StatusInfo[] = [];
+  const failed = lastBackupFailed(c);
+  if (failed) out.push({ tone: 'crit', label: 'Last backup failed' });
   if (c.lastBackup === undefined) out.push({ tone: 'crit', label: 'Never backed up' });
   else if (c.stale) out.push({ tone: 'warn', label: 'Stale' });
-  else out.push({ tone: 'ok', label: 'Recent' });
+  else if (!failed) out.push({ tone: 'ok', label: 'Recent' }); // "failed" next to "Recent" reads as a contradiction
   if (c.notInAnyJob) out.push({ tone: 'warn', label: 'Not in any job' });
   return out;
 }
 
 /** Problems first (never, stale, not in a job), then by vmid. */
 export function sortCoverage(coverage: readonly BackupCoverage[]): BackupCoverage[] {
-  const rank = (c: BackupCoverage) => (c.lastBackup === undefined ? 3 : c.stale ? 2 : 0) + (c.notInAnyJob ? 1 : 0);
+  const rank = (c: BackupCoverage) => (lastBackupFailed(c) ? 4 : 0) + (c.lastBackup === undefined ? 3 : c.stale ? 2 : 0) + (c.notInAnyJob ? 1 : 0);
   return [...coverage].sort((a, b) => rank(b) - rank(a) || a.vmid - b.vmid);
 }
 

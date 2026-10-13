@@ -3,15 +3,17 @@
  *  - host framing  (`@@pve1-dash:` lines from /usr/local/sbin/pve1-dash-helper)
  *  - `qm guest exec` JSON unwrapping
  *  - inner guest script sections (`##pve1-dash:` lines): os-release, kernel, uptime, loadavg, init, services,
- *    docker, ip, listen
+ *    docker, ip, listen, and since protocol v2 df, updates, reboot (v1 output parses without those fields)
  *  - `sensors -j` → TempReading[]
  *  - helper JSON output (pkgupdates, backups) behind a possibly noisy .bashrc
+ *  - `hostinfo` key/value lines (protocol v2)
  *
  * No I/O here; everything is unit-tested against fixtures in tests/fixtures/inventory.
  */
 import type {
   DockerContainer,
   DockerPort,
+  GuestFilesystem,
   GuestInventory,
   GuestIp,
   ListeningPort,
@@ -19,10 +21,13 @@ import type {
   TempReading,
 } from '../../shared/types.js';
 import type { CommandResult } from '../context.js';
+import { isUnusableAddress, isVirtualInterface } from '../util/ipfilter.js';
 
 export const HOST_PREFIX = '@@pve1-dash:';
 export const INNER_PREFIX = '##pve1-dash:';
-export const INNER_HEADER = '##pve1-dash:inventory v1';
+/** The inner script's first line, any protocol version (v1 and v2 both parse). */
+const INNER_HEADER_RE = /^##pve1-dash:inventory v\d+\s*$/m;
+export const hasInnerHeader = (text: string): boolean => INNER_HEADER_RE.test(text);
 
 export type InventorySource = GuestInventory['source'];
 export type HostTransport = 'pct-exec' | 'qm-guest-exec';
@@ -60,9 +65,31 @@ function num(v: unknown): number | undefined {
   return undefined;
 }
 
+/**
+ * Errors that mean "cannot be inspected by design", not a fixable failure: a Windows guest, or a guest agent whose
+ * guest-exec command is disabled (Home Assistant OS ships qemu-ga that way; QEMU words it "Command guest-exec has been
+ * disabled" or "guest-exec is disabled").
+ */
+const UNSUPPORTED_RE = /unsupported os|\bwindows\b|guest-exec (?:has been |is )?disabled|disabled.{0,40}guest-exec/i;
+
+export function inspectableFromError(error: string | undefined): NonNullable<GuestInventory['inspectable']> {
+  return error && UNSUPPORTED_RE.test(error) ? 'unsupported' : 'yes';
+}
+
 /** An inventory that only carries an error (no data). */
 export function failedInventory(vmid: number, source: InventorySource, collectedAt: number, error: string): GuestInventory {
-  return { vmid, source, collectedAt, ok: false, error, ips: [], services: [], containers: [], ports: [] };
+  return {
+    vmid,
+    source,
+    collectedAt,
+    ok: false,
+    error,
+    ips: [],
+    services: [],
+    containers: [],
+    ports: [],
+    inspectable: inspectableFromError(error),
+  };
 }
 
 // ───────────────────────────────────────────────────────────── JSON behind a noisy .bashrc
@@ -173,16 +200,23 @@ export function parseHostFraming(stdout: string): HostFraming | null {
 /** Convert one framed block to a GuestInventory. */
 export function blockToInventory(b: HostBlock, collectedAt: number): GuestInventory {
   const source: InventorySource = b.transport;
+  const isError = (l: string) => l.startsWith(`${HOST_PREFIX}error`);
+  const errorText = (l: string) => cleanMessage(l.slice(`${HOST_PREFIX}error`.length));
   const first = b.payload.find((l) => l.trim() !== '');
-  if (first?.startsWith(`${HOST_PREFIX}error`)) {
-    const msg = cleanMessage(first.slice(`${HOST_PREFIX}error`.length));
-    return failedInventory(b.vmid, source, collectedAt, msg || 'unknown error');
+  if (first && isError(first)) {
+    return failedInventory(b.vmid, source, collectedAt, errorText(first) || 'unknown error');
   }
   if (!b.terminated) {
     return failedInventory(b.vmid, source, collectedAt, 'helper output was cut off before this guest finished');
   }
+  if (b.transport === 'pct-exec') {
+    // v2 helpers pass on a partial inner output followed by the reason it stopped (e.g. a probe ran into the limit)
+    const stopped = b.payload.filter(isError).map(errorText).find(Boolean);
+    const inv = parseInnerOutput(b.payload.filter((l) => !isError(l)).join('\n'), { vmid: b.vmid, source, collectedAt });
+    if (stopped && inv.ok) inv.error = `partial inventory: ${stopped}`;
+    return inv;
+  }
   const payload = b.payload.join('\n');
-  if (b.transport === 'pct-exec') return parseInnerOutput(payload, { vmid: b.vmid, source, collectedAt });
 
   const unwrapped = unwrapGuestExec(payload);
   if (!unwrapped.ok) return failedInventory(b.vmid, source, collectedAt, unwrapped.error);
@@ -232,7 +266,7 @@ export function unwrapGuestExec(text: string): GuestExecUnwrapped {
     };
   }
   // A killed or failing script may still have printed a usable (partial) inventory.
-  if (out.includes(INNER_HEADER)) return { ok: true, stdout: out, truncated, ...(exitcode !== undefined ? { exitcode } : {}) };
+  if (hasInnerHeader(out)) return { ok: true, stdout: out, truncated, ...(exitcode !== undefined ? { exitcode } : {}) };
   if (signal !== undefined) return { ok: false, error: `guest command killed by signal ${signal}` };
   if (exitcode !== undefined && exitcode !== 0) {
     const why = lastLine(errData);
@@ -299,7 +333,17 @@ export function parseInnerOutput(text: string, opts: InnerParseOptions): GuestIn
     );
   }
   const get = (name: string) => parsed.sections.get(name) ?? [];
-  const inv: GuestInventory = { vmid, source, collectedAt, ok: true, ips: [], services: [], containers: [], ports: [] };
+  const inv: GuestInventory = {
+    vmid,
+    source,
+    collectedAt,
+    ok: true,
+    ips: [],
+    services: [],
+    containers: [],
+    ports: [],
+    inspectable: 'yes',
+  };
 
   const os = parseOsRelease(get('os-release'));
   if (os) inv.os = os;
@@ -322,6 +366,13 @@ export function parseInnerOutput(text: string, opts: InnerParseOptions): GuestIn
   }
   inv.ips = parseIpOutput(get('ip'));
   inv.ports = parseListenOutput(get('listen'));
+  // protocol v2 sections: absent (older helper, or cut off before them) leaves the field unset = "unknown"
+  if (parsed.sections.has('df')) inv.filesystems = parseDf(get('df'));
+  if (parsed.sections.has('updates')) {
+    const updates = parseUpdates(get('updates'));
+    if (updates) inv.updates = updates;
+  }
+  if (parsed.sections.has('reboot')) inv.rebootRequired = parseReboot(get('reboot'), inv.kernel);
   if (!parsed.complete) inv.error = 'inventory output was truncated';
   return inv;
 }
@@ -331,7 +382,7 @@ export function parseInnerOutput(text: string, opts: InnerParseOptions): GuestIn
  * The guest helper prints the inner output directly, without host framing.
  */
 export function inventoryFromSshResult(result: CommandResult, vmid: number, collectedAt: number): GuestInventory {
-  if (result.stdout.includes(INNER_HEADER)) {
+  if (hasInnerHeader(result.stdout)) {
     const inv = parseInnerOutput(result.stdout, { vmid, source: 'ssh', collectedAt });
     if (result.code === null && inv.ok && !inv.error) inv.error = 'ssh timeout (partial inventory)';
     return inv;
@@ -601,13 +652,13 @@ export function parseDockerPs(lines: string[]): DockerContainer[] {
 
 // ── ip addresses
 
-/** Bridges and veths created by Docker, plus loopback. The Tailscale CGNAT range is deliberately kept. */
-const SKIP_IFACE_RE = /^(?:lo|docker.*|br-.*|veth.*)$/;
-
-function keepAddress(iface: string | undefined, address: string, family: 4 | 6): boolean {
-  if (iface && SKIP_IFACE_RE.test(iface)) return false;
-  if (family === 4) return !address.startsWith('127.');
-  return address !== '::1' && !/^fe[89ab][0-9a-f]:/i.test(address);
+/**
+ * Loopback, container/VM bridges and overlay interfaces (docker, libvirt, k3s/flannel/calico, podman, LXD/Incus,
+ * Home Assistant's hassio, ...) never carry the guest's LAN address; one shared list (server/util/ipfilter.ts) so the
+ * guest agent path agrees. VPN interfaces (tailscale, wg, zt) are kept, as is the Tailscale CGNAT range.
+ */
+function keepAddress(iface: string | undefined, address: string): boolean {
+  return !isVirtualInterface(iface) && !isUnusableAddress(address);
 }
 
 function maskToPrefix(mask: string): number | undefined {
@@ -670,7 +721,7 @@ export function parseIpOutput(lines: string[]): GuestIp[] {
   const all = oneline ? parseIpAddrOneline(lines) : parseIfconfig(lines);
   const seen = new Set<string>();
   return all.filter((ip) => {
-    if (!keepAddress(ip.iface, ip.address, ip.family) || seen.has(ip.address)) return false;
+    if (!keepAddress(ip.iface, ip.address) || seen.has(ip.address)) return false;
     seen.add(ip.address);
     return true;
   });
@@ -735,6 +786,220 @@ export function parseListenOutput(lines: string[]): ListeningPort[] {
     out.push(lp);
   }
   return out.sort((a, b) => a.port - b.port || a.address.localeCompare(b.address));
+}
+
+// ── df (protocol v2)
+
+/** Filesystem types that never hold user data (or only mirror another mount). `fuse.*` is matched separately. */
+const PSEUDO_FS = new Set([
+  'tmpfs', 'devtmpfs', 'overlay', 'overlayfs', 'squashfs', 'proc', 'sysfs', 'cgroup', 'cgroup2', 'nsfs', 'devpts',
+  'mqueue', 'hugetlbfs', 'debugfs', 'tracefs', 'securityfs', 'pstore', 'bpf', 'configfs', 'efivarfs', 'autofs',
+  'binfmt_misc', 'ramfs', 'rpc_pipefs', 'fusectl', 'iso9660', 'udf', 'devfs', 'shm', 'none', 'aufs', 'lxcfs', 'zram',
+]);
+/** Device names df prints for pseudo filesystems when it was run without -T (old busybox). */
+const PSEUDO_DEVICE_RE = /^(?:tmpfs|devtmpfs|overlay|shm|udev|none|lxcfs|cgroup2?|proc|sysfs|\/dev\/loop\d+)$/;
+/** Runtime trees: whatever is mounted there belongs to the system, not to the guest's data. */
+const PSEUDO_MOUNT_RE = /^\/(?:proc|sys|dev|run|snap)(?:\/|$)/;
+/**
+ * Container-engine trees, skipped only when df printed no types (their overlay/tmpfs/shm mounts are dropped by type
+ * otherwise, and a real disk mounted at /var/lib/docker is exactly what fills up).
+ */
+const ENGINE_MOUNT_RE = /^\/var\/lib\/(?:docker|containers|kubelet|lxcfs)\//;
+const MAX_FILESYSTEMS = 40;
+
+/**
+ * The `df` section: `df -P -T -k [-l]` ("Filesystem Type 1024-blocks Used Available Capacity Mounted on") or
+ * `df -P -k` (no Type column). Pseudo filesystems, runtime mounts and empty ones are dropped, bind mounts of the same
+ * filesystem are listed once. Sizes in bytes.
+ */
+export function parseDf(lines: string[]): GuestFilesystem[] {
+  const header = lines.findIndex((l) => /^Filesystem\s/.test(l));
+  if (header < 0) return [];
+  const hasType = /^Filesystem\s+Type\s/.test(lines[header]!);
+  const out: GuestFilesystem[] = [];
+  const seen = new Set<string>();
+  for (const line of lines.slice(header + 1)) {
+    const t = line.trim().split(/\s+/);
+    // blocks, used, available, capacity: the first run of three integers and a percentage (devices with spaces)
+    let i = hasType ? 2 : 1;
+    for (; i + 4 < t.length; i++) {
+      if (isUint(t[i]) && isUint(t[i + 1]) && isUint(t[i + 2]) && /^(?:\d+%|-)$/.test(t[i + 3]!)) break;
+    }
+    if (i + 4 >= t.length) continue;
+    const mount = t.slice(i + 4).join(' ');
+    if (!mount.startsWith('/')) continue;
+    const device = t.slice(0, hasType ? i - 1 : i).join(' ');
+    const fstype = hasType ? t[i - 1] : undefined;
+    const size = Number(t[i]) * 1024;
+    const used = Number(t[i + 1]) * 1024;
+    const avail = Number(t[i + 2]) * 1024;
+    if (!(size > 0)) continue;
+    if (fstype && (PSEUDO_FS.has(fstype.toLowerCase()) || /^fuse\./i.test(fstype))) continue;
+    if (!fstype && (PSEUDO_DEVICE_RE.test(device) || ENGINE_MOUNT_RE.test(mount))) continue;
+    if (PSEUDO_MOUNT_RE.test(mount)) continue;
+    const key = `${device}\0${size}\0${used}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const fs: GuestFilesystem = { mount, size, used, avail };
+    if (fstype) fs.fstype = fstype;
+    if (device) fs.device = device;
+    out.push(fs);
+    if (out.length >= MAX_FILESYSTEMS) break;
+  }
+  return out;
+}
+
+function isUint(s: string | undefined): boolean {
+  return s !== undefined && /^\d{1,18}$/.test(s);
+}
+
+// ── updates (protocol v2)
+
+/** Epoch seconds that can be a real file time (2000-01-01 … 2100-01-01). */
+const plausibleEpoch = (v: number) => Number.isInteger(v) && v > 946_684_800 && v < 4_102_444_800;
+
+/** The `updates` section: "manager apt", "count 12", "security 3", "stamp <epoch>"…; undefined without a manager. */
+export function parseUpdates(lines: string[]): GuestInventory['updates'] | undefined {
+  let manager: string | undefined;
+  let count: number | undefined;
+  let security: number | undefined;
+  let stamp: number | undefined;
+  for (const raw of lines) {
+    const m = /^(manager|count|security|stamp)\s+(\S+)\s*$/.exec(raw.trim());
+    if (!m) continue;
+    const v = m[2]!;
+    if (m[1] === 'manager') {
+      if (/^[a-z][a-z0-9-]{0,15}$/.test(v)) manager = v;
+    } else if (/^\d{1,12}$/.test(v)) {
+      const n = Number(v);
+      if (m[1] === 'count') count = n;
+      else if (m[1] === 'security') security = n;
+      else if (plausibleEpoch(n)) stamp = Math.max(stamp ?? 0, n);
+    }
+  }
+  if (!manager || count === undefined) return undefined;
+  const out: NonNullable<GuestInventory['updates']> = { count, manager };
+  if (security !== undefined) out.security = Math.min(security, count);
+  if (stamp !== undefined) out.checkedAt = stamp * 1000;
+  return out;
+}
+
+// ── kernels and reboot (protocol v2)
+
+/** Natural version order: "6.8.12-10-pve" > "6.8.12-9-pve" > "6.8.4-2-pve". */
+export function compareVersions(a: string, b: string): number {
+  const pa = a.split(/(\d+)/);
+  const pb = b.split(/(\d+)/);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] ?? '';
+    const y = pb[i] ?? '';
+    if (x === y) continue;
+    if (i % 2 === 1 && x !== '' && y !== '') return Number(x) - Number(y) || x.length - y.length;
+    return x < y ? -1 : 1;
+  }
+  return 0;
+}
+
+/** "6.1.0-27-amd64" → "amd64", "6.8.12-4-pve" → "pve", "6.10.6-200.fc40.x86_64" → "fc40.x86_64". */
+export function kernelFlavor(version: string): string {
+  return version.replace(/^[\d.\-_+~]+/, '');
+}
+
+/** A kernel version (as in /boot/vmlinuz-<version>) the same kind as `running`, e.g. not "0-rescue-…" or "lts". */
+function sameKindKernel(v: string, running: string): boolean {
+  return /^\d/.test(v) && !/rescue/i.test(v) && kernelFlavor(v) === kernelFlavor(running);
+}
+
+/** Newest of `installed` that is the same kind as `running` (or the newest of all without a running version). */
+export function newestKernel(installed: Iterable<string>, running?: string): string | undefined {
+  let best: string | undefined;
+  for (const v of installed) {
+    if (running ? !sameKindKernel(v, running) : !/^\d/.test(v)) continue;
+    if (best === undefined || compareVersions(v, best) > 0) best = v;
+  }
+  return best;
+}
+
+/**
+ * The `reboot` section: "flag <source>" (reboot-required file, NixOS, needs-restarting), "modules-missing" (the
+ * running kernel's modules were removed by an upgrade), "container", and "vmlinuz <version>" lines. A newer installed
+ * kernel of the same flavour than the running one also means a reboot is due; that check needs the running kernel to
+ * be among the installed ones, which proves /boot belongs to this system (never true in a container).
+ */
+export function parseReboot(lines: string[], runningKernel: string | undefined): boolean {
+  const installed: string[] = [];
+  for (const raw of lines) {
+    const l = raw.trim();
+    if (/^flag(?:\s|$)/.test(l) || l === 'modules-missing') return true;
+    const m = /^vmlinuz\s+(\S+)$/.exec(l);
+    if (m) installed.push(m[1]!);
+  }
+  if (!runningKernel || !installed.includes(runningKernel)) return false;
+  const newest = newestKernel(installed, runningKernel);
+  return newest !== undefined && compareVersions(newest, runningKernel) > 0;
+}
+
+// ── hostinfo (host helper, protocol v2)
+
+export interface HostInfo {
+  runningKernel?: string;
+  /** the kernel the next boot uses: a proxmox-boot-tool pin if set, else the newest installed Proxmox kernel */
+  newestKernel?: string;
+  /** epoch ms: when the apt package lists were last refreshed (pkgupdates file time when the lists are unknown) */
+  updatesCheckedAt?: number;
+}
+
+const KERNEL_PACKAGE_RE = /^(?:proxmox|pve)-kernel-(\d+\.\d+\.\d+-\d+-pve)(?:-signed)?$/;
+
+/** Output of `pve1-dash-helper hostinfo`: "running …", "vmlinuz …", "package …", "pin …", "stamp-lists …"… */
+export function parseHostInfo(text: string): HostInfo | null {
+  let running: string | undefined;
+  let pin: string | undefined;
+  let nextPin: string | undefined;
+  let lists: number | undefined;
+  let pkgupdates: number | undefined;
+  const installed = new Set<string>();
+  let recognized = false;
+  for (const raw of splitLines(text)) {
+    const m = /^(running|vmlinuz|package|pin|next-boot-pin|stamp-lists|stamp-pkgupdates)\s+([A-Za-z0-9._+~-]{1,100})\s*$/.exec(raw.trim());
+    if (!m) continue;
+    recognized = true;
+    const v = m[2]!;
+    switch (m[1]) {
+      case 'running':
+        running = v;
+        break;
+      case 'vmlinuz':
+        installed.add(v);
+        break;
+      case 'package': {
+        const k = KERNEL_PACKAGE_RE.exec(v);
+        if (k) installed.add(k[1]!);
+        break;
+      }
+      case 'pin':
+        pin = v;
+        break;
+      case 'next-boot-pin':
+        nextPin = v;
+        break;
+      case 'stamp-lists':
+        if (plausibleEpoch(Number(v))) lists = Math.max(lists ?? 0, Number(v));
+        break;
+      case 'stamp-pkgupdates':
+        if (plausibleEpoch(Number(v))) pkgupdates = Number(v);
+        break;
+    }
+  }
+  if (!recognized) return null;
+  const out: HostInfo = {};
+  if (running) out.runningKernel = running;
+  if (running) installed.add(running);
+  const next = nextPin ?? pin ?? newestKernel(installed, running);
+  if (next) out.newestKernel = next;
+  const stamp = lists ?? pkgupdates;
+  if (stamp !== undefined) out.updatesCheckedAt = stamp * 1000;
+  return out;
 }
 
 // ───────────────────────────────────────────────────────────── sensors -j

@@ -35,6 +35,33 @@
   font-weight: 500;
   color: var(--label-2);
 }
+/* pending updates / reboot required (from the guest's inventory) */
+.gx-flags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.gx-flag {
+  --_tone: var(--status-info);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--r-capsule);
+  font-size: var(--fs-caption);
+  line-height: 1;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: color-mix(in oklab, var(--_tone) 76%, var(--label));
+  background: color-mix(in srgb, var(--_tone) 13%, transparent);
+}
+.gx-flag[data-tone='warn'] {
+  --_tone: var(--status-warn);
+}
 
 /* search field (iOS filled capsule) */
 .gx-search {
@@ -337,6 +364,119 @@
 .gx-card-tags {
   margin-top: -6px;
 }
+/* a filesystem other than "/" above the warning threshold (e.g. a datastore mount) */
+.gx-card-diskwarn {
+  --_tone: var(--status-warn);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  margin-top: -2px;
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  font-weight: 500;
+  color: color-mix(in oklab, var(--_tone) 72%, var(--label));
+}
+.gx-card-diskwarn[data-tone='crit'] {
+  --_tone: var(--status-crit);
+}
+.gx-card-diskwarn > svg {
+  flex: none;
+}
+
+/* ───────────────────────────── iPhone list */
+.gx-lrow .ui-row-icon {
+  border-radius: 0;
+}
+.gx-lrow-off .gx-lrow-os {
+  filter: grayscale(0.85);
+  opacity: 0.7;
+}
+.gx-lrow-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-weight: 600;
+}
+.gx-lrow-title > .t-truncate {
+  min-width: 0;
+}
+.gx-lrow-ip {
+  font-size: 12px;
+}
+.gx-lrow-usage {
+  display: grid;
+  grid-template-columns: auto 52px;
+  align-items: center;
+  gap: 2px 6px;
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+}
+.gx-lrow-k {
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--label-3);
+  font-size: 10px;
+}
+.gx-lrow-v {
+  justify-self: end;
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--label);
+}
+.gx-lrow-bar {
+  width: 52px;
+}
+.gx-lrow-dot {
+  flex: none;
+}
+.gx-list .ui-row[data-has-icon] + .ui-row[data-has-icon]::before {
+  --_line-left: calc(var(--s4) + 30px + var(--s3));
+}
+
+/* ───────────────────────────── scope chip (?updates=1 from the Overview) */
+.gx-scope {
+  display: flex;
+  margin-bottom: var(--s3);
+}
+.gx-scope-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 4px 0 10px;
+  border-radius: var(--r-capsule);
+  font-size: var(--fs-subhead);
+  font-weight: 600;
+  color: color-mix(in oklab, var(--accent) 86%, var(--label));
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.gx-scope-clear {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  color: var(--bg-elevated);
+  background: color-mix(in srgb, var(--accent) 70%, transparent);
+}
+.gx-scope-clear:hover {
+  background: var(--accent);
+}
+
+/* disk column: usage coloured by the storage thresholds */
+.gx-tdisk[data-tone='warn'] {
+  color: color-mix(in oklab, var(--status-warn) 72%, var(--label));
+  font-weight: 600;
+}
+.gx-tdisk[data-tone='crit'] {
+  color: color-mix(in oklab, var(--status-crit) 76%, var(--label));
+  font-weight: 600;
+}
 
 /* ───────────────────────────── table */
 .gx-table {
@@ -359,6 +499,7 @@
 }
 .gx-tname-sub {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 5px;
   font-size: var(--fs-footnote);

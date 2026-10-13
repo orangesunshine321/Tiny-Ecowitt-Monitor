@@ -1,7 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import type { CollectorStatus, DockerContainer, Guest, GuestInventory } from '../shared/types';
+import type { CollectorStatus, DockerContainer, DockerPort, Guest, GuestInventory, ServiceEntry } from '../shared/types';
 import { buildSampleSnapshot } from '../web/src/dev/sampleSnapshot';
 import {
+  containerService,
+  countsAsGuestDisk,
+  fullestOtherDisk,
+  guestDisks,
+  guestServices,
+  guestUpdates,
+  needsUpdates,
+  portLink,
+  proxiedAppUrl,
+  rootDisk,
+  updatesSummary,
+  updatesText,
+  urlHostPort,
   containerIconSlug,
   containerPortUrl,
   containerStatusText,
@@ -198,13 +211,27 @@ describe('inventoryView', () => {
     const stale = inv({ vmid: 110, os: { prettyName: 'Debian' } });
     expect(inventoryView(byId(110), stale, opts)).toEqual({ kind: 'stopped', stale });
   });
-  it('explains HAOS with guest-exec disabled', () => {
+  it('explains HAOS with guest-exec disabled as a fact, not a failure (inspectable: unsupported)', () => {
     const v = inventoryView(byId(100), sample.inventory['100'], opts);
-    expect(v.kind).toBe('error');
-    if (v.kind !== 'error') return;
+    expect(v.kind).toBe('unsupported');
+    if (v.kind !== 'unsupported') return;
     expect(v.reason.title).toMatch(/guest agent/);
     expect(v.reason.message).toMatch(/Home Assistant OS/);
-    expect(v.reason.raw).toMatch(/guest-exec has been disabled/);
+    expect(v.reason.raw).toMatch(/guest-exec/);
+    // an older server (no `inspectable`) still gets the error explanation
+    const { inspectable: _i, ...legacy } = sample.inventory['100']!;
+    const old = inventoryView(byId(100), legacy, opts);
+    expect(old.kind).toBe('error');
+  });
+  it('words agent-less VMs the server marks unsupported, and keeps Windows its own view', () => {
+    const noAgent = { ...byId(108), config: { ...byId(108).config!, agentEnabled: false } };
+    const v = inventoryView(noAgent, inv({ ok: false, inspectable: 'unsupported', error: 'no agent, no ssh target' }), opts);
+    expect(v).toMatchObject({ kind: 'unsupported', reason: { title: 'This VM can’t be looked into', raw: 'no agent, no ssh target' } });
+    const win = { ...byId(106), status: 'running' as const };
+    expect(inventoryView(win, inv({ ok: false, inspectable: 'unsupported', error: 'windows' }), opts).kind).toBe('windows');
+    // data collected earlier still wins over the "can't look inside" notice
+    const withData = inventoryView(byId(102), { ...sample.inventory['102']!, inspectable: 'unsupported' }, opts);
+    expect(withData.kind).toBe('ok');
   });
   it('explains Windows, agent-less VMs and pending collection', () => {
     const win = { ...byId(106), status: 'running' as const };
@@ -241,5 +268,120 @@ describe('inventoryView', () => {
     expect(hasInventoryData(inv())).toBe(false);
     expect(hasInventoryData(inv({ kernel: '6.8' }))).toBe(true);
     expect(directSshSnippet(108, '10.10.20.60')).toBe('inventory:\n  guests:\n    - vmid: 108\n      address: 10.10.20.60');
+  });
+});
+
+const GB = 1024 ** 3;
+
+describe('disks inside guests (D20)', () => {
+  const fs = (mount: string, usedGb: number, sizeGb: number, extra: Record<string, unknown> = {}) => ({
+    mount,
+    fstype: 'ext4',
+    size: sizeGb * GB,
+    used: usedGb * GB,
+    avail: (sizeGb - usedGb) * GB,
+    ...extra,
+  });
+
+  it('counts only the guest’s own disks', () => {
+    expect(countsAsGuestDisk({ mount: '/', fstype: 'ext4', size: 32 * GB })).toBe(true);
+    expect(countsAsGuestDisk({ mount: '/mnt/media', fstype: 'nfs4', size: 4000 * GB })).toBe(false);
+    expect(countsAsGuestDisk({ mount: '/media/cd', fstype: 'iso9660', size: 4 * GB })).toBe(false);
+    expect(countsAsGuestDisk({ mount: '/var/lib/docker/overlay2/x', fstype: 'xfs', size: 32 * GB })).toBe(false);
+    expect(countsAsGuestDisk({ mount: '/boot/efi', fstype: 'vfat', size: 0.5 * 1024 ** 2 })).toBe(false);
+  });
+
+  it('lists "/" first, uses df’s used+avail, and falls back to Proxmox’s container rootfs', () => {
+    const vm = { type: 'qemu' as const, disk: 0, maxdisk: 64 * GB };
+    expect(guestDisks(vm)).toEqual([]);
+    // reserved blocks: size 100, used 80, avail 15 → 80 / 95
+    const disks = guestDisks(vm, { filesystems: [fs('/srv', 10, 100), { ...fs('/', 80, 100), avail: 15 * GB }, fs('/srv', 1, 2)] });
+    expect(disks.map((d) => d.mount)).toEqual(['/', '/srv']);
+    expect(disks[0]!.fraction).toBeCloseTo(80 / 95, 5);
+    expect(disks[0]!.source).toBe('guest');
+    const ct = { type: 'lxc' as const, disk: 7 * GB, maxdisk: 8 * GB };
+    expect(rootDisk(ct)).toMatchObject({ mount: '/', source: 'proxmox', fraction: 7 / 8 });
+    expect(rootDisk(ct, { filesystems: [fs('/', 2, 8)] })).toMatchObject({ source: 'guest', fraction: 0.25 });
+    expect(fullestOtherDisk(disks, 0.85)).toBeUndefined();
+    expect(fullestOtherDisk(guestDisks(vm, { filesystems: [fs('/', 99, 100), fs('/a', 90, 100), fs('/b', 95, 100)] }), 0.85)?.mount).toBe('/b');
+  });
+});
+
+describe('updates inside guests (D50)', () => {
+  it('reads counts and the reboot flag, unknown when neither is reported', () => {
+    expect(guestUpdates(undefined)).toBeUndefined();
+    expect(guestUpdates({})).toBeUndefined();
+    expect(guestUpdates({ updates: { count: 0, manager: 'apt' } })).toEqual({
+      count: 0,
+      security: undefined,
+      manager: 'apt',
+      checkedAt: undefined,
+      rebootRequired: false,
+    });
+    expect(guestUpdates({ rebootRequired: true })).toMatchObject({ count: undefined, rebootRequired: true });
+    expect(guestUpdates({ updates: { count: Number.NaN, manager: 'apk' } })).toBeUndefined();
+    expect(needsUpdates(guestUpdates({ updates: { count: 0, manager: 'apt' } }))).toBe(false);
+    expect(needsUpdates(guestUpdates({ rebootRequired: true }))).toBe(true);
+  });
+
+  it('words and sums them (templates never count)', () => {
+    expect(updatesText(guestUpdates({ updates: { count: 12, security: 4, manager: 'apt' } }))).toBe('12 updates · 4 security');
+    expect(updatesText(guestUpdates({ updates: { count: 1, manager: 'apk' } }))).toBe('1 update');
+    expect(updatesText(guestUpdates({ rebootRequired: true }))).toBe('');
+    const inventory: Record<string, GuestInventory> = {
+      '1': inv({ updates: { count: 12, security: 4, manager: 'apt' }, rebootRequired: true }),
+      '2': inv({ updates: { count: 0, manager: 'apt' }, rebootRequired: true }),
+      '3': inv({ updates: { count: 5, manager: 'apk' } }),
+      '9': inv({ updates: { count: 50, manager: 'apt' }, rebootRequired: true }),
+    };
+    const guests = [1, 2, 3, 4].map((vmid) => ({ vmid, template: false })).concat({ vmid: 9, template: true });
+    expect(updatesSummary(guests, inventory)).toEqual({ guests: 2, reboot: 2, packages: 17, security: 4 });
+  });
+});
+
+describe('apps of a guest (D48)', () => {
+  const svc = (over: Partial<ServiceEntry>): ServiceEntry => ({
+    id: 'x',
+    name: 'X',
+    url: 'http://10.10.10.20:80',
+    source: 'config',
+    check: { type: 'http' },
+    status: 'up',
+    history: [],
+    alert: true,
+    ...over,
+  });
+
+  it('lists the guest’s openable launcher entries, problems first', () => {
+    const list = [
+      svc({ id: 'a', name: 'Zigbee2MQTT', vmid: 101 }),
+      svc({ id: 'b', name: 'Grafana', vmid: 101, status: 'down' }),
+      svc({ id: 'c', name: 'Alpha', vmid: 101 }),
+      svc({ id: 'd', name: 'Other', vmid: 102 }),
+      svc({ id: 'e', name: 'MQTT', vmid: 101, url: 'tcp://10.10.10.20:1883' }),
+    ];
+    expect(guestServices(list, 101).map((s) => s.id)).toEqual(['b', 'c', 'a']);
+  });
+
+  it('finds a container’s launcher entry by discovery id or by a configured name', () => {
+    const list = [svc({ id: 'docker-102-jellyfin', name: 'Media', vmid: 102, source: 'docker' }), svc({ id: 'cfg', name: 'Paperless NGX', vmid: 102 })];
+    expect(containerService(list, 102, { name: 'jellyfin' })?.id).toBe('docker-102-jellyfin');
+    expect(containerService(list, 102, { name: 'paperless-webserver-1', composeService: 'paperless-ngx' })?.id).toBe('cfg');
+    expect(containerService(list, 103, { name: 'paperless-ngx' })).toBeUndefined();
+  });
+
+  it('links container ports through the launcher URL only when it points at that port on the guest', () => {
+    expect(urlHostPort('https://[fd00::5]/x')).toEqual({ host: 'fd00::5', port: 443 });
+    expect(urlHostPort('http://Media.LAN:8096/web')).toEqual({ host: 'media.lan', port: 8096 });
+    expect(urlHostPort('ftp://x')).toBeUndefined();
+    expect(urlHostPort('not a url')).toBeUndefined();
+    const port: DockerPort = { containerPort: 8096, hostPort: 8096, proto: 'tcp' };
+    const addrs = ['10.10.10.20'];
+    expect(portLink(port, '10.10.10.20', 'http://10.10.10.20:8096/web/index.html', addrs)).toBe('http://10.10.10.20:8096/web/index.html');
+    expect(portLink(port, '10.10.10.20', 'http://10.10.10.20:9000/', addrs)).toBe('http://10.10.10.20:8096');
+    expect(portLink(port, '10.10.10.20', 'https://jellyfin.bgreen.cloud/', addrs)).toBe('http://10.10.10.20:8096');
+    expect(portLink({ ...port, proto: 'udp' }, '10.10.10.20', undefined, addrs)).toBeUndefined();
+    expect(proxiedAppUrl('https://jellyfin.bgreen.cloud/', addrs)).toBe('https://jellyfin.bgreen.cloud/');
+    expect(proxiedAppUrl('http://10.10.10.20:8096/', addrs)).toBeUndefined();
   });
 });

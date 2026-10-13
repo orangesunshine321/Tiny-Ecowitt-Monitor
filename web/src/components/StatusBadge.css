@@ -15,6 +15,26 @@
   color: color-mix(in oklab, var(--_tone) 64%, var(--label));
   background: color-mix(in srgb, var(--_tone) 14%, transparent);
   vertical-align: middle;
+  min-width: 0;
+  max-width: 100%;
+}
+/*
+ * Always icon + label: the glyph never shrinks (flex: none, and max-width: none undoes the base `svg { max-width: 100% }`,
+ * which otherwise drops it from the badge's min-content width so a tight table cell squeezes it to 0 px). When the
+ * badge really is narrower than its text, the label ends in an ellipsis instead. The label's line box is only 1em tall
+ * (line-height: 1), so it gets 0.2em of block padding, cancelled by a negative margin, to keep overflow: hidden off
+ * the descenders and accents without changing the badge's size.
+ */
+.ui-badge > svg {
+  flex: none;
+  max-width: none;
+}
+.ui-badge-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-block: 0.2em;
+  margin-block: -0.2em;
 }
 .ui-badge[data-size='small'] {
   height: 18px;
@@ -72,7 +92,9 @@
   inset: 0;
   border-radius: 50%;
   background: var(--_tone);
-  animation: ui-pulse 2s var(--ease-out) infinite;
+  /* a few beats when the status (re)appears, then still: an always-on animation keeps the compositor (and the glass
+     above it) busy for as long as the dashboard is open. Re-mount the dot (key) to pulse again on a state change. */
+  animation: ui-pulse 2s var(--ease-out) 3 both;
 }
 @keyframes ui-pulse {
   0% {

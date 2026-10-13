@@ -153,3 +153,17 @@
     transition: opacity 150ms ease;
   }
 }
+/* Matrix quick toggle (in the App group, between Search and Live): lit while Matrix is on */
+.shell-matrix-toggle[aria-pressed='true'] {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: var(--matrix-bloom, none);
+}
+.shell-matrix-toggle[aria-pressed='true'] svg {
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--accent) 70%, transparent));
+}
+@media (prefers-contrast: more) {
+  .shell-matrix-toggle[aria-pressed='true'] svg {
+    filter: none;
+  }
+}

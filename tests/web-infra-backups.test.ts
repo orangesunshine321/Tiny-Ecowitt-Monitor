@@ -4,6 +4,7 @@ import {
   ageDays,
   backupTasks,
   coverageBadges,
+  lastBackupFailed,
   coverageTone,
   formatLabel,
   groupByGuest,
@@ -85,7 +86,7 @@ describe('coverage', () => {
   ];
 
   it('summarizes covered, stale, never and not-in-job guests', () => {
-    expect(summarizeCoverage(list)).toEqual({ total: 4, covered: 1, stale: 2, never: 1, notInAnyJob: 1 });
+    expect(summarizeCoverage(list)).toEqual({ total: 4, covered: 1, stale: 2, never: 1, notInAnyJob: 1, failed: 0 });
     expect(coverageTone(summarizeCoverage(list))).toBe('crit');
     expect(coverageTone(summarizeCoverage([list[0]!, list[1]!]))).toBe('warn');
     expect(coverageTone(summarizeCoverage([list[0]!]))).toBe('ok');
@@ -104,6 +105,20 @@ describe('coverage', () => {
 
   it('orders problems first, then by vmid', () => {
     expect(sortCoverage(list).map((c) => c.vmid)).toEqual([108, 110, 106, 100]);
+  });
+
+  it('flags a failed latest backup per guest (D26) until a newer good one exists', () => {
+    const failed = cov({ vmid: 102, name: 'docker-media', lastBackup: NOW - 2 * DAY, lastFailure: { time: NOW - DAY, upid: 'UPID:x', message: 'job errors' } });
+    const recovered = cov({ vmid: 103, name: 'apps', lastBackup: NOW - 1000, lastFailure: { time: NOW - DAY, upid: 'UPID:y' } });
+    expect(lastBackupFailed(failed)).toBe(true);
+    expect(lastBackupFailed(recovered)).toBe(false);
+    expect(lastBackupFailed(cov({ lastFailure: { time: NOW, upid: 'UPID:z' } }))).toBe(true);
+    // the older good backup is still recent, but a "Recent" pill next to the failure would contradict it
+    expect(coverageBadges(failed)).toEqual([{ tone: 'crit', label: 'Last backup failed' }]);
+    const s = summarizeCoverage([list[0]!, failed, recovered]);
+    expect(s.failed).toBe(1);
+    expect(coverageTone(s)).toBe('crit');
+    expect(sortCoverage([...list, failed]).map((c) => c.vmid)[0]).toBe(102);
   });
 
   it('derives the age when the server did not send one', () => {

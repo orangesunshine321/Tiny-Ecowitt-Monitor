@@ -3,8 +3,6 @@
 #
 #   bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/uninstall.sh)"
 #
-# (Before the pve1-dash branch is merged, use .../claude/homelab-dashboard-pve1-dizt16/deploy/uninstall.sh as the URL.)
-#
 # Removes what install.sh added to the host for ONE dashboard container (the one tagged pve1-dash on this node, or
 # --ctid N). Other pve1-dash dashboards in the cluster keep working:
 #   - that container's line in /root/.ssh/authorized_keys (= /etc/pve/priv/authorized_keys, shared by the cluster),

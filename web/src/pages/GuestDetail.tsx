@@ -1,18 +1,20 @@
 /**
  * Guest detail (DESIGN §5): header with OS icon, status, tags and actions (Open Console / Open in Proxmox deep links,
- * Refresh inventory), then segments: Overview · Apps · Hardware · Backups · Notes (?tab=… in the URL).
+ * Refresh inventory), the apps this guest serves (launcher links), then segments: Overview · Apps · Hardware ·
+ * Backups · Notes (?tab=… in the URL).
  *
  * Read-only by design: the console opens Proxmox's own console page in a new tab (Proxmox asks for its own login).
  */
-import { ExternalLink, MonitorX, RefreshCw, SquareTerminal } from 'lucide-react';
-import { useCallback, useState } from 'react';
+import { ArrowUpRight, ExternalLink, MonitorX, RefreshCw, SquareTerminal } from 'lucide-react';
+import { useCallback, useMemo, useState } from 'react';
+import type { Snapshot } from '../../../shared/types';
 import { ApiRequestError, errorText, refreshInventory } from '../api';
-import { Button, EmptyState, OsIcon, PageHeader, SegmentedControl, StatusBadge, toneOf, type SegmentOption } from '../components';
+import { AppIcon, Button, EmptyState, OsIcon, PageHeader, SegmentedControl, StatusBadge, StatusDot, toneOf, type SegmentOption } from '../components';
 import { useBreakpoint } from '../hooks';
 import { setQuery, useParams, useQueryParam } from '../router';
-import { pushToast, useGuest, useInventory, useMeta } from '../store';
+import { pushToast, useGuest, useInventory, useMeta, useSnapshot } from '../store';
 import { TagList, TypeBadge } from './guests/GuestBits';
-import { typeName } from './guests/guestUtil';
+import { guestServices, typeName } from './guests/guestUtil';
 import { AppsTab } from './guests/detail/AppsTab';
 import { BackupsTab } from './guests/detail/BackupsTab';
 import { HardwareTab } from './guests/detail/HardwareTab';
@@ -31,6 +33,44 @@ const TABS: SegmentOption<Tab>[] = [
 ];
 
 const asTab = (v: string | null): Tab => (TABS.some((t) => t.value === v) ? (v as Tab) : 'overview');
+
+const selectServices = (s: Snapshot) => s.services;
+
+/** The launcher entries of this guest as one row of "open" chips: status dot, name, external link. */
+function OpenApps({ vmid }: { vmid: number }) {
+  const services = useSnapshot(selectServices, Object.is);
+  const list = useMemo(() => guestServices(services, vmid), [services, vmid]);
+  if (!list.length) return null;
+  return (
+    <nav className="gd-open" aria-label="Apps on this guest">
+      <span className="gd-open-label" aria-hidden="true">
+        Open
+      </span>
+      <ul className="gd-open-list">
+        {list.map((svc) => {
+          const st = toneOf.service(svc.status);
+          return (
+            <li key={svc.id}>
+              <a
+                className="gd-open-chip"
+                href={svc.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={`${svc.name} (${st.label}) · ${svc.url}`}
+                aria-label={`Open ${svc.name}, ${st.label} (new tab)`}
+              >
+                <AppIcon icon={svc.icon} name={svc.name} size={20} />
+                <span className="gd-open-name">{svc.name}</span>
+                <StatusDot tone={st.tone} />
+                <ArrowUpRight size={12} strokeWidth={2.6} aria-hidden="true" className="gd-open-arrow" />
+              </a>
+            </li>
+          );
+        })}
+      </ul>
+    </nav>
+  );
+}
 
 export default function GuestDetailPage() {
   const { vmid: raw } = useParams();
@@ -166,6 +206,8 @@ export default function GuestDetailPage() {
             </Button>
           </div>
         </div>
+
+        <OpenApps vmid={guest.vmid} />
 
         <div className="gd-tabs">
           <SegmentedControl

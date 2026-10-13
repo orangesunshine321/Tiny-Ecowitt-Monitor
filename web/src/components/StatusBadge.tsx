@@ -29,7 +29,7 @@ export function StatusBadge({ tone, label, icon, spinning, size = 'regular', var
   return (
     <span className={`ui-badge ${className ?? ''}`} data-tone={tone} data-size={size} data-variant={variant} title={title}>
       {icon === undefined ? <StatusIcon tone={tone} size={size === 'small' ? 11 : 13} spinning={spinning} /> : icon}
-      <span>{label}</span>
+      <span className="ui-badge-label">{label}</span>
     </span>
   );
 }

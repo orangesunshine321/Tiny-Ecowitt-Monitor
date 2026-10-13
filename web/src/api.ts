@@ -8,7 +8,9 @@
  *   built without a server. That code is behind `import.meta.env.DEV` and never ships in production.
  */
 import type {
+  AlertEvent,
   ApiError,
+  DiagnosticsReport,
   PushDevice,
   PushPrefs,
   RrdPoint,
@@ -139,14 +141,27 @@ export function getSnapshot(opts?: RequestOptions): Promise<Snapshot> {
   return request('GET', '/api/snapshot', undefined, opts);
 }
 
-/** GET /api/rrd/node?timeframe= — node RRD history (gaps = omitted fields). */
-export function getNodeRrd(timeframe: Timeframe, opts?: RequestOptions): Promise<RrdPoint[]> {
-  return request('GET', `/api/rrd/node?timeframe=${encodeURIComponent(timeframe)}`, undefined, opts);
+export interface RrdOptions extends RequestOptions {
+  /**
+   * Downsample to at most this many points (server clamps to 50..2000; min/max-preserving, gaps kept). Omitted → the
+   * server default (400). Older servers ignore it and return the native resolution.
+   */
+  maxPoints?: number;
 }
 
-/** GET /api/rrd/guest/:vmid?timeframe= — guest RRD history. */
-export function getGuestRrd(vmid: number, timeframe: Timeframe, opts?: RequestOptions): Promise<RrdPoint[]> {
-  return request('GET', `/api/rrd/guest/${encodeURIComponent(String(vmid))}?timeframe=${encodeURIComponent(timeframe)}`, undefined, opts);
+function rrdQuery(timeframe: Timeframe, maxPoints?: number): string {
+  const mp = maxPoints && Number.isFinite(maxPoints) ? `&maxPoints=${Math.round(Math.min(2000, Math.max(50, maxPoints)))}` : '';
+  return `?timeframe=${encodeURIComponent(timeframe)}${mp}`;
+}
+
+/** GET /api/rrd/node?timeframe=&maxPoints= — node RRD history (gaps = omitted fields). */
+export function getNodeRrd(timeframe: Timeframe, opts?: RrdOptions): Promise<RrdPoint[]> {
+  return request('GET', `/api/rrd/node${rrdQuery(timeframe, opts?.maxPoints)}`, undefined, opts);
+}
+
+/** GET /api/rrd/guest/:vmid?timeframe=&maxPoints= — guest RRD history. */
+export function getGuestRrd(vmid: number, timeframe: Timeframe, opts?: RrdOptions): Promise<RrdPoint[]> {
+  return request('GET', `/api/rrd/guest/${encodeURIComponent(String(vmid))}${rrdQuery(timeframe, opts?.maxPoints)}`, undefined, opts);
 }
 
 /** GET /api/tasks/:upid/log — task log lines (limit 1..5000). */
@@ -214,6 +229,25 @@ export function postPushTest(id: string, opts?: RequestOptions): Promise<{ ok: b
   return request('POST', '/api/push/test', { id }, { timeoutMs: 30_000, ...opts });
 }
 
+/** GET /api/diagnostics — the read-only self-test (same checks as `pve1-dash-doctor`). Can take a few seconds. */
+export function getDiagnostics(opts?: RequestOptions & { fresh?: boolean }): Promise<DiagnosticsReport> {
+  const { fresh, ...rest } = opts ?? {};
+  return request('GET', fresh ? '/api/diagnostics?fresh=1' : '/api/diagnostics', undefined, { timeoutMs: 30_000, ...rest });
+}
+
+/**
+ * POST /api/alerts/:id/ack — acknowledge (snooze) an active alert: no pushes and no badge for `hours`, or until it
+ * resolves when omitted. The updated alerts section also arrives over SSE.
+ */
+export function postAlertAck(id: string, hours?: number, opts?: RequestOptions): Promise<AlertEvent> {
+  return request('POST', `/api/alerts/${encodeURIComponent(id)}/ack`, hours === undefined ? {} : { hours }, opts);
+}
+
+/** POST /api/alerts/:id/unack — undo an acknowledgement. */
+export function postAlertUnack(id: string, opts?: RequestOptions): Promise<AlertEvent> {
+  return request('POST', `/api/alerts/${encodeURIComponent(id)}/unack`, {}, opts);
+}
+
 /** The guest setup one-liner shown in Settings (`curl -fsSL <publicUrl>/setup/guest.sh | sh`). */
 export function guestSetupCommand(publicUrl?: string): string {
   const base = (publicUrl || (typeof location !== 'undefined' ? location.origin : '')).replace(/\/+$/, '');
@@ -235,4 +269,7 @@ export const api = {
   postPushPrefs,
   postPushUnsubscribe,
   postPushTest,
+  getDiagnostics,
+  postAlertAck,
+  postAlertUnack,
 };

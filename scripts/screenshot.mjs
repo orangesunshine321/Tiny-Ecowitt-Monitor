@@ -27,14 +27,28 @@
  *                               ".ui-sheet" to check where a sheet ended up (repeatable, comma-separated)
  *   --reduce-motion             emulate prefers-reduced-motion: reduce
  *   --reduce-transparency       set the in-app Reduce Transparency preference
+ *   --theme <pref>              store the in-app theme preference before the page loads: system | light | dark | matrix
+ *                               (files are then named <device>-<scheme>-<theme>-<path>.png; the OS scheme still comes
+ *                               from --dark/--light/--both)
  *   --contrast                  emulate prefers-contrast: more
+ *   --boot                      SHOW the Matrix boot sequence (with --theme matrix): the once-per-session flag is
+ *                               cleared before every load, the wait is counted from when the sequence appears
+ *                               (default 600 ms, i.e. mid-sequence; it lasts ~2.2 s), animations are captured as they
+ *                               are, and files get a "-boot" suffix. Without --boot the flag is pre-set, so the boot
+ *                               sequence never covers a screenshot.
  *
- * Example:
+ * Examples:
  *   node scripts/screenshot.mjs http://127.0.0.1:5201 /,/guests shots --sample --both
+ *   node scripts/screenshot.mjs http://127.0.0.1:5201 /,/settings shots mac,iphone --theme matrix
+ *   node scripts/screenshot.mjs http://127.0.0.1:5201 / shots mac,iphone --theme matrix --boot --wait 700
  */
 import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { chromium } from '@playwright/test';
+
+const THEMES = ['system', 'light', 'dark', 'matrix'];
+/** sessionStorage flag of the Matrix boot sequence (web/src/shell/bootScript.ts BOOT_SESSION_KEY). */
+const BOOT_SESSION_KEY = 'pve1-dash.boot';
 
 const DEVICES = {
   mac: { viewport: { width: 1512, height: 945 }, deviceScaleFactor: 2 },
@@ -64,13 +78,14 @@ const DEVICES = {
 
 function usage(msg) {
   if (msg) console.error(`error: ${msg}\n`);
-  console.error('usage: node scripts/screenshot.mjs <baseUrl> <paths> <outDir> [devices] [--dark|--light|--both] [--wait ms] [--sample] [--full] [--scroll px] [--key combo] [--click sel] [--hover sel] [--rect sel] [--reduce-motion] [--reduce-transparency] [--contrast]');
+  console.error('usage: node scripts/screenshot.mjs <baseUrl> <paths> <outDir> [devices] [--dark|--light|--both] [--wait ms] [--sample] [--full] [--scroll px] [--key combo] [--click sel] [--hover sel] [--rect sel] [--reduce-motion] [--reduce-transparency] [--theme system|light|dark|matrix] [--contrast] [--boot]');
   process.exit(2);
 }
 
 function parseArgs(argv) {
   const pos = [];
-  const opt = { schemes: ['light'], wait: 1200, sample: false, full: false, scroll: 0, keys: [], clicks: [], hovers: [], rects: [], reduceMotion: false, reduceTransparency: false, contrast: false };
+  const opt = { schemes: ['light'], wait: 1200, sample: false, full: false, scroll: 0, keys: [], clicks: [], hovers: [], rects: [], reduceMotion: false, reduceTransparency: false, contrast: false, theme: undefined, boot: false };
+  let waitGiven = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => {
@@ -81,7 +96,10 @@ function parseArgs(argv) {
     if (a === '--dark') opt.schemes = ['dark'];
     else if (a === '--light') opt.schemes = ['light'];
     else if (a === '--both') opt.schemes = ['light', 'dark'];
-    else if (a === '--wait') opt.wait = Number(next());
+    else if (a === '--wait') {
+      opt.wait = Number(next());
+      waitGiven = true;
+    }
     else if (a === '--sample') opt.sample = true;
     else if (a === '--full') opt.full = true;
     else if (a === '--scroll') opt.scroll = Number(next());
@@ -92,6 +110,11 @@ function parseArgs(argv) {
     else if (a === '--reduce-motion') opt.reduceMotion = true;
     else if (a === '--reduce-transparency') opt.reduceTransparency = true;
     else if (a === '--contrast') opt.contrast = true;
+    else if (a === '--boot') opt.boot = true;
+    else if (a === '--theme') {
+      opt.theme = next();
+      if (!THEMES.includes(opt.theme)) usage(`--theme must be one of ${THEMES.join(', ')}`);
+    }
     else if (a === '--devices') pos[3] = next();
     else if (a === '-h' || a === '--help') usage();
     else if (a.startsWith('--')) usage(`unknown option ${a}`);
@@ -101,6 +124,8 @@ function parseArgs(argv) {
   const devices = (pos[3] ?? 'mac,ipad,iphone').split(',').map((d) => d.trim()).filter(Boolean);
   for (const d of devices) if (!DEVICES[d]) usage(`unknown device "${d}" (use mac, ipad, ipad-portrait, iphone)`);
   if (!Number.isFinite(opt.wait) || opt.wait < 0) usage('--wait must be a number of ms');
+  if (opt.boot && !waitGiven) opt.wait = 600;
+  if (opt.boot && opt.theme !== 'matrix') console.error('note: the boot sequence only plays in Matrix (add --theme matrix)');
   return { base: pos[0].replace(/\/+$/, ''), paths: pos[1].split(',').map((p) => p.trim()).filter(Boolean), out: resolve(pos[2]), devices, ...opt };
 }
 
@@ -110,10 +135,12 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   mkdirSync(args.out, { recursive: true });
   // GL compositing via SwiftShader: headless Chromium's default software compositor skips backdrop-filter blurs of
-  // larger radii on small elements, which would misrepresent the glass materials in screenshots.
+  // larger radii on small elements, which would misrepresent the glass materials in screenshots. Not for --boot:
+  // SwiftShader manages ~0.5 fps at Mac size (a capture takes seconds, longer than the whole sequence), and the opaque
+  // boot overlay hides the glass anyway.
   const browser = await chromium.launch({
     executablePath: '/opt/pw-browsers/chromium',
-    args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
+    args: args.boot ? [] : ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
   });
   const written = [];
   try {
@@ -126,15 +153,34 @@ async function main() {
           contrast: args.contrast ? 'more' : 'no-preference',
           serviceWorkers: 'block',
         });
-        if (args.reduceTransparency) {
-          await context.addInitScript(() => {
+        // in-app preferences, written before any page script runs (public/boot.js reads them before first paint)
+        const prefs = {
+          ...(args.reduceTransparency ? { reduceTransparency: true } : {}),
+          ...(args.theme ? { theme: args.theme } : {}),
+        };
+        if (Object.keys(prefs).length) {
+          await context.addInitScript((stored) => {
             try {
-              localStorage.setItem('pve1-dash.prefs', JSON.stringify({ reduceTransparency: true }));
+              const current = JSON.parse(localStorage.getItem('pve1-dash.prefs') || '{}') || {};
+              localStorage.setItem('pve1-dash.prefs', JSON.stringify({ ...current, ...stored }));
             } catch {
               /* ignore */
             }
-          });
+          }, prefs);
         }
+        // the Matrix boot sequence plays once per session: pre-set its flag so it never covers a screenshot, or clear it
+        // before every load with --boot
+        await context.addInitScript(
+          ({ key, show }) => {
+            try {
+              if (show) sessionStorage.removeItem(key);
+              else sessionStorage.setItem(key, '1');
+            } catch {
+              /* ignore */
+            }
+          },
+          { key: BOOT_SESSION_KEY, show: args.boot },
+        );
         const page = await context.newPage();
         page.on('pageerror', (err) => console.error(`[${device}/${scheme}] page error: ${err.message}`));
         page.on('console', (msg) => {
@@ -146,12 +192,20 @@ async function main() {
           if (args.sample && !/[?&]sample\b/.test(path)) path += path.includes('?') ? '&sample' : '?sample';
           const url = `${args.base}${path}`;
           try {
-            await page.goto(url, { waitUntil: 'load', timeout: 30_000 });
+            // --boot: the sequence runs on its own clock from when it mounts, so wait for it rather than for `load`
+            // (which slow subresources can delay past its end)
+            await page.goto(url, { waitUntil: args.boot ? 'commit' : 'load', timeout: 30_000 });
+            if (args.boot) {
+              await page
+                .waitForSelector('.boot', { timeout: 15_000 })
+                .catch(() => console.error(`[${device}/${scheme}] ${p}: no boot sequence (needs --theme matrix, no --reduce-motion, not /board)`));
+            }
           } catch (err) {
             console.error(`[${device}/${scheme}] could not load ${url}: ${err.message}`);
             continue;
           }
-          await page.evaluate(() => document.fonts?.ready).catch(() => undefined);
+          // (with --boot the fonts wait is skipped: the sequence is on a clock)
+          if (!args.boot) await page.evaluate(() => document.fonts?.ready).catch(() => undefined);
           await page.waitForTimeout(args.wait);
           if (args.scroll) {
             await page.evaluate((y) => window.scrollTo(0, y), args.scroll);
@@ -196,10 +250,11 @@ async function main() {
               .catch(() => null);
             console.log(`[${device}/${scheme}] ${p} ${sel}: ${info ? JSON.stringify(info) : 'not found'}`);
           }
-          const file = join(args.out, `${device}-${scheme}-${slug(p)}.png`);
+          const file = join(args.out, `${device}-${scheme}${args.theme ? `-${args.theme}` : ''}-${slug(p)}${args.boot ? '-boot' : ''}.png`);
           // finite CSS transitions/animations are fast-forwarded to their end state (headless GL compositing can stall
           // them mid-flight); infinite ones (wallpaper drift, pulses) are cancelled
-          await page.screenshot({ path: file, fullPage: args.full, animations: 'disabled' });
+          // (--boot: captured as is, so the boot sequence's dissolve isn't fast-forwarded away)
+          await page.screenshot({ path: file, fullPage: args.full, animations: args.boot ? 'allow' : 'disabled' });
           written.push(file);
           console.log(file);
         }

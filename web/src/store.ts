@@ -4,12 +4,18 @@
  * State: the latest Snapshot, the connection state, the server clock offset and the toast queue.
  *
  * Live updates (GET /api/stream, docs/research/web-pwa-push.md §8):
- *  - events: `snapshot` (full state, sent on connect), `patch` (one section), `alert` (→ toast), `ping` (every 15 s);
+ *  - events: `snapshot` (full state, sent on connect), `patch` (one section), `history` (new live-history samples),
+ *    `alert` (→ toast), `ping` (every 15 s);
+ *  - `patch` events for node/guests/services carry EMPTY history rings (the server doesn't resend them): the client
+ *    keeps its rings, re-attached by node, vmid or service id, and appends the samples of `history` events (trimmed to
+ *    120 for node/guests and 90 for services). Older servers that still send full rings in patches keep working;
  *  - EventSource gives up for good on a non-200 response (e.g. a proxy 502 while the server restarts), so this client
  *    closes on every error and reconnects itself with exponential backoff (1 s → 30 s, with jitter);
  *  - it also reconnects when the tab becomes visible again after a while, when the browser comes back online and on
  *    a bfcache restore;
- *  - no ping/event for 45 s marks the stream "stale" and forces a reconnect (iOS can leave zombie streams).
+ *  - no ping/event for 45 s marks the stream "stale" and reconnects once (iOS can leave zombie streams); a connection
+ *    that doesn't open within 10 s counts as failed ("offline") and retries with the backoff, so a hung upstream behind
+ *    a proxy that holds connections open ends up "offline" instead of reconnecting every few seconds.
  *
  * Reading state in components — always through the selector hooks, never by holding the whole snapshot:
  *   const cpu = useSnapshot((s) => s.node.cpu);
@@ -84,7 +90,16 @@ const WATCHDOG_MS = 5_000;
 const RESUME_RECONNECT_MS = 10_000;
 /** if the stream delivers no snapshot this fast (buffering proxy?), fetch one over REST */
 const SNAPSHOT_FALLBACK_MS = 8_000;
+/** a connection attempt that hasn't opened (or delivered anything) by then is treated as failed */
+const OPEN_TIMEOUT_MS = 10_000;
+/** server clock offset changes smaller than this are jitter (latency), not skew: ignore them (fewer re-renders) */
+const OFFSET_JITTER_MS = 1_000;
 const MAX_TOASTS = 4;
+
+/** live history ring lengths (match the server) */
+export const NODE_RING = 120;
+export const GUEST_RING = 120;
+export const SERVICE_RING = 90;
 
 /** A valid, empty snapshot so selectors never have to handle null. */
 export const EMPTY_SNAPSHOT: Snapshot = Object.freeze<Snapshot>({
@@ -152,15 +167,145 @@ export function setSnapshot(snapshot: Snapshot): void {
   set({ snapshot, serverTimeOffset: offsetFrom(snapshot.meta.serverTime, get().serverTimeOffset) });
 }
 
-/** Apply one `patch` event: replaces a top-level section. Ignored until the first snapshot arrived. */
+/**
+ * Apply one `patch` event: replaces a top-level section. Ignored until the first snapshot arrived.
+ * node/guests/services keep their live-history rings (the server sends them empty in patches), and unchanged guests
+ * and services keep their object identity so memoised rows don't re-render.
+ */
 export function applyPatch<K extends SnapshotKey>(key: K, value: Snapshot[K]): void {
   const cur = get().snapshot;
   if (!cur) return;
-  set({ snapshot: { ...cur, [key]: value } });
+  set({ snapshot: { ...cur, [key]: mergeSection(cur, key, value) } });
+}
+
+/** The patched section with history rings re-attached and structural sharing (exported for tests). */
+export function mergeSection<K extends SnapshotKey>(cur: Snapshot, key: K, value: Snapshot[K]): Snapshot[K] {
+  if (key === 'node') {
+    const next = value as NodeSummary;
+    if (!next || !isEmptyRing(next.history) || cur.node.node !== next.node) return value;
+    return { ...next, history: cur.node.history } as Snapshot[K];
+  }
+  if (key === 'guests') {
+    const prev = new Map(cur.guests.map((g) => [g.vmid, g]));
+    return reuseUnchanged(
+      (value as Guest[]).map((g) => {
+        const old = prev.get(g.vmid);
+        return old && isEmptyRing(g.history) ? { ...g, history: old.history } : g;
+      }),
+      cur.guests,
+      prev,
+      (g) => g.vmid,
+    ) as Snapshot[K];
+  }
+  if (key === 'services') {
+    const prev = new Map(cur.services.map((x) => [x.id, x]));
+    return reuseUnchanged(
+      (value as ServiceEntry[]).map((x) => {
+        const old = prev.get(x.id);
+        return old && (!x.history || x.history.length === 0) ? { ...x, history: old.history } : x;
+      }),
+      cur.services,
+      prev,
+      (x) => x.id,
+    ) as Snapshot[K];
+  }
+  return value;
+}
+
+function isEmptyRing(h: { t: number[] } | undefined): boolean {
+  return !h || !Array.isArray(h.t) || h.t.length === 0;
+}
+
+/**
+ * Keep the previous object for items whose content didn't change (history compared by identity, the rest by value),
+ * and the previous array when nothing changed at all.
+ */
+function reuseUnchanged<T extends { history: unknown }, Id>(next: T[], prevArr: T[], prev: Map<Id, T>, id: (x: T) => Id): T[] {
+  let changed = next.length !== prevArr.length;
+  const out = next.map((item) => {
+    const old = prev.get(id(item));
+    if (old && old.history === item.history && sameExceptHistory(old, item)) return old;
+    changed = true;
+    return item;
+  });
+  return !changed && prevArr.every((x, i) => x === out[i]) ? prevArr : out;
+}
+
+function sameExceptHistory<T extends { history: unknown }>(a: T, b: T): boolean {
+  return JSON.stringify({ ...a, history: 0 }) === JSON.stringify({ ...b, history: 0 });
+}
+
+type HistoryEvent = Extract<StreamEvent, { type: 'history' }>;
+
+/**
+ * Apply one `history` event: append the new samples to the node, guest and service rings and trim them (node/guests
+ * 120, services 90). Samples not newer than a ring's last one are skipped (a snapshot may already contain them).
+ * Samples for a guest or service the client doesn't know yet are dropped: it starts with an empty ring.
+ */
+export function applyHistory(ev: Omit<HistoryEvent, 'type'>): void {
+  const cur = get().snapshot;
+  if (!cur) return;
+  const next = appendHistory(cur, ev);
+  if (next !== cur) set({ snapshot: next });
+}
+
+/** Pure part of applyHistory (exported for tests). */
+export function appendHistory(cur: Snapshot, ev: Omit<HistoryEvent, 'type'>): Snapshot {
+  let out = cur;
+  if (ev.node && ev.node.t?.length) {
+    const ring = appendColumns(cur.node.history, ev.node, NODE_RING);
+    if (ring !== cur.node.history) out = { ...out, node: { ...cur.node, history: ring } };
+  }
+  if (ev.guests) {
+    let touched = false;
+    const guests = cur.guests.map((g) => {
+      const add = ev.guests![String(g.vmid)];
+      if (!add || !add.t?.length) return g;
+      const ring = appendColumns(g.history, add, GUEST_RING);
+      if (ring === g.history) return g;
+      touched = true;
+      return { ...g, history: ring };
+    });
+    if (touched) out = { ...out, guests };
+  }
+  if (ev.services) {
+    let touched = false;
+    const services = cur.services.map((x) => {
+      const add = ev.services![x.id];
+      if (!add || !add.length) return x;
+      const last = x.history.length ? x.history[x.history.length - 1]!.t : -Infinity;
+      const fresh = add.filter((p) => p.t > last);
+      if (!fresh.length) return x;
+      touched = true;
+      return { ...x, history: [...x.history, ...fresh].slice(-SERVICE_RING) };
+    });
+    if (touched) out = { ...out, services };
+  }
+  return out;
+}
+
+/** Append column-wise samples ({t[], cpu[], …}) newer than the ring's last `t`, keeping at most `max`. */
+function appendColumns<R extends { t: number[] }>(ring: R, add: Partial<Record<keyof R, number[]>> & { t: number[] }, max: number): R {
+  const last = ring.t.length ? ring.t[ring.t.length - 1]! : -Infinity;
+  const take: number[] = [];
+  for (let i = 0; i < add.t.length; i++) if (add.t[i]! > last) take.push(i);
+  if (!take.length) return ring;
+  const out = {} as Record<string, number[]>;
+  for (const k of Object.keys(ring) as Array<keyof R & string>) {
+    const col = (ring[k] as unknown as number[]) ?? [];
+    const src = add[k] as number[] | undefined;
+    // a column the server didn't send repeats its last value, so all columns stay aligned with `t`
+    const fill = col.length ? col[col.length - 1]! : 0;
+    const extra = take.map((i) => (src && typeof src[i] === 'number' ? src[i]! : fill));
+    out[k] = [...col, ...extra].slice(-max);
+  }
+  return out as unknown as R;
 }
 
 function offsetFrom(serverTime: number | undefined, fallback: number): number {
-  return typeof serverTime === 'number' && serverTime > 0 ? serverTime - Date.now() : fallback;
+  if (typeof serverTime !== 'number' || serverTime <= 0) return fallback;
+  const next = serverTime - Date.now();
+  return Math.abs(next - fallback) > OFFSET_JITTER_MS ? next : fallback;
 }
 
 // ───────────────────────────────────────────────────────────── toasts
@@ -205,10 +350,14 @@ let es: EventSource | null = null;
 let backoff = BACKOFF_MIN_MS;
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
 let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
+let openTimer: ReturnType<typeof setTimeout> | undefined;
 let watchdogTimer: ReturnType<typeof setInterval> | undefined;
 let hiddenAt = 0;
 let running = false;
+/** the watchdog already reconnected for the current stale episode (reset by the next event) */
+let staleReconnected = false;
 let detachGlobal: (() => void) | undefined;
+let detachSample: (() => void) | undefined;
 
 function parse(e: Event): StreamEvent | null {
   try {
@@ -221,6 +370,8 @@ function parse(e: Event): StreamEvent | null {
 function markEvent(): void {
   const now = Date.now();
   const s = get();
+  staleReconnected = false;
+  clearTimeout(openTimer);
   const patch: Partial<AppState> = { lastEventAt: now, lastError: null };
   if (s.snapshot && s.connection !== 'live') patch.connection = 'live';
   set(patch);
@@ -228,6 +379,7 @@ function markEvent(): void {
 
 function closeStream(): void {
   clearTimeout(fallbackTimer);
+  clearTimeout(openTimer);
   if (es) {
     es.close();
     es = null;
@@ -260,13 +412,27 @@ function connect(): void {
   es = source;
   const mine = () => es === source;
 
+  // A hung upstream behind a proxy that holds the connection open never answers: give up on this attempt after a
+  // while and retry with the backoff (instead of sitting in "connecting"/"stale" forever).
+  openTimer = setTimeout(() => {
+    if (!mine()) return;
+    closeStream();
+    set({ connection: 'offline', lastError: 'The dashboard stopped answering' });
+    scheduleReconnect();
+  }, OPEN_TIMEOUT_MS);
+  source.onopen = () => {
+    if (mine()) clearTimeout(openTimer);
+  };
+
   source.addEventListener('snapshot', (e) => {
     if (!mine()) return;
     const ev = parse(e);
     if (ev?.type !== 'snapshot') return;
     clearTimeout(fallbackTimer);
+    clearTimeout(openTimer);
     setSnapshot(ev.data);
     backoff = BACKOFF_MIN_MS;
+    staleReconnected = false;
     set({ connection: 'live', lastEventAt: Date.now(), lastPingAt: Date.now(), lastError: null });
   });
   source.addEventListener('patch', (e) => {
@@ -274,6 +440,13 @@ function connect(): void {
     const ev = parse(e);
     if (ev?.type !== 'patch') return;
     applyPatch(ev.key, ev.value);
+    markEvent();
+  });
+  source.addEventListener('history', (e) => {
+    if (!mine()) return;
+    const ev = parse(e);
+    if (ev?.type !== 'history') return;
+    applyHistory(ev);
     markEvent();
   });
   source.addEventListener('alert', (e) => {
@@ -316,13 +489,20 @@ export function reconnectNow(): void {
   connect();
 }
 
+/**
+ * No event for STALE_AFTER_MS while "live" → "stale", and ONE reconnect for that stale episode (keeping the backoff).
+ * If that attempt doesn't open, its open timeout marks the connection "offline" and the backoff takes over.
+ */
 function watchdog(): void {
   const s = get();
   if (s.sample || !running) return;
   const last = s.lastEventAt ?? 0;
   if ((s.connection === 'live' || s.connection === 'stale') && Date.now() - last > STALE_AFTER_MS) {
-    set({ connection: 'stale' });
-    if (document.visibilityState === 'visible') reconnectNow();
+    if (s.connection !== 'stale') set({ connection: 'stale' });
+    if (!staleReconnected && document.visibilityState === 'visible') {
+      staleReconnected = true;
+      connect();
+    }
   }
 }
 
@@ -371,13 +551,21 @@ export function startLiveUpdates(): () => void {
   running = true;
 
   if (import.meta.env.DEV && SAMPLE_MODE) {
-    void import('./dev/sampleSnapshot').then(({ buildSampleSnapshot, tickSample }) => {
+    void import('./dev/sampleSnapshot').then(({ buildSampleSnapshot, sampleTick, onSampleEvent }) => {
       if (!running) return;
       setSnapshot(buildSampleSnapshot());
       set({ connection: 'live', lastEventAt: Date.now(), lastPingAt: Date.now() });
+      // the same event path as the SSE stream: patches with empty rings + history samples
+      const dispatch = (ev: StreamEvent) => {
+        if (ev.type === 'patch') applyPatch(ev.key, ev.value);
+        else if (ev.type === 'history') applyHistory(ev);
+        else if (ev.type === 'snapshot') setSnapshot(ev.data);
+        else if (ev.type === 'alert') toastForAlert(ev.data);
+      };
+      detachSample = onSampleEvent(dispatch);
       watchdogTimer = setInterval(() => {
         const cur = get().snapshot;
-        if (cur && document.visibilityState === 'visible') setSnapshot(tickSample(cur));
+        if (cur && document.visibilityState === 'visible') for (const ev of sampleTick(cur)) dispatch(ev);
         set({ lastEventAt: Date.now(), lastPingAt: Date.now(), connection: 'live' });
       }, 5_000);
     });
@@ -397,6 +585,8 @@ export function stopLiveUpdates(): void {
   closeStream();
   detachGlobal?.();
   detachGlobal = undefined;
+  detachSample?.();
+  detachSample = undefined;
 }
 
 // ───────────────────────────────────────────────────────────── selector hooks
@@ -494,10 +684,24 @@ export function useService(id: string | undefined): ServiceEntry | undefined {
 /** Active and recent alerts. */
 export const useAlerts = (): Snapshot['alerts'] => useSnapshot((s) => s.alerts, Object.is);
 
-/** Sidebar/tab bar badge counts. */
+/**
+ * Is this alert acknowledged (snoozed) right now? Snoozed alerts don't push and don't count in badges; an
+ * acknowledgement without `until` lasts until the alert resolves. `now` is the server clock (serverNow()).
+ */
+export function isAcknowledged(a: Pick<AlertEvent, 'acknowledged'>, now: number = serverNow()): boolean {
+  const ack = a.acknowledged;
+  return !!ack && (ack.until === undefined || ack.until > now);
+}
+
+/** Active alerts that are not snoozed (what badges count). */
+export function unacknowledged<T extends Pick<AlertEvent, 'acknowledged'>>(active: readonly T[], now: number = serverNow()): T[] {
+  return active.filter((a) => !isAcknowledged(a, now));
+}
+
+/** Sidebar/tab bar badge counts. Snoozed (acknowledged) alerts are not counted. */
 export function useNavBadges(): { runningGuests: number; servicesDown: number; activeAlerts: number; alertSeverity: 'critical' | 'warning' | 'info' | null } {
   return useSnapshot((s) => {
-    const active = s.alerts.active;
+    const active = unacknowledged(s.alerts.active);
     const sev = active.some((a) => a.severity === 'critical')
       ? 'critical'
       : active.some((a) => a.severity === 'warning')

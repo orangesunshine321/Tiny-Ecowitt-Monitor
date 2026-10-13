@@ -331,3 +331,360 @@
 .set-wrap .ui-list-body > .set-item:has(.set-inline-icon) + .ui-row[data-has-icon]::before {
   left: calc(var(--s4) + 30px + var(--s3));
 }
+
+/* ───────────────────────────── theme picker (ThemePicker.tsx): four mini windows, like macOS Appearance */
+.set-theme {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 14px;
+}
+.set-theme-head {
+  min-height: 0;
+}
+.set-theme-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px clamp(8px, 2.4vw, 14px);
+  padding-left: calc(30px + var(--s3) - 2px);
+}
+@container set (max-width: 420px) {
+  .set-theme-grid {
+    padding-left: 0;
+  }
+}
+.set-theme-opt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 6px 0 2px;
+  border-radius: 12px;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.set-theme-opt:focus-visible {
+  outline: none;
+}
+.set-theme-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  color: var(--label-2);
+}
+.set-theme-opt[aria-checked='true'] .set-theme-label {
+  color: var(--label);
+  font-weight: 600;
+}
+
+/* the thumbnail: selection = an accent ring with a gap (macOS); keyboard focus adds the soft focus halo */
+.set-theme-mock {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 10.5;
+  border-radius: 9px;
+  overflow: hidden;
+  isolation: isolate;
+  box-shadow:
+    0 0 0 0.5px var(--hairline),
+    0 2px 6px -2px rgb(0 0 0 / 0.25);
+  transition:
+    transform 360ms var(--spring-bouncy),
+    outline-color 160ms ease;
+  outline: 2.5px solid transparent;
+  outline-offset: 2.5px;
+}
+.set-theme-opt:active .set-theme-mock {
+  transform: scale(0.96);
+}
+.set-theme-opt[aria-checked='true'] .set-theme-mock {
+  outline-color: var(--accent);
+}
+.set-theme-opt:focus-visible .set-theme-mock {
+  box-shadow:
+    0 0 0 0.5px var(--hairline),
+    0 0 0 8px var(--focus-ring-color);
+}
+.set-theme-opt:not([aria-checked='true']):hover .set-theme-mock {
+  outline-color: var(--fill-1);
+}
+
+/* a mini window: wallpaper, a floating sidebar, a content card. Each look carries its theme's own colours. */
+.set-mock-win {
+  --m-wp: #e4eaf4;
+  --m-blob-1: #3d9bff;
+  --m-blob-2: #d277f0;
+  --m-sidebar: rgb(255 255 255 / 0.62);
+  --m-rim: rgb(255 255 255 / 0.9);
+  --m-card: rgb(255 255 255 / 0.9);
+  --m-card-rim: rgb(0 0 0 / 0.06);
+  --m-ink: rgb(30 30 34 / 0.78);
+  --m-ink-2: rgb(60 60 67 / 0.22);
+  --m-accent: #0088ff;
+  --m-glow: none;
+  position: absolute;
+  inset: 0;
+  display: block;
+  background:
+    radial-gradient(70% 90% at 8% 0%, color-mix(in srgb, var(--m-blob-1) 70%, transparent), transparent 70%),
+    radial-gradient(70% 90% at 100% 100%, color-mix(in srgb, var(--m-blob-2) 60%, transparent), transparent 70%),
+    var(--m-wp);
+}
+.set-mock-win[data-look='dark'] {
+  --m-wp: #070a14;
+  --m-blob-1: #0a5fd6;
+  --m-blob-2: #7b22b8;
+  --m-sidebar: rgb(44 44 50 / 0.72);
+  --m-rim: rgb(255 255 255 / 0.18);
+  --m-card: rgb(30 30 34 / 0.9);
+  --m-card-rim: rgb(255 255 255 / 0.08);
+  --m-ink: rgb(255 255 255 / 0.86);
+  --m-ink-2: rgb(235 235 245 / 0.22);
+  --m-accent: #0091ff;
+}
+.set-mock-win[data-look='matrix'] {
+  --m-wp: #020604;
+  --m-blob-1: #00431d;
+  --m-blob-2: #013a22;
+  --m-sidebar: rgb(7 20 12 / 0.82);
+  --m-rim: rgb(0 255 102 / 0.4);
+  --m-card: rgb(5 14 9 / 0.92);
+  --m-card-rim: rgb(0 255 102 / 0.22);
+  --m-ink: #e3ffec;
+  --m-ink-2: rgb(170 238 195 / 0.28);
+  --m-accent: #00ff66;
+  --m-glow: 0 0 4px rgb(0 255 102 / 0.7);
+}
+/* System: the light window with the dark one over its lower-right half (a diagonal split, like macOS Auto) */
+.set-mock-split {
+  position: absolute;
+  inset: 0;
+  clip-path: polygon(62% 0, 100% 0, 100% 100%, 38% 100%);
+}
+
+.set-mock-sidebar,
+.set-mock-card {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  border-radius: 5px;
+}
+.set-mock-sidebar {
+  top: 9%;
+  bottom: 9%;
+  left: 6%;
+  width: 24%;
+  gap: 9%;
+  padding: 9% 5%;
+  background: var(--m-sidebar);
+  box-shadow:
+    inset 0 0.5px 0 var(--m-rim),
+    0 0 0 0.5px var(--m-card-rim),
+    0 2px 5px -2px rgb(0 0 0 / 0.3);
+}
+.set-mock-sidebar i {
+  display: block;
+  height: 7%;
+  min-height: 2px;
+  border-radius: 2px;
+  background: var(--m-ink-2);
+}
+.set-mock-sidebar i[data-sel] {
+  height: 11%;
+  min-height: 3px;
+  background: color-mix(in srgb, var(--m-accent) 75%, transparent);
+  box-shadow: var(--m-glow);
+}
+.set-mock-card {
+  top: 15%;
+  right: 6%;
+  bottom: 15%;
+  left: 36%;
+  gap: 8%;
+  padding: 7% 8%;
+  background: var(--m-card);
+  box-shadow:
+    0 0 0 0.5px var(--m-card-rim),
+    0 3px 8px -3px rgb(0 0 0 / 0.3);
+}
+.set-mock-card i {
+  display: block;
+  height: 6%;
+  min-height: 2px;
+  width: 78%;
+  border-radius: 2px;
+  background: var(--m-ink-2);
+}
+.set-mock-card i[data-short] {
+  width: 52%;
+}
+.set-mock-card .set-mock-title {
+  width: 46%;
+  height: 9%;
+  min-height: 3px;
+  background: var(--m-ink);
+}
+.set-mock-ring {
+  display: block;
+  width: 28%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: conic-gradient(var(--m-accent) 0 64%, var(--m-ink-2) 64% 100%);
+  -webkit-mask: radial-gradient(closest-side, transparent 58%, #000 61%);
+  mask: radial-gradient(closest-side, transparent 58%, #000 61%);
+}
+.set-mock-win[data-look='matrix'] .set-mock-ring {
+  filter: drop-shadow(0 0 2px rgb(0 255 102 / 0.8));
+}
+
+/* the Matrix preview's static rain: dotted glyph columns fading up to a bright head */
+.set-mock-rain {
+  position: absolute;
+  inset: 0;
+}
+.set-mock-rain i {
+  position: absolute;
+  left: var(--_x);
+  top: var(--_y);
+  width: 2px;
+  height: var(--_l);
+  opacity: var(--_o);
+  background: repeating-linear-gradient(to bottom, #00ff66 0 2px, transparent 2px 4px);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 85%);
+  mask-image: linear-gradient(to bottom, transparent, #000 85%);
+}
+.set-mock-rain i::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  height: 2px;
+  background: #d9ffe6;
+  box-shadow: 0 0 3px #00ff66;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .set-theme-mock {
+    transition: none;
+  }
+  .set-theme-opt:active .set-theme-mock {
+    transform: none;
+  }
+}
+@media (prefers-contrast: more) {
+  .set-theme-mock {
+    box-shadow: 0 0 0 1px var(--label-2);
+  }
+}
+
+/* ───────────────────────────── diagnostics (#diagnostics) */
+.set-callout-p {
+  margin: 0 0 8px;
+}
+.set-callout-p:last-child {
+  margin-bottom: 0;
+}
+.set-callout-body .ui-btn {
+  margin-top: 4px;
+}
+.set-time-input {
+  max-width: 9em;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.set-diag-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px var(--s3);
+}
+.set-diag-summary-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.set-diag-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+}
+.set-diag-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.set-diag-head[data-tone='crit'] {
+  color: var(--status-crit);
+}
+.set-diag-head[data-tone='warn'] {
+  color: var(--status-warn);
+}
+.set-diag-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+}
+.set-diag-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+}
+.set-diag-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.set-diag-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  font-weight: 500;
+}
+.set-diag-detail {
+  font-size: var(--fs-subhead);
+  line-height: var(--lh-subhead);
+  color: var(--label-2);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.set-diag-row[data-status='ok'] .set-diag-title,
+.set-diag-row[data-status='skip'] .set-diag-title {
+  font-weight: 400;
+}
+.set-diag-row[data-status='skip'] .set-diag-detail {
+  color: var(--label-3);
+}
+.set-diag-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+}
+.set-diag-fold .ui-row-subtitle {
+  white-space: normal;
+}
+:root[data-theme='matrix'] .set-diag-detail,
+:root[data-theme='matrix'] .set-diag-summary .set-inline-sub {
+  font-family: var(--font-mono);
+}
+.set-diag-fixtext {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--card-inset);
+  font-size: var(--fs-subhead);
+  line-height: var(--lh-subhead);
+  color: var(--label);
+}

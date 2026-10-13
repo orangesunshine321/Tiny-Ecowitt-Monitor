@@ -6,7 +6,10 @@
  *    (index.html) when the network fails, times out, or answers 5xx (a reverse proxy's 502/503/504 while pve1-dash
  *    restarts would otherwise strand a Home Screen app, which has no reload button, on the proxy's error page; the
  *    cached shell shows the app's own "can't reach the dashboard" state and reconnects by itself).
- *  - /assets/* (Vite's hashed, immutable bundles), /icons/*, the manifest, boot.js: stale-while-revalidate.
+ *  - /assets/* (Vite's content-hashed, immutable bundles): cache-first. A hit never needs revalidating (a new build
+ *    has new file names), so a launch doesn't re-download and re-store every chunk it uses. Misses (e.g. a page chunk
+ *    the app preloads while idle) are fetched once and kept in the newest build's cache, so every page works offline.
+ *  - /icons/*, the manifest, boot.js (stable URLs): stale-while-revalidate.
  *  - /api/*, /setup/*, /healthz and anything cross-origin: never intercepted, never cached (SSE included).
  *
  * Releases
@@ -125,7 +128,11 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(networkFirstShell(event));
     return;
   }
-  if (url.pathname.startsWith('/assets/') || url.pathname.startsWith('/icons/') || url.pathname === '/manifest.webmanifest' || url.pathname === '/boot.js') {
+  if (url.pathname.startsWith('/assets/')) {
+    event.respondWith(cacheFirst(req));
+    return;
+  }
+  if (url.pathname.startsWith('/icons/') || url.pathname === '/manifest.webmanifest' || url.pathname === '/boot.js') {
     event.respondWith(staleWhileRevalidate(event, req));
   }
 });
@@ -174,18 +181,34 @@ async function respondWithShellFallback(network) {
   );
 }
 
+/** Store a fresh copy in the newest build's cache (best effort). */
+function keep(req, res) {
+  const copy = res.clone();
+  return currentAssetCache()
+    .then((name) => caches.open(name))
+    .then((cache) => cache.put(req, copy))
+    .catch(() => undefined);
+}
+
+async function cacheFirst(req) {
+  // hashed asset URLs are unique, so any build's cache may answer
+  const cached = await caches.match(req);
+  if (cached) return cached;
+  try {
+    const res = await fetch(req);
+    if (res.ok) await keep(req, res);
+    return res;
+  } catch {
+    return new Response('', { status: 504 });
+  }
+}
+
 async function staleWhileRevalidate(event, req) {
-  // hashed asset URLs are unique, so any cache may answer; fresh copies go into the newest build's cache
+  // the cached copy now, a fresh one into the newest build's cache for next time
   const cached = await caches.match(req);
   const network = fetch(req)
     .then((res) => {
-      if (res.ok) {
-        const copy = res.clone();
-        currentAssetCache()
-          .then((name) => caches.open(name))
-          .then((cache) => cache.put(req, copy))
-          .catch(() => undefined);
-      }
+      if (res.ok) void keep(req, res);
       return res;
     })
     .catch(() => undefined);

@@ -197,6 +197,33 @@ describe('sw.js navigations', () => {
     await flush();
     expect(sw.stores.get('pve1-assets-index-A')!.entries.has('http://dash.lan/assets/Storage-X.js')).toBe(true);
   });
+
+  it('serves hashed assets cache-first: a hit never goes to the network', async () => {
+    const seen: string[] = [];
+    const sw = loadWorker('http://dash.lan/sw.js', async (req) => {
+      const url = typeof req === 'string' ? req : (req as { url: string }).url;
+      seen.push(url);
+      return url.endsWith('.js') ? new Response(`fresh ${url}`) : html(shellOf('index-A'));
+    });
+    await sw.dispatch('install').settle();
+    const asset = { url: 'http://dash.lan/assets/Storage-X.js', method: 'GET', mode: 'cors' };
+    await (await sw.dispatch('fetch', { request: asset }).response()!).text();
+    await flush();
+    seen.length = 0;
+    const again = sw.dispatch('fetch', { request: asset });
+    expect(await (await again.response()!).text()).toBe('fresh http://dash.lan/assets/Storage-X.js');
+    await flush();
+    expect(seen).toEqual([]);
+    expect(again.waits).toEqual([]);
+  });
+
+  it('answers 504 for an uncached asset while offline', async () => {
+    const sw = loadWorker('http://dash.lan/sw.js', async () => {
+      throw new TypeError('offline');
+    });
+    const res = await sw.dispatch('fetch', { request: { url: 'http://dash.lan/assets/Never-Seen.js', method: 'GET', mode: 'cors' } }).response()!;
+    expect(res.status).toBe(504);
+  });
 });
 
 describe('build ids', () => {

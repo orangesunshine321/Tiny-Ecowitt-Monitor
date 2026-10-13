@@ -10,17 +10,26 @@
  *   --colgap       gap between columns      --rowgap  gap between rows
  *   --lampw        lamp slot                --rw      REMARKS word-flap width
  *   --flap-step --flap-final --flap-fade    durations
+ *
+ * Colours are variables on .fb (amber/white board by default); the Matrix theme re-lights the same board in green
+ * phosphor at the end of this file. Only colours and shadows change per theme, never sizes, fonts or animations.
  */
 
 .fb {
-  --flap-ink: #f3efe6;
-  --flap-amber: #ffb000;
-  --flap-amber-glow: rgb(255 176 0 / 0.42);
+  --flap-ink: #f3efe6; /* DESTINATION */
+  --flap-remark-ink: var(--flap-ink); /* REMARKS */
+  --flap-accent: #ffb000; /* TIME, PLATFORM, MS and the flip clock */
+  --flap-accent-glow: rgb(255 176 0 / 0.42);
+  --flap-label: rgb(255 176 0 / 0.72); /* column captions */
   --flap-top-1: #2b2b2e;
   --flap-top-2: #242427;
   --flap-bot-1: #1e1e21;
   --flap-bot-2: #19191b;
   --flap-gap: #070708;
+  --flap-edge: rgb(255 255 255 / 0.035); /* lit lower edge of each module */
+  --flap-hinge: #000;
+  --flap-hinge-hi: rgb(255 255 255 / 0.05);
+  --flap-pin: #3a3a3e; /* axle pins */
   --flap-font: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Helvetica Neue', Inter, Roboto, Arial, sans-serif;
   --flap-persp: calc(var(--ch, 40px) * 7);
   color-scheme: dark;
@@ -53,7 +62,7 @@
   border-radius: max(2px, calc(var(--ch, 40px) * 0.085));
   background: var(--flap-gap);
   box-shadow:
-    0 1px 0 rgb(255 255 255 / 0.035),
+    0 1px 0 var(--flap-edge),
     0 calc(var(--ch, 40px) * 0.05) calc(var(--ch, 40px) * 0.08) rgb(0 0 0 / 0.55);
   color: var(--flap-ink);
   font-family: var(--flap-font);
@@ -69,6 +78,7 @@
 }
 .flap[data-variant='word'] {
   width: var(--rw, 200px);
+  color: var(--flap-remark-ink);
   /* tracking and padding: keep in sync with REMARK_TRACKING_EM / REMARK_PADDING_EM (boardModel.ts) */
   font-size: var(--rfont, calc(var(--ch, 40px) * 0.4));
   font-weight: 650;
@@ -83,6 +93,11 @@
   right: 0;
   height: calc(50% - 0.5px);
   overflow: hidden;
+}
+/* backface culling only on the flaps that are rotating right now: on every half at rest it made Chrome composite
+   ~1,700 layers for a full board (D63). The static halves never rotate. */
+.flap[data-anim] .flap-fall,
+.flap[data-anim] .flap-rise {
   -webkit-backface-visibility: hidden;
   backface-visibility: hidden;
 }
@@ -139,8 +154,8 @@
   right: 0;
   top: calc(50% - 0.5px);
   height: 1px;
-  background: #000;
-  box-shadow: 0 1px 0 rgb(255 255 255 / 0.05);
+  background: var(--flap-hinge);
+  box-shadow: 0 1px 0 var(--flap-hinge-hi);
   pointer-events: none;
 }
 .flap::before {
@@ -152,8 +167,8 @@
   right: max(1px, calc(var(--cw, 28px) * 0.06));
   height: max(2px, calc(var(--ch, 40px) * 0.07));
   background:
-    radial-gradient(circle at 50% 50%, #3a3a3e 0 45%, transparent 55%) left / max(2px, calc(var(--ch, 40px) * 0.07)) 100% no-repeat,
-    radial-gradient(circle at 50% 50%, #3a3a3e 0 45%, transparent 55%) right / max(2px, calc(var(--ch, 40px) * 0.07)) 100% no-repeat;
+    radial-gradient(circle at 50% 50%, var(--flap-pin) 0 45%, transparent 55%) left / max(2px, calc(var(--ch, 40px) * 0.07)) 100% no-repeat,
+    radial-gradient(circle at 50% 50%, var(--flap-pin) 0 45%, transparent 55%) right / max(2px, calc(var(--ch, 40px) * 0.07)) 100% no-repeat;
   pointer-events: none;
 }
 
@@ -367,14 +382,30 @@
 }
 
 /* ───────────────────────────── columns */
+/* the accent columns (amber; phosphor green in Matrix). The class keeps its historical name. */
 .fb-amber .flap {
-  color: var(--flap-amber);
-  text-shadow: 0 0 calc(var(--ch, 40px) * 0.14) var(--flap-amber-glow);
+  color: var(--flap-accent);
+  text-shadow: 0 0 calc(var(--ch, 40px) * 0.14) var(--flap-accent-glow);
 }
 .fb-remark {
   display: inline-flex;
   align-items: center;
   flex: none;
+}
+/* lamp colours: also read by the fullscreen board's legend (boardPage.css) */
+.fb,
+.bd-legend {
+  --lamp-unlit: #2c2c2f;
+  --lamp-green: #3ddc68;
+  --lamp-green-glow: rgb(61 220 104 / 0.65);
+  --lamp-amber: #ffb000;
+  --lamp-amber-glow: rgb(255 176 0 / 0.65);
+  --lamp-red: #ff453a;
+  --lamp-red-glow: rgb(255 69 58 / 0.7);
+  --lamp-blink: #e8e2d0;
+  --lamp-blink-glow: rgb(232 226 208 / 0.45);
+  --lamp-gray: #6b6b70;
+  --lamp-bezel: #0c0c0d;
 }
 .fb-lamp {
   display: grid;
@@ -388,38 +419,38 @@
   width: max(6px, calc(var(--ch, 40px) * 0.3));
   height: max(6px, calc(var(--ch, 40px) * 0.3));
   border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, rgb(255 255 255 / 0.18), transparent 45%), #2c2c2f;
+  background: radial-gradient(circle at 35% 30%, rgb(255 255 255 / 0.18), transparent 45%), var(--lamp-unlit);
   box-shadow:
     inset 0 0 0 1px rgb(0 0 0 / 0.6),
-    0 0 0 max(1px, calc(var(--ch, 40px) * 0.03)) #0c0c0d;
+    0 0 0 max(1px, calc(var(--ch, 40px) * 0.03)) var(--lamp-bezel);
 }
 .fb-lamp[data-lamp='green']::before {
-  --_c: #3ddc68;
-  --_g: rgb(61 220 104 / 0.65);
+  --_c: var(--lamp-green);
+  --_g: var(--lamp-green-glow);
 }
 .fb-lamp[data-lamp='amber']::before {
-  --_c: #ffb000;
-  --_g: rgb(255 176 0 / 0.65);
+  --_c: var(--lamp-amber);
+  --_g: var(--lamp-amber-glow);
 }
 .fb-lamp[data-lamp='red']::before {
-  --_c: #ff453a;
-  --_g: rgb(255 69 58 / 0.7);
+  --_c: var(--lamp-red);
+  --_g: var(--lamp-red-glow);
 }
 .fb-lamp[data-lamp='blink']::before {
-  --_c: #e8e2d0;
-  --_g: rgb(232 226 208 / 0.45);
+  --_c: var(--lamp-blink);
+  --_g: var(--lamp-blink-glow);
   animation: fb-lamp-blink 1.4s ease-in-out infinite;
 }
 .fb-lamp:is([data-lamp='green'], [data-lamp='amber'], [data-lamp='red'], [data-lamp='blink'])::before {
   background: radial-gradient(circle at 35% 30%, rgb(255 255 255 / 0.75), transparent 40%), var(--_c);
   box-shadow:
     inset 0 0 0 1px rgb(0 0 0 / 0.25),
-    0 0 0 max(1px, calc(var(--ch, 40px) * 0.03)) #0c0c0d,
+    0 0 0 max(1px, calc(var(--ch, 40px) * 0.03)) var(--lamp-bezel),
     0 0 calc(var(--ch, 40px) * 0.28) var(--_g),
     0 0 calc(var(--ch, 40px) * 0.7) color-mix(in srgb, var(--_g) 45%, transparent);
 }
 .fb-lamp[data-lamp='gray']::before {
-  background: radial-gradient(circle at 35% 30%, rgb(255 255 255 / 0.3), transparent 42%), #6b6b70;
+  background: radial-gradient(circle at 35% 30%, rgb(255 255 255 / 0.3), transparent 42%), var(--lamp-gray);
 }
 @keyframes fb-lamp-blink {
   50% {
@@ -442,7 +473,7 @@
   line-height: 1.2;
   font-weight: 600;
   letter-spacing: 0.16em;
-  color: rgb(255 176 0 / 0.72);
+  color: var(--flap-label);
   text-transform: uppercase;
   white-space: nowrap;
   user-select: none;
@@ -483,4 +514,99 @@
   letter-spacing: 0.14em;
   color: rgb(255 176 0 / 0.6);
   text-transform: uppercase;
+}
+
+/* ═════════════════════════════ Matrix: the green phosphor board ═════════════════════════════
+ *
+ * The same physical board, re-lit: black modules with a faint green cast, a green-tinted hinge, phosphor ink with a
+ * soft glow, and the status lamps in the Matrix status colours (tokens.css). Two ink intensities keep the board's
+ * hierarchy: DESTINATION is the pale "hot" phosphor (the white ink of the standard board), TIME / PLATFORM / MS /
+ * REMARKS and the flip clock are full phosphor green (the amber of the standard board).
+ *
+ * Only colours and shadows change: flap sizes, the flap typeface (the REMARKS width is measured with it), the
+ * animations and the reduced-motion behaviour are the same in every theme.
+ */
+:root[data-theme='matrix'] .fb {
+  --flap-ink: #b8ffd0;
+  --flap-remark-ink: #00ff66;
+  --flap-accent: #00ff66;
+  --flap-accent-glow: rgb(0 255 102 / 0.46);
+  --flap-label: rgb(0 255 102 / 0.62);
+  --flap-top-1: #142019;
+  --flap-top-2: #101a14;
+  --flap-bot-1: #0d1611;
+  --flap-bot-2: #0a120d;
+  --flap-gap: #010302;
+  --flap-edge: rgb(0 255 102 / 0.07);
+  --flap-hinge: #000;
+  --flap-hinge-hi: rgb(0 255 102 / 0.12);
+  --flap-pin: #1f3a29;
+}
+:root[data-theme='matrix'] :is(.fb, .bd-legend) {
+  --lamp-unlit: #101b15;
+  --lamp-green: var(--status-ok);
+  --lamp-green-glow: color-mix(in srgb, var(--status-ok) 62%, transparent);
+  --lamp-amber: var(--status-warn);
+  --lamp-amber-glow: color-mix(in srgb, var(--status-warn) 62%, transparent);
+  --lamp-red: var(--status-crit);
+  --lamp-red-glow: color-mix(in srgb, var(--status-crit) 66%, transparent);
+  --lamp-blink: var(--matrix-ink);
+  --lamp-blink-glow: rgb(0 255 102 / 0.42);
+  --lamp-gray: var(--gray-2);
+  --lamp-bezel: #020604;
+}
+
+/* phosphor glow: a tight core plus a soft bloom on the accent columns, a quieter one on DESTINATION */
+:root[data-theme='matrix'] .fb .flap {
+  text-shadow: 0 0 calc(var(--ch, 40px) * 0.12) rgb(0 255 102 / 0.3);
+}
+:root[data-theme='matrix'] :is(.fb-amber, .bd-clock) .flap,
+:root[data-theme='matrix'] .fb .flap[data-variant='word'] {
+  text-shadow:
+    0 0 calc(var(--ch, 40px) * 0.04) rgb(0 255 102 / 0.5),
+    0 0 calc(var(--ch, 40px) * 0.18) var(--flap-accent-glow);
+}
+:root[data-theme='matrix'] .fb-labels {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: 0.12em;
+}
+
+/* mini board: the same black-green housing, with a faint scanline texture over the flaps */
+:root[data-theme='matrix'] .mb {
+  background: radial-gradient(120% 90% at 50% -20%, rgb(0 255 102 / 0.07), transparent 60%), linear-gradient(#07100b, #030805);
+  box-shadow:
+    inset 0 0 0 1px rgb(0 255 102 / 0.11),
+    inset 0 1px 0 rgb(160 255 195 / 0.08),
+    0 1px 2px rgb(0 0 0 / 0.4),
+    0 0 26px -12px rgb(0 255 102 / 0.3);
+}
+:root[data-theme='matrix'] .mb::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  background: repeating-linear-gradient(180deg, transparent 0 2px, rgb(0 0 0 / 0.14) 2px 3px);
+  pointer-events: none;
+}
+:root[data-theme='matrix'] .mb-empty {
+  font-family: var(--font-mono);
+  letter-spacing: 0.1em;
+  color: rgb(0 255 102 / 0.66);
+}
+
+/* Increase Contrast: crisp ink, no glow or scanlines */
+@media (prefers-contrast: more) {
+  :root[data-theme='matrix'] .fb .flap,
+  :root[data-theme='matrix'] :is(.fb-amber, .bd-clock) .flap,
+  :root[data-theme='matrix'] .fb .flap[data-variant='word'] {
+    text-shadow: none;
+  }
+  :root[data-theme='matrix'] .fb {
+    --flap-label: #00ff66;
+  }
+  :root[data-theme='matrix'] .mb::after {
+    display: none;
+  }
 }

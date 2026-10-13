@@ -60,8 +60,9 @@ export default function TasksPage() {
     return [{ value: '', label: 'All types' }, ...opts];
   }, [tasks, type]);
 
-  // running durations tick every second; otherwise a slow clock is enough
-  const now = useServerNow(counts.running > 0 ? 1000 : 30_000);
+  // a slow page clock; running rows tick every second inside their own Duration cell (D57: a 1 s page clock
+  // rebuilt every column and re-rendered all 200 rows while any task ran)
+  const now = useServerNow(30_000);
 
   const selected = useMemo(() => (openUpid ? (tasks.find((t) => t.upid === openUpid) ?? null) : null), [openUpid, tasks]);
   const openTask = useCallback((t: TaskEntry) => setQuery({ task: t.upid }), []);
@@ -133,7 +134,7 @@ export default function TasksPage() {
         align: 'right',
         hideBelow: 'iphone',
         sortValue: (t) => taskDurationMs(t, now),
-        cell: (t) => <span className="t-num">{formatTaskDuration(taskDurationMs(t, now))}</span>,
+        cell: (t) => (t.severity === 'running' ? <RunningDuration task={t} /> : <span className="t-num">{formatTaskDuration(taskDurationMs(t, now))}</span>),
       },
       {
         key: 'status',
@@ -205,4 +206,10 @@ function EmptyFiltered({ filter, type }: { filter: TaskFilter; type: string }) {
     return <EmptyState className="tasks-empty" icon={<LoaderCircle size={26} strokeWidth={1.8} />} title="Nothing running" message={`No ${what}task is running right now.`} />;
   }
   return <EmptyState className="tasks-empty" icon={<ListChecks size={26} strokeWidth={1.8} />} title="No matching tasks" message="Try another task type." />;
+}
+
+/** Live duration of a running task: only this cell re-renders every second. */
+function RunningDuration({ task }: { task: TaskEntry }) {
+  const now = useServerNow(1000);
+  return <span className="t-num">{formatTaskDuration(taskDurationMs(task, now))}</span>;
 }

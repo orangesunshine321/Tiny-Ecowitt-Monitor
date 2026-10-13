@@ -3,7 +3,7 @@
  * known_hosts) must keep everything else.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadConfig } from '../server/config.js';
@@ -122,6 +122,23 @@ describe('set_fingerprint', () => {
   });
 });
 
+describe('ca_to_fingerprint', () => {
+  it('swaps the one tls.ca line for a pin, keeping the indentation and everything else', () => {
+    const file = sb.put('ca.yaml', 'proxmox:\n  url: https://10.10.10.2:8006\n  tls:\n    # cluster CA\n    ca: /etc/pve1-dash/pve-root-ca.pem\nlisten:\n  port: 8080\n');
+    expect(sb.call(SCRIPT, 'ca_to_fingerprint', [file, FP]).status).toBe(0);
+    expect(readFileSync(file, 'utf8')).toBe(`proxmox:\n  url: https://10.10.10.2:8006\n  tls:\n    # cluster CA\n    fingerprint: "${FP}"\nlisten:\n  port: 8080\n`);
+  });
+
+  it('leaves configs without a single ca line, or with a pin already, alone', () => {
+    const pinned = sb.put('pinned.yaml', `proxmox:\n  tls:\n    ca: /x.pem\n    fingerprint: "${FP2}"\n`);
+    expect(sb.call(SCRIPT, 'ca_to_fingerprint', [pinned, FP]).status).toBe(3);
+    expect(readFileSync(pinned, 'utf8')).toBe(`proxmox:\n  tls:\n    ca: /x.pem\n    fingerprint: "${FP2}"\n`);
+    const pub = sb.put('public.yaml', 'proxmox:\n  url: https://pve1.example.com:8006\n  tls:\n    insecure: false\n');
+    expect(sb.call(SCRIPT, 'ca_to_fingerprint', [pub, FP]).status).toBe(3);
+    expect(readFileSync(pub, 'utf8')).toBe('proxmox:\n  url: https://pve1.example.com:8006\n  tls:\n    insecure: false\n');
+  });
+});
+
 describe('write_known_hosts', () => {
   it('pins the host key and keeps learned guest keys and marker lines', () => {
     const file = sb.put(
@@ -233,6 +250,110 @@ describe('public-CA mode for ACME certificates', () => {
   });
 });
 
+describe("Proxmox cluster CA instead of a pin (pveupdate renews the certificate by itself)", () => {
+  const CA = '-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQ0E=\n-----END CERTIFICATE-----';
+
+  it('writes a config that verifies with the stored CA, and it loads', () => {
+    const { yaml, config } = renderAndLoad({ P1D_TLS_CA: CA });
+    expect(yaml).toMatch(/^ {4}ca: \/etc\/pve1-dash\/pve-root-ca\.pem$/m);
+    expect(yaml).not.toMatch(/^\s+fingerprint:/m);
+    expect(config.proxmox.tls.ca).toBe('/etc/pve1-dash/pve-root-ca.pem');
+    expect(config.proxmox.tls.fingerprint).toBeUndefined();
+    expect(config.proxmox.url).toBe('https://192.168.1.10:8006');
+  });
+
+  it('accepts a new config with only the CA, and refuses anything that is not PEM certificates', () => {
+    expect(sb.call(SCRIPT, 'validate_settings', ['yes'], { env: { ...SETTINGS, P1D_TLS_FINGERPRINT: '', P1D_TLS_CA: CA } }).status).toBe(0);
+    for (const bad of ['-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----', `${CA}\n$(reboot)`, 'hello']) {
+      const r = sb.call(SCRIPT, 'validate_settings', ['yes'], { env: { ...SETTINGS, P1D_TLS_CA: bad } });
+      expect(r.status, bad).toBe(1);
+      expect(r.stderr).toContain('P1D_TLS_CA');
+    }
+  });
+
+  it('stores the CA readable for the service, and only rewrites it when it changed', () => {
+    const conf = join(sb.dir, 'etc');
+    mkdirSync(conf);
+    const run = () => sb.bash(SCRIPT, `CONF_DIR='${conf}' CA_FILE='${conf}/pve-root-ca.pem'; write_ca`, { env: { P1D_TLS_CA: CA } });
+    const first = run();
+    expect(first.status, first.stderr).toBe(0);
+    expect(first.stdout).toContain('stored the Proxmox cluster CA');
+    expect(readFileSync(join(conf, 'pve-root-ca.pem'), 'utf8')).toBe(`${CA}\n`);
+    expect(statSync(join(conf, 'pve-root-ca.pem')).mode & 0o777).toBe(0o644);
+    expect(run().stdout).toBe('');
+    expect(readdirSync(conf)).toEqual(['pve-root-ca.pem']);
+  });
+});
+
+describe('listen.allowedSources (who may connect)', () => {
+  it('writes the list into a new config, and it loads', () => {
+    const { yaml, config } = renderAndLoad({ P1D_ALLOWED_SOURCES: '10.10.10.0/24 10.10.20.5' });
+    expect(yaml).toContain('allowedSources: ["10.10.10.0/24", "10.10.20.5"]');
+    expect(config.listen.allowedSources).toEqual(['10.10.10.0/24', '10.10.20.5']);
+    expect(config.listen.port).toBe(8080);
+  });
+
+  it('writes no listen section for "any" or nothing', () => {
+    for (const v of ['any', '']) {
+      const { yaml, config } = renderAndLoad({ P1D_ALLOWED_SOURCES: v });
+      expect(yaml).not.toContain('allowedSources');
+      expect(config.listen.allowedSources).toEqual([]);
+    }
+  });
+
+  it('checks every entry (commas allowed)', () => {
+    expect(sb.call(SCRIPT, 'validate_settings', ['no'], { env: { ...SETTINGS, P1D_ALLOWED_SOURCES: '10.10.10.0/24,10.10.20.5' } }).status).toBe(0);
+    for (const bad of ['10.10.10.0/33', 'lan', '10.10.10.0/24 $(id)']) {
+      const r = sb.call(SCRIPT, 'validate_settings', ['no'], { env: { ...SETTINGS, P1D_ALLOWED_SOURCES: bad } });
+      expect(r.status, bad).toBe(1);
+      expect(r.stderr).toContain('P1D_ALLOWED_SOURCES');
+    }
+  });
+});
+
+describe('set_config_values (a re-run sets publicUrl / allowedSources in the existing config)', () => {
+  const set = (file: string, url: string, sources: string) => sb.call(SCRIPT, 'set_config_values', [file, url, sources, ROOT]);
+
+  it('replaces the commented-out publicUrl line in place and adds allowedSources, keeping comments', () => {
+    const { yaml } = renderAndLoad({ P1D_PUBLIC_URL: '' });
+    const file = sb.put('cfg.yaml', yaml);
+    const r = set(file, 'https://dash.bgreen.cloud', '10.10.10.0/24');
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toBe('changed publicUrl https://dash.bgreen.cloud\nchanged listen.allowedSources [10.10.10.0/24]');
+    const after = readFileSync(file, 'utf8');
+    const lines = after.split('\n');
+    expect(lines.indexOf('publicUrl: "https://dash.bgreen.cloud"')).toBe(yaml.split('\n').findIndex((l) => l.startsWith('# publicUrl:')));
+    expect(after).not.toMatch(/^# publicUrl:/m);
+    expect(after).toContain('# SHA-256 of the certificate pveproxy serves.');
+    expect(after).toContain('allowedSources: [ 10.10.10.0/24 ]');
+    const config = loadConfig({ PVE1_DASH_CONFIG: sb.put('loaded.yaml', after.replace('tokenSecretFile: /etc/pve1-dash/token', `tokenSecretFile: ${sb.put('token', 'abc-123-def\n')}`)) });
+    expect(config.publicUrl).toBe('https://dash.bgreen.cloud');
+    expect(config.listen.allowedSources).toEqual(['10.10.10.0/24']);
+    // nothing to do the second time: the file is not touched
+    const again = set(file, 'https://dash.bgreen.cloud', '10.10.10.0/24');
+    expect(again.stdout).toBe('');
+    expect(readFileSync(file, 'utf8')).toBe(after);
+  });
+
+  it('changes an existing value, and "any" opens it up again', () => {
+    const file = sb.put('cfg.yaml', 'title: pve1\npublicUrl: https://old.example.com # mine\nlisten:\n  port: 8080\n  allowedSources: ["10.0.0.0/8"]\n');
+    const r = set(file, 'https://dash.bgreen.cloud', 'any');
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toBe('changed publicUrl https://old.example.com -> https://dash.bgreen.cloud\nchanged listen.allowedSources []');
+    expect(readFileSync(file, 'utf8')).toBe('title: pve1\npublicUrl: https://dash.bgreen.cloud # mine\nlisten:\n  port: 8080\n  allowedSources: []\n');
+  });
+
+  it('leaves a value alone that is not given, and refuses a broken file without touching it', () => {
+    const file = sb.put('cfg.yaml', 'publicUrl: https://keep.example.com\n');
+    expect(set(file, '', '10.10.10.0/24').stdout).toBe('changed listen.allowedSources [10.10.10.0/24]');
+    expect(readFileSync(file, 'utf8')).toContain('publicUrl: https://keep.example.com');
+    const broken = sb.put('broken.yaml', 'proxmox:\n url: x\n  node: y\n');
+    expect(set(broken, 'https://dash.bgreen.cloud', '').status).not.toBe(0);
+    expect(readFileSync(broken, 'utf8')).toBe('proxmox:\n url: x\n  node: y\n');
+    expect(existsSync(`${broken}.new`)).toBe(false);
+  });
+});
+
 describe('sync_node_ip (the Proxmox host got a new address)', () => {
   const sync = (file: string, ip: string, hostIps: string) => sb.call(SCRIPT, 'sync_node_ip', [file, ip, hostIps, ROOT]);
 
@@ -294,11 +415,12 @@ describe('checkout', () => {
     expect(existsSync(join(dir, 'marker'))).toBe(false);
   });
 
-  it('fails fast when the ref is not pve1-dash (main before the merge holds the old app)', () => {
+  it('fails fast when the ref is not pve1-dash', () => {
     const { url } = repo('old', 'tiny-ecowitt-monitor');
     const r = sb.call(SCRIPT, 'checkout', [url, 'main', join(sb.dir, 'co2')], { env: { HOME: sb.dir } });
     expect(r.status).toBe(1);
     expect(r.stderr).toContain('is not pve1-dash');
+    expect(r.stderr).not.toContain('merge');
   });
 });
 
@@ -358,7 +480,7 @@ save_install_env() { echo "save_install_env $*" >> "$ORDER"; }
   it('records the source only after the new version runs', () => {
     const r = run({ upgrade: true });
     expect(r.status, r.stderr).toBe(0);
-    expect(order().slice(-2)).toEqual(['start-ok', 'save_install_env https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git main']);
+    expect(order().slice(-2)).toEqual(['start-ok', 'save_install_env https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git main 120']);
     expect(sb.read('app/version')).toBe('new\n');
   });
 

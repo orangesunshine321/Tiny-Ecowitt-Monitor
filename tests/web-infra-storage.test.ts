@@ -18,6 +18,8 @@ import {
   vdevStatus,
   wearFraction,
   wearTone,
+  thinPoolViews,
+  THIN_META_THRESHOLDS,
 } from '../web/src/pages/storage/storageModel';
 
 const T = storageThresholds({ storageWarnPercent: 85, storageCritPercent: 95 });
@@ -171,5 +173,28 @@ describe('ZFS', () => {
   it('tidies zpool text', () => {
     expect(tidy('scrub repaired 0B in 08:30:12 with 0 errors on Sun Oct  4 08:54:13 2026')).toBe('scrub repaired 0B in 08:30:12 with 0 errors on Sun Oct 4 08:54:13 2026');
     expect(tidy('   ')).toBeUndefined();
+  });
+});
+
+describe('LVM-thin pools (D52)', () => {
+  const GiB = 1024 ** 3;
+  const t = { warn: 0.8, crit: 0.9 };
+
+  it('reports data and metadata usage and takes the worse tone', () => {
+    const [v] = thinPoolViews([{ name: 'data', vg: 'pve', size: 100 * GiB, used: 40 * GiB, metadataSize: GiB, metadataUsed: 0.85 * GiB }], t);
+    expect(v).toMatchObject({ key: 'pve/data', label: 'pve/data', dataFraction: 0.4, tone: 'warn' });
+    expect(v!.metaFraction).toBeCloseTo(0.85);
+    expect(thinPoolViews([{ name: 'data', vg: 'pve', size: 100, used: 95, metadataSize: 10, metadataUsed: 1 }], t)[0]!.tone).toBe('crit');
+    expect(thinPoolViews([{ name: 'data', vg: 'pve', size: 100, used: 10, metadataSize: 10, metadataUsed: 9.5 }], t)[0]!.tone).toBe('crit');
+    expect(THIN_META_THRESHOLDS).toEqual({ warn: 0.8, crit: 0.9 });
+  });
+
+  it('copes with missing metadata, empty pools and no data', () => {
+    const [v] = thinPoolViews([{ name: 'data', vg: 'pve', size: 100, used: 10 }], t);
+    expect(v!.metaFraction).toBeUndefined();
+    expect(v!.tone).toBe('ok');
+    expect(thinPoolViews([{ name: 'x', vg: 'vg', size: 0, used: 0 }], t)).toEqual([]);
+    expect(thinPoolViews(undefined, t)).toEqual([]);
+    expect(thinPoolViews([{ name: 'b', vg: 'z', size: 1, used: 0 }, { name: 'a', vg: 'a', size: 1, used: 0 }], t).map((p) => p.label)).toEqual(['a/a', 'z/b']);
   });
 });

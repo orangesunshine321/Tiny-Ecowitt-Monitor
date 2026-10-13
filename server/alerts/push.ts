@@ -54,19 +54,40 @@ export const ALERT_KINDS: readonly Exclude<AlertKind, 'test'>[] = [
   'disk_health',
   'zfs_degraded',
   'updates_available',
+  'guest_disk',
+  'cert_expiry',
+  'temperature',
 ];
 
+/** Kinds that existed before the device records remembered which kinds they had seen (see `kindsSeen`). */
+const LEGACY_KINDS: readonly Exclude<AlertKind, 'test'>[] = ALERT_KINDS.slice(0, 10);
+
+/** Kinds a new device (or a kind added by an update) gets unless it chose otherwise. */
+const isDefaultKind = (k: Exclude<AlertKind, 'test'>) => k !== 'updates_available';
+
 export function defaultPrefs(): PushPrefs {
-  return { kinds: ALERT_KINDS.filter((k) => k !== 'updates_available'), minSeverity: 'warning', recoveries: true };
+  return { kinds: ALERT_KINDS.filter(isDefaultKind), minSeverity: 'warning', recoveries: true };
 }
 
 const SEVERITY_RANK: Record<AlertSeverity, number> = { info: 0, warning: 1, critical: 2 };
 
 // ─────────────────────────────────────────────────────────────── pure helpers (exported for tests)
 
-/** Merge untrusted partial prefs onto `base`, dropping anything invalid. */
+const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+function validTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Merge untrusted partial prefs onto `base`, dropping anything invalid. `quietHours: null` turns quiet hours off. */
 export function sanitizePrefs(input: unknown, base: PushPrefs): PushPrefs {
   const out: PushPrefs = { kinds: [...base.kinds], minSeverity: base.minSeverity, recoveries: base.recoveries };
+  if (base.quietHours) out.quietHours = { ...base.quietHours };
   if (!input || typeof input !== 'object') return out;
   const p = input as Record<string, unknown>;
   if (Array.isArray(p.kinds)) {
@@ -75,21 +96,79 @@ export function sanitizePrefs(input: unknown, base: PushPrefs): PushPrefs {
   }
   if (typeof p.minSeverity === 'string' && p.minSeverity in SEVERITY_RANK) out.minSeverity = p.minSeverity as AlertSeverity;
   if (typeof p.recoveries === 'boolean') out.recoveries = p.recoveries;
+  if (p.quietHours === null) delete out.quietHours;
+  else if (p.quietHours && typeof p.quietHours === 'object') {
+    const q = p.quietHours as Record<string, unknown>;
+    if (typeof q.start === 'string' && HHMM.test(q.start) && typeof q.end === 'string' && HHMM.test(q.end)) {
+      const quiet: NonNullable<PushPrefs['quietHours']> = { start: q.start, end: q.end, allowCritical: q.allowCritical !== false };
+      if (typeof q.timeZone === 'string' && q.timeZone.length <= 64 && validTimeZone(q.timeZone)) quiet.timeZone = q.timeZone;
+      out.quietHours = quiet;
+    }
+  }
   return out;
 }
 
+const minutesOf = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
+
+/** Minute of the day (0..1439) at `now` in `timeZone` (the process zone when omitted or unknown). */
+function minuteOfDay(now: number, timeZone?: string): number {
+  if (timeZone) {
+    try {
+      const parts = new Intl.DateTimeFormat('en-US', { timeZone, hour: 'numeric', minute: 'numeric', hourCycle: 'h23' }).formatToParts(new Date(now));
+      const h = Number(parts.find((p) => p.type === 'hour')?.value);
+      const m = Number(parts.find((p) => p.type === 'minute')?.value);
+      if (Number.isFinite(h) && Number.isFinite(m)) return (h % 24) * 60 + m;
+    } catch {
+      // unknown zone: process zone below
+    }
+  }
+  const d = new Date(now);
+  return d.getHours() * 60 + d.getMinutes();
+}
+
+/**
+ * Inside the device's quiet hours at `now`? The window may wrap midnight ("22:00"–"07:00"); equal start and end mean
+ * no quiet hours. The device's own zone wins over `fallbackZone` (config.timezone).
+ */
+export function inQuietHours(prefs: PushPrefs, now: number, fallbackZone?: string): boolean {
+  const q = prefs.quietHours;
+  if (!q || !HHMM.test(q.start) || !HHMM.test(q.end)) return false;
+  const start = minutesOf(q.start);
+  const end = minutesOf(q.end);
+  if (start === end) return false;
+  const m = minuteOfDay(now, q.timeZone ?? fallbackZone);
+  return start < end ? m >= start && m < end : m >= start || m < end;
+}
+
+export interface WantsOptions {
+  /** epoch ms (quiet hours); Date.now() when omitted */
+  now?: number;
+  /** zone for quiet hours when the device has none (config.timezone) */
+  timeZone?: string;
+}
+
 /** Does this device want this notification? Test notifications always go through. */
-export function wantsNotification(prefs: PushPrefs, ev: Pick<AlertEvent, 'kind' | 'severity'>, recovery: boolean): boolean {
+export function wantsNotification(prefs: PushPrefs, ev: Pick<AlertEvent, 'kind' | 'severity'>, recovery: boolean, o: WantsOptions = {}): boolean {
   if (ev.kind === 'test') return true;
   if (!prefs.kinds.includes(ev.kind)) return false;
   if (SEVERITY_RANK[ev.severity] < SEVERITY_RANK[prefs.minSeverity]) return false;
-  return !recovery || prefs.recoveries;
+  if (recovery && !prefs.recoveries) return false;
+  // quiet hours: nothing (recoveries included) except fresh critical alerts when allowed
+  if (inQuietHours(prefs, o.now ?? Date.now(), o.timeZone)) return !recovery && ev.severity === 'critical' && prefs.quietHours!.allowCritical;
+  return true;
 }
 
-/** App icon badge for one device: the active alerts it is subscribed to (kind and severity), not all of them. */
-export function badgeFor(prefs: PushPrefs, active: readonly Pick<AlertEvent, 'kind' | 'severity'>[]): number {
+/**
+ * App icon badge for one device: the active alerts it is subscribed to (kind and severity), not all of them, and not
+ * the ones someone snoozed.
+ */
+export function badgeFor(prefs: PushPrefs, active: readonly Pick<AlertEvent, 'kind' | 'severity' | 'acknowledged'>[], now = Date.now()): number {
   let n = 0;
-  for (const a of active) if (a.kind !== 'test' && wantsNotification(prefs, a, false)) n++;
+  for (const a of active) {
+    if (a.kind === 'test' || !prefs.kinds.includes(a.kind) || SEVERITY_RANK[a.severity] < SEVERITY_RANK[prefs.minSeverity]) continue;
+    if (a.acknowledged && (a.acknowledged.until === undefined || a.acknowledged.until > now)) continue;
+    n++;
+  }
   return n;
 }
 
@@ -394,6 +473,11 @@ interface StoredDevice extends PushDevice {
   updatedAt: number;
   /** origin (scheme://host) the device subscribed from: base for notification links when publicUrl is unset */
   origin?: string;
+  /**
+   * The alert kinds that existed when this record was last saved. Kinds added by a later update are switched on for
+   * the device (if they are on by default), instead of being silently missing from its saved list.
+   */
+  kindsSeen?: string[];
 }
 
 interface PushFile {
@@ -404,8 +488,8 @@ interface PushFile {
 
 export interface NotifyOptions {
   recovery: boolean;
-  /** currently active alerts: each device's badge counts those it is subscribed to */
-  active?: readonly Pick<AlertEvent, 'kind' | 'severity'>[];
+  /** currently active alerts: each device's badge counts those it is subscribed to (snoozed ones excluded) */
+  active?: readonly Pick<AlertEvent, 'kind' | 'severity' | 'acknowledged'>[];
   /** the same badge for every device (used when `active` is not given) */
   badge?: number;
 }
@@ -419,17 +503,26 @@ export interface AlertPushService extends PushService {
 
 export interface PushServiceOptions {
   /** currently active alerts (for the badge of test notifications) */
-  active?: () => readonly Pick<AlertEvent, 'kind' | 'severity'>[];
+  active?: () => readonly Pick<AlertEvent, 'kind' | 'severity' | 'acknowledged'>[];
   /** delays between attempts of alert pushes (tests shorten them); default RETRY_DELAYS_MS */
   retryDelaysMs?: readonly number[];
 }
 
 const toPublic = (d: StoredDevice): PushDevice => {
-  const p: PushDevice = { id: d.id, name: d.name, endpointHost: d.endpointHost, createdAt: d.createdAt, prefs: { ...d.prefs, kinds: [...d.prefs.kinds] } };
+  const prefs: PushPrefs = { ...d.prefs, kinds: [...d.prefs.kinds] };
+  if (d.prefs.quietHours) prefs.quietHours = { ...d.prefs.quietHours };
+  const p: PushDevice = { id: d.id, name: d.name, endpointHost: d.endpointHost, createdAt: d.createdAt, prefs };
   if (d.lastSuccessAt !== undefined) p.lastSuccessAt = d.lastSuccessAt;
   if (d.lastError !== undefined) p.lastError = d.lastError;
   return p;
 };
+
+/** Saved prefs plus the default-on kinds that were added since the record was saved (see StoredDevice.kindsSeen). */
+export function migrateKinds(prefs: PushPrefs, kindsSeen: unknown): PushPrefs {
+  const seen = new Set<string>(Array.isArray(kindsSeen) ? kindsSeen.filter((k): k is string => typeof k === 'string') : LEGACY_KINDS);
+  const added = ALERT_KINDS.filter((k) => !seen.has(k) && isDefaultKind(k) && !prefs.kinds.includes(k));
+  return added.length ? { ...prefs, kinds: [...prefs.kinds, ...added] } : prefs;
+}
 
 function restoreDevice(raw: unknown): StoredDevice | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
@@ -446,9 +539,10 @@ function restoreDevice(raw: unknown): StoredDevice | undefined {
     name: cleanName(d.name, 'Device'),
     endpointHost: endpointHost(subscription.endpoint),
     createdAt: d.createdAt,
-    prefs: sanitizePrefs(d.prefs, defaultPrefs()),
+    prefs: migrateKinds(sanitizePrefs(d.prefs, defaultPrefs()), d.kindsSeen),
     subscription,
     updatedAt: typeof d.updatedAt === 'number' ? d.updatedAt : d.createdAt,
+    kindsSeen: [...ALERT_KINDS],
   };
   const origin = cleanOrigin(d.origin);
   if (origin) out.origin = origin;
@@ -780,6 +874,7 @@ export function createPushService(ctx: AppContext, opts: PushServiceOptions = {}
         prefs: sanitizePrefs(input.prefs, defaultPrefs()),
         subscription: sub,
         updatedAt: now,
+        kindsSeen: [...ALERT_KINDS],
       };
       if (origin) dev.origin = origin;
       devices.push(dev);
@@ -825,13 +920,14 @@ export function createPushService(ctx: AppContext, opts: PushServiceOptions = {}
 
     async notify(ev, o) {
       if (!enabled || !devices.length) return;
-      const targets = devices.filter((d) => wantsNotification(d.prefs, ev, o.recovery));
+      const now = Date.now();
+      const targets = devices.filter((d) => wantsNotification(d.prefs, ev, o.recovery, { now, timeZone }));
       if (!targets.length) return;
       const text = notificationText(ev, o.recovery, timeZone);
       const options = { ...pushOptions(ev.severity, o.recovery), topic: pushTopic(ev.key) };
       const results = await Promise.all(
         targets.map((d) => {
-          const badge = o.active ? badgeFor(d.prefs, o.active) : o.badge;
+          const badge = o.active ? badgeFor(d.prefs, o.active, now) : o.badge;
           const payload = payloadFor(d, { ...text, path: ev.path }, badge);
           return serialised(d, () => deliver(d, payload, options));
         }),

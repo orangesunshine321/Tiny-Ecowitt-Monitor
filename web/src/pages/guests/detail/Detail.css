@@ -48,6 +48,85 @@
   }
 }
 
+/* apps served by this guest (launcher links) */
+.gd-open {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  min-width: 0;
+  margin-top: calc(-1 * var(--s1));
+}
+.gd-open-label {
+  flex: none;
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--label-2-wp, var(--label-2));
+}
+.gd-open-list {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.gd-open-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px 0 5px;
+  border-radius: var(--r-capsule);
+  font-size: var(--fs-subhead);
+  font-weight: 600;
+  color: var(--label);
+  background: var(--card-fill);
+  box-shadow: 0 0 0 0.5px var(--card-hairline);
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    background-color 120ms ease,
+    transform 300ms var(--spring-snappy);
+}
+.gd-open-chip:hover {
+  text-decoration: none;
+  background: color-mix(in srgb, var(--accent) 10%, var(--card-fill));
+}
+.gd-open-chip:active {
+  transform: scale(0.97);
+}
+.gd-open-chip .ui-appicon,
+.gd-open-chip img {
+  border-radius: 6px;
+}
+.gd-open-arrow {
+  color: var(--label-3);
+  margin-left: -2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .gd-open-chip:active {
+    transform: none;
+  }
+}
+/* iPhone: one row that scrolls sideways */
+@container gd (max-width: 560px) {
+  .gd-open {
+    margin-inline: calc(-1 * var(--gutter, 16px));
+    padding-inline: var(--gutter, 16px);
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .gd-open::-webkit-scrollbar {
+    display: none;
+  }
+  .gd-open-list {
+    flex-wrap: nowrap;
+  }
+}
+
 /* ───────────────────────────── shared */
 .gd-grid {
   display: grid;
@@ -207,6 +286,34 @@
   font-size: 14px;
 }
 
+.gd-banner-inset {
+  margin-top: var(--s4);
+}
+.gd-fs {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  gap: 14px 28px;
+}
+.gd-fs > li {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.gd-fs-mount {
+  font-size: 13px;
+  font-weight: 600;
+}
+.gd-fs-meta {
+  font-size: var(--fs-caption);
+  line-height: var(--lh-caption);
+  color: var(--label-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ───────────────────────────── apps */
 .gd-apps {
   display: flex;
@@ -355,6 +462,15 @@
 .gd-port[data-plain] {
   color: var(--label-2);
   background: var(--fill-3);
+}
+/* the app's own address (a reverse-proxy name): text, not a port number */
+.gd-port[data-app] {
+  max-width: 100%;
+  font-family: inherit;
+  font-size: var(--fs-caption);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .gd-toggle {
   color: var(--label);
@@ -512,10 +628,35 @@
 
 /* ───────────────────────────── notes */
 .gd-notes {
+  display: flex;
+  flex-direction: column;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-size: var(--fs-body);
   line-height: 1.5;
   color: var(--label);
   max-width: 76ch;
+}
+.gd-notes-line {
+  display: block;
+  min-height: 1.5em;
+}
+.gd-notes-line[data-heading] {
+  font-size: var(--fs-headline);
+  font-weight: 600;
+}
+.gd-notes-gap {
+  display: block;
+  height: 0.75em;
+}
+.gd-notes a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  text-underline-offset: 2px;
+}
+
+/* Matrix: mono figures sit a little tighter than the rounded face they replace */
+:root[data-theme='matrix'] .gd-lastbk-when {
+  letter-spacing: -0.03em;
 }

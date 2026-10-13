@@ -248,3 +248,94 @@ export function guestInterfaces(g: DemoGuest): GuestIface[] {
   }
   return out;
 }
+
+// ───────────────────────────────────────────────────────────── filesystems, package updates, reboot (helper v2)
+
+/** A filesystem `df` lists inside a guest. `used` is a fraction of `sizeGiB`. */
+export interface DemoMount {
+  device: string;
+  fstype: string;
+  mount: string;
+  sizeGiB: number;
+  used: number;
+}
+
+/**
+ * Data filesystems inside the guest, apart from an LXC's rootfs (that one comes from the simulation, so it matches what
+ * Proxmox reports for the container). VMs report nothing to Proxmox, so these are the only disk numbers for them.
+ */
+export function guestMounts(g: DemoGuest): DemoMount[] {
+  switch (g.vmid) {
+    case 102:
+      // the media library: a mount point (mp0) on the tank pool with its own quota; Proxmox shows no usage for it
+      return [{ device: 'tank/subvol-102-disk-1', fstype: 'zfs', mount: '/mnt/media', sizeGiB: 6144, used: 0.72 }];
+    case 105:
+      return [
+        { device: '/dev/mapper/ubuntu--vg-ubuntu--lv', fstype: 'ext4', mount: '/', sizeGiB: 123.9, used: 0.47 },
+        { device: '/dev/sda2', fstype: 'ext4', mount: '/boot', sizeGiB: 1.9, used: 0.21 },
+        { device: '/dev/sda1', fstype: 'vfat', mount: '/boot/efi', sizeGiB: 1.05, used: 0.006 },
+      ];
+    case 108:
+      // the datastore disk is filling up: a guest_disk warning in the demo
+      return [
+        { device: '/dev/mapper/pbs-root', fstype: 'ext4', mount: '/', sizeGiB: 27.9, used: 0.23 },
+        { device: '/dev/sdb1', fstype: 'xfs', mount: '/mnt/datastore', sizeGiB: 1862, used: 0.88 },
+      ];
+    default:
+      return [];
+  }
+}
+
+/** Pending OS updates and reboot state inside a guest, as its package manager would report them. */
+export interface DemoUpdates {
+  manager: 'apt' | 'apk';
+  count: number;
+  /** apt only: updates from a -security suite */
+  security?: number;
+  /** how long ago the package lists were refreshed */
+  listsAgeH: number;
+  /** /run/reboot-required exists */
+  rebootFlag?: boolean;
+  /** /boot/vmlinuz-* versions (VMs only; containers have none) */
+  vmlinuz?: string[];
+}
+
+export function guestUpdates(g: DemoGuest): DemoUpdates | undefined {
+  switch (g.vmid) {
+    case 101:
+      return { manager: 'apt', count: 3, security: 1, listsAgeH: 7 };
+    case 102:
+      return { manager: 'apt', count: 0, security: 0, listsAgeH: 7 };
+    case 103:
+      // apt-daily switched off in this container: the lists are 9 days old
+      return { manager: 'apt', count: 7, security: 2, listsAgeH: 9 * 24 + 4 };
+    case 104:
+      return { manager: 'apt', count: 0, security: 0, listsAgeH: 11 };
+    case 105:
+      // unattended-upgrades installed a new kernel: reboot-required is set and 6.8.0-87 waits in /boot
+      return {
+        manager: 'apt',
+        count: 12,
+        security: 4,
+        listsAgeH: 3,
+        rebootFlag: true,
+        vmlinuz: ['6.8.0-79-generic', '6.8.0-85-generic', '6.8.0-87-generic'],
+      };
+    case 107:
+      return { manager: 'apt', count: 5, security: 2, listsAgeH: 15 };
+    case 108:
+      return { manager: 'apt', count: 2, security: 0, listsAgeH: 6, vmlinuz: [DEMO_NODE.kernel] };
+    case 109:
+      return { manager: 'apk', count: 2, listsAgeH: 50 };
+    default:
+      return undefined;
+  }
+}
+
+/** What `pve1-dash-helper hostinfo` reports for the demo node: the running kernel is the newest one installed. */
+export const DEMO_HOST_KERNELS = {
+  vmlinuz: ['6.8.12-13-pve', DEMO_NODE.kernel],
+  packages: ['proxmox-kernel-6.8.12-13-pve-signed', `proxmox-kernel-${DEMO_NODE.kernel}-signed`],
+  /** hours since `apt-get update` (matches the "aptupdate" task in world.ts) */
+  listsAgeH: 5,
+};

@@ -2,12 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { DemoSim } from '../server/demo/sim.js';
 import { createMockRunner } from '../server/demo/mockRunner.js';
 import { DEMO_UPDATES } from '../server/demo/world.js';
+import { inventoryFromSshResult, parseHostInfo, parseHostInventory } from '../server/inventory/parse.js';
 import type { SshTarget } from '../server/config.js';
 
 const ANCHOR = Date.UTC(2026, 9, 10, 19, 0, 0);
 const HOST: SshTarget = { address: '10.10.20.10', port: 22, user: 'root' };
 const PBS: SshTarget = { address: '10.10.20.60', port: 22, user: 'root' };
-const SECTIONS = ['os-release', 'kernel', 'uptime', 'loadavg', 'init', 'services', 'docker', 'ip', 'listen'];
+const SECTIONS = ['os-release', 'kernel', 'uptime', 'loadavg', 'init', 'services', 'docker', 'ip', 'listen', 'df', 'updates', 'reboot'];
 
 function runner(now = ANCHOR) {
   return createMockRunner({ sim: new DemoSim({ anchor: ANCHOR, now: () => now }), delays: false });
@@ -52,7 +53,7 @@ function frames(stdout: string): { noise: string[]; header?: string; blocks: Blo
 /** Split inner script output into its sections. */
 function sections(inner: string): Map<string, string[]> {
   const lines = inner.replace(/\n$/, '').split('\n');
-  expect(lines[0]).toBe('##pve1-dash:inventory v1');
+  expect(lines[0]).toBe('##pve1-dash:inventory v2');
   expect(lines.at(-1)).toBe('##pve1-dash:end');
   const map = new Map<string, string[]>();
   let name = '';
@@ -77,7 +78,7 @@ describe('host helper (forced command on pve1)', () => {
     const [noise, line, rest] = r.stdout.split('\n');
     expect(noise).toMatch(/ up 23 days, .*load average: /);
     expect(noise).not.toMatch(/@@/);
-    expect(line).toBe('pve1-dash-helper 1');
+    expect(line).toBe('pve1-dash-helper 2');
     expect(rest).toBe('');
   });
 
@@ -86,7 +87,7 @@ describe('host helper (forced command on pve1)', () => {
     expect(r.code).toBe(0);
     const f = frames(r.stdout);
     expect(f.noise).toHaveLength(1);
-    expect(f.header).toBe('@@pve1-dash:inventory v1');
+    expect(f.header).toBe('@@pve1-dash:inventory v2');
     expect(f.done).toBe(true);
     expect(r.stdout.trimEnd().split('\n').at(-1)).toBe('@@pve1-dash:done');
     // running LXCs + running VMs with agent enabled; stopped guests, the template and agent:0 (pbs) are skipped
@@ -259,7 +260,7 @@ describe('host helper (forced command on pve1)', () => {
     const r = await runner().run(HOST, 'inventory', 1_000);
     expect(r.code).toBeNull();
     expect(r.stderr).toMatch(/ssh: command timed out after 1s/);
-    expect(r.stdout).toContain('@@pve1-dash:inventory v1');
+    expect(r.stdout).toContain('@@pve1-dash:inventory v2');
     expect(r.stdout).not.toContain('@@pve1-dash:done');
   });
 });
@@ -273,7 +274,7 @@ describe('guest helper (direct SSH) and transport errors', () => {
     expect(s.get('os-release')).toContain('PRETTY_NAME="Debian GNU/Linux 13 (trixie)"');
     expect(s.get('services')!.join('\n')).toMatch(/^proxmox-backup-proxy\.service +loaded active running/m);
     expect(s.get('listen')!.some((l) => /\*:8007 .*proxmox-backup-proxy/.test(l))).toBe(true);
-    expect((await runner().run(PBS, 'version', 60_000)).stdout).toBe('pve1-dash-guest-inventory 1\n');
+    expect((await runner().run(PBS, 'version', 60_000)).stdout).toBe('pve1-dash-guest-inventory 2\n');
     expect((await runner().run(PBS, 'sensors', 60_000)).stderr).toBe('denied\n');
   });
 
@@ -298,5 +299,60 @@ describe('guest helper (direct SSH) and transport errors', () => {
     run.close();
     const r = await pending;
     expect(r.code).toBe(0);
+  });
+});
+
+describe('helper protocol v2 in the demo', () => {
+  const inventories = async (cmd: string) => {
+    const r = await runner().run(HOST, cmd, 120_000);
+    return Object.fromEntries(parseHostInventory(r.stdout, ANCHOR)!.inventories.map((i) => [i.vmid, i]));
+  };
+
+  it('reports filesystems, pending updates and reboot state the way the dashboard parses them', async () => {
+    const by = await inventories('inventory');
+    // docker-media: rootfs as Proxmox reports it (61 %) plus its mp0 that Proxmox does not report
+    const media = by[102]!.filesystems!;
+    expect(media.map((f) => f.mount)).toEqual(['/', '/mnt/media']);
+    expect(Math.round((media[0]!.used / media[0]!.size) * 100)).toBe(61);
+    expect(media[0]).toMatchObject({ fstype: 'zfs', device: 'rpool/data/subvol-102-disk-0' });
+    // apps VM: 12 apt updates, reboot required (newer kernel installed and the flag file)
+    expect(by[105]).toMatchObject({ updates: { manager: 'apt', count: 12, security: 4 }, rebootRequired: true, inspectable: 'yes' });
+    expect(by[105]!.filesystems!.map((f) => f.mount)).toEqual(['/', '/boot', '/boot/efi']);
+    // Alpine: busybox df layout, apk counts, a container never needs a reboot of its own
+    expect(by[109]).toMatchObject({ updates: { manager: 'apk', count: 2 }, rebootRequired: false });
+    expect(by[109]!.filesystems!.map((f) => f.mount)).toEqual(['/']);
+    expect(by[103]!.updates!.checkedAt).toBe(ANCHOR - (9 * 24 + 4) * 3_600_000);
+    // Home Assistant OS: not inspectable by design
+    expect(by[100]).toMatchObject({ ok: false, inspectable: 'unsupported' });
+  });
+
+  it('skips only the update count in quick mode', async () => {
+    const by = await inventories('inventory quick');
+    expect(by[105]!.updates).toBeUndefined();
+    expect(by[105]!.rebootRequired).toBe(true);
+    expect(by[105]!.filesystems!.length).toBe(3);
+    const one = await runner().run(HOST, 'inventory 105 quick', 60_000);
+    expect(parseHostInventory(one.stdout, ANCHOR)!.inventories.map((i) => i.vmid)).toEqual([105]);
+    expect((await runner().run(HOST, 'inventory quick 105', 60_000)).stderr).toBe('denied\n');
+  });
+
+  it('reports PBS datastore usage over direct SSH', async () => {
+    const r = await runner().run(PBS, 'inventory quick', 60_000);
+    const inv = inventoryFromSshResult(r, 108, ANCHOR);
+    const ds = inv.filesystems!.find((f) => f.mount === '/mnt/datastore')!;
+    expect(Math.round((ds.used / ds.size) * 100)).toBe(88);
+    expect(inv.updates).toBeUndefined();
+    expect(inventoryFromSshResult(await runner().run(PBS, 'inventory', 60_000), 108, ANCHOR).updates).toMatchObject({ count: 2 });
+  });
+
+  it('answers hostinfo: the running kernel is the newest one, lists refreshed 5 h ago', async () => {
+    const r = await runner().run(HOST, 'hostinfo', 10_000);
+    expect(r.code).toBe(0);
+    expect(parseHostInfo(r.stdout)).toEqual({
+      runningKernel: '6.14.11-2-pve',
+      newestKernel: '6.14.11-2-pve',
+      updatesCheckedAt: ANCHOR - 5 * 3_600_000,
+    });
+    expect((await runner().run(HOST, 'hostinfo x', 10_000)).stderr).toBe('denied\n');
   });
 });

@@ -89,6 +89,45 @@ export function mapAptVersions(raw: unknown): PackageUpdate[] {
     .sort(byName);
 }
 
+/**
+ * An installed kernel image package as GET /apt/versions (and `pveversion -v`) lists it → its kernel release (`uname -r`):
+ * proxmox-kernel-6.8.12-5-pve-signed → 6.8.12-5-pve, pve-kernel-5.15.158-2-pve → 5.15.158-2-pve,
+ * proxmox-kernel-6.14.8-2-bpo12-pve-signed → 6.14.8-2-bpo12-pve. Meta packages (proxmox-kernel-6.8, -helper) don't match.
+ */
+const KERNEL_PKG_RE = /^(?:proxmox|pve)-kernel-(\d+\.\d+(?:\.\d+)?-\d+(?:-[a-z0-9]+)*?-pve)(?:-signed)?$/;
+
+/** Kernel releases of the installed kernel image packages in GET /nodes/{node}/apt/versions. */
+export function installedKernels(raw: unknown): string[] {
+  const out = new Set<string>();
+  for (const r of records(raw)) {
+    const m = KERNEL_PKG_RE.exec(str(r.Package) ?? '');
+    if (!m) continue;
+    const state = str(r.CurrentState);
+    // CurrentState: Installed | NotInstalled | ConfigFiles | …; without it, an OldVersion means "installed".
+    if (state === undefined ? !str(r.OldVersion) : state !== 'Installed') continue;
+    out.add(m[1]!);
+  }
+  return [...out];
+}
+
+/** Compare kernel releases numerically ("6.8.12-10-pve" > "6.8.12-9-pve" > "6.8.8-4-pve"); < 0, 0 or > 0. */
+export function compareKernels(a: string, b: string): number {
+  const pa = a.match(/\d+/g)?.map(Number) ?? [];
+  const pb = b.match(/\d+/g)?.map(Number) ?? [];
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? -1) - (pb[i] ?? -1);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+/** The newest of several kernel releases (undefined for none). */
+export function newestKernel(list: readonly (string | undefined)[]): string | undefined {
+  let best: string | undefined;
+  for (const k of list) if (k && (best === undefined || compareKernels(k, best) > 0)) best = k;
+  return best;
+}
+
 export interface VersionInfo {
   version?: string;
   release?: string;

@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConfigSchema } from '../server/config.js';
 import type { AppContext, HealthCheckResult, HealthCheckTarget, Logger } from '../server/context.js';
-import { createHealthService, ROUND_PUBLISH_INTERVAL_MS } from '../server/health/index.js';
-import { Store } from '../server/state.js';
+import { createHealthService, PROVISIONAL_MAX_MS, ROUND_PUBLISH_INTERVAL_MS, TLS_PROBE_INTERVAL_MS } from '../server/health/index.js';
+import { Store, type HistoryTick } from '../server/state.js';
 import type { Guest, GuestInventory, ServiceEntry } from '../shared/types.js';
 
 const silent: Logger = { debug() {}, info() {}, warn() {}, error() {}, child: () => silent };
@@ -308,5 +308,203 @@ describe('HealthService', () => {
     expect(byId(ctx.store).get('proxmox-ve')!.status).toBe('up'); // still running
     svc.stop(); // the final flush fails too, and is caught
     expect(warnings.some((w) => w.includes('could not save health state'))).toBe(true);
+  });
+});
+
+describe('HealthService: restarts, learning, history and certificates', () => {
+  const brokerInventory: Record<string, GuestInventory> = {
+    '102': {
+      ...mediaInventory['102']!,
+      containers: [
+        { id: 'b', name: 'broker', image: 'acme/broker', state: 'running', status: 'Up', ports: [{ hostIp: '0.0.0.0', hostPort: 7000, containerPort: 7000, proto: 'tcp' }] },
+      ],
+    },
+  };
+
+  it('lists discovered entries from health.json right after a restart, until the guest inventory confirms or drops them', async () => {
+    const ctx = makeCtx(dataDir, []);
+    ctx.store.set('guests', [guest(102, 'docker-media', '10.10.20.31')]);
+    ctx.store.set('inventory', mediaInventory);
+    const svc = createHealthService(ctx, { checker: fakeChecker({ 'http://10.10.20.31:8096/': { ok: true, ms: 5 } }).fn });
+    svc.start();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(byId(ctx.store).get('docker-102-jellyfin')).toMatchObject({ status: 'up', alert: true });
+    svc.stop();
+
+    const ctx2 = makeCtx(dataDir, []);
+    ctx2.store.set('guests', [guest(102, 'docker-media', '10.10.20.31')]);
+    const after = fakeChecker({ 'http://10.10.20.31:8096/': { ok: false, message: 'ECONNREFUSED' } });
+    const svc2 = createHealthService(ctx2, { checker: after.fn });
+    svc2.start();
+    // listed before any inventory: same id and link, alerts on (it was seen working before)
+    expect(byId(ctx2.store).get('docker-102-jellyfin')).toMatchObject({
+      status: 'unknown',
+      source: 'docker',
+      url: 'http://10.10.20.31:8096',
+      group: 'docker-media',
+      alert: true,
+    });
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(after.calls).toContain('http://10.10.20.31:8096/');
+    // the inventory lists it again: kept; a fresh inventory of that guest without it: gone
+    ctx2.store.set('inventory', mediaInventory);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(byId(ctx2.store).has('docker-102-jellyfin')).toBe(true);
+    ctx2.store.set('inventory', { '102': { ...mediaInventory['102']!, containers: [] } });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(byId(ctx2.store).has('docker-102-jellyfin')).toBe(false);
+    svc2.stop();
+  });
+
+  it('a restored entry of a stopped guest stays (paused); one of a running guest whose inventory never comes goes after a while', async () => {
+    const ctx = makeCtx(dataDir, []);
+    ctx.store.set('guests', [guest(102, 'docker-media', '10.10.20.31')]);
+    ctx.store.set('inventory', mediaInventory);
+    const svc = createHealthService(ctx, { checker: fakeChecker({ 'http://10.10.20.31:8096/': { ok: true, ms: 5 } }).fn });
+    svc.start();
+    await vi.advanceTimersByTimeAsync(3000);
+    svc.stop();
+
+    const stopped = makeCtx(dataDir, []);
+    stopped.store.set('guests', [guest(102, 'docker-media', '10.10.20.31', { status: 'stopped', uptime: 0 })]);
+    const s2 = createHealthService(stopped, { checker: fakeChecker({}).fn });
+    s2.start();
+    await vi.advanceTimersByTimeAsync(PROVISIONAL_MAX_MS + 60_000);
+    expect(byId(stopped.store).get('docker-102-jellyfin')).toMatchObject({ status: 'paused' });
+    s2.stop();
+
+    const running = makeCtx(dataDir, []);
+    running.store.set('guests', [guest(102, 'docker-media', '10.10.20.31')]);
+    const s3 = createHealthService(running, { checker: fakeChecker({ 'http://10.10.20.31:8096/': { ok: true, ms: 5 } }).fn });
+    s3.start();
+    expect(byId(running.store).has('docker-102-jellyfin')).toBe(true);
+    await vi.advanceTimersByTimeAsync(PROVISIONAL_MAX_MS + 1000);
+    running.store.set('guests', [guest(102, 'docker-media', '10.10.20.31', { uptime: 90_000 })]); // any rebuild
+    await vi.advanceTimersByTimeAsync(500);
+    expect(byId(running.store).has('docker-102-jellyfin')).toBe(false);
+    s3.stop();
+  });
+
+  it('a discovered entry alerts only once it has been seen working', async () => {
+    const ctx = makeCtx(dataDir, []);
+    ctx.store.set('guests', [guest(102, 'docker-media', '10.10.20.31')]);
+    ctx.store.set('inventory', mediaInventory);
+    let up = false;
+    const { fn } = fakeChecker({ 'http://10.10.20.31:8096/': () => (up ? { ok: true, ms: 5 } : { ok: false, message: 'ECONNREFUSED' }) });
+    const svc = createHealthService(ctx, { checker: fn });
+    svc.start();
+    await vi.advanceTimersByTimeAsync(3000 + 33_500);
+    expect(byId(ctx.store).get('docker-102-jellyfin')).toMatchObject({ status: 'down', alert: false });
+    up = true;
+    await vi.advanceTimersByTimeAsync(33_500);
+    expect(byId(ctx.store).get('docker-102-jellyfin')).toMatchObject({ status: 'up', alert: true });
+    up = false;
+    await vi.advanceTimersByTimeAsync(2 * 33_500);
+    expect(byId(ctx.store).get('docker-102-jellyfin')).toMatchObject({ status: 'down', alert: true });
+    svc.stop();
+  });
+
+  it('learns that a discovered port does not speak HTTP and checks it with TCP from then on, across restarts', async () => {
+    const ctx = makeCtx(dataDir, []);
+    ctx.store.set('guests', [guest(102, 'docker-media', '10.10.20.31')]);
+    ctx.store.set('inventory', brokerInventory);
+    const { fn, calls } = fakeChecker({
+      'http://10.10.20.31:7000/': { ok: false, message: 'HPE_INVALID_CONSTANT' },
+      'https://10.10.20.31:7000/': { ok: false, message: 'EPROTO' },
+      '10.10.20.31:7000': { ok: true, ms: 1 },
+    });
+    const svc = createHealthService(ctx, { checker: fn });
+    svc.start();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(byId(ctx.store).get('docker-102-broker')).toMatchObject({ check: { type: 'http' }, status: 'unknown' });
+    await vi.advanceTimersByTimeAsync(33_500); // a second protocol error: learn
+    const learned = byId(ctx.store).get('docker-102-broker')!;
+    expect(learned).toMatchObject({ status: 'up', check: { type: 'tcp', target: '10.10.20.31:7000' }, alert: true });
+    expect(learned.url).toBeUndefined();
+    expect(calls).toContain('https://10.10.20.31:7000/');
+    svc.stop();
+    const saved = JSON.parse(readFileSync(join(dataDir, 'health.json'), 'utf8'));
+    expect(saved.services['docker-102-broker'].learned).toEqual({ mode: 'tcp', guessed: 'http://10.10.20.31:7000/' });
+
+    const ctx2 = makeCtx(dataDir, []);
+    ctx2.store.set('guests', [guest(102, 'docker-media', '10.10.20.31')]);
+    ctx2.store.set('inventory', brokerInventory);
+    const svc2 = createHealthService(ctx2, { checker: fn });
+    svc2.start();
+    expect(byId(ctx2.store).get('docker-102-broker')!.check).toEqual({ type: 'tcp', target: '10.10.20.31:7000' });
+    svc2.stop();
+  });
+
+  it('a refused connection is not a protocol mismatch: nothing is learned', async () => {
+    const ctx = makeCtx(dataDir, []);
+    ctx.store.set('guests', [guest(102, 'docker-media', '10.10.20.31')]);
+    ctx.store.set('inventory', brokerInventory);
+    const { fn, calls } = fakeChecker({ 'http://10.10.20.31:7000/': { ok: false, message: 'ECONNREFUSED' }, '10.10.20.31:7000': { ok: true, ms: 1 } });
+    const svc = createHealthService(ctx, { checker: fn });
+    svc.start();
+    await vi.advanceTimersByTimeAsync(3000 + 3 * 33_500);
+    expect(byId(ctx.store).get('docker-102-broker')).toMatchObject({ status: 'down', check: { type: 'http' } });
+    expect(calls).not.toContain('10.10.20.31:7000');
+    svc.stop();
+  });
+
+  it('sends new check samples as history ticks, after the services patch', async () => {
+    const ctx = makeCtx(dataDir);
+    const ticks: HistoryTick[] = [];
+    const order: string[] = [];
+    ctx.store.on('history', (t: HistoryTick) => {
+      ticks.push(t);
+      order.push('history');
+    });
+    ctx.store.on('patch', (k) => {
+      if (k === 'services') order.push('patch');
+    });
+    const { fn } = fakeChecker({ 'https://10.10.20.10:8006/': { ok: true, ms: 40 }, '10.10.20.2:5335': { ok: false, message: 'ECONNREFUSED' } });
+    const svc = createHealthService(ctx, { checker: fn });
+    svc.start();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(ticks).toHaveLength(1);
+    expect(ticks[0]!.services).toMatchObject({ 'proxmox-ve': [{ ok: true, ms: 40 }], unbound: [{ ok: false }] });
+    expect(ticks[0]!.services!['proxmox-ve']![0]!.t).toBe(byId(ctx.store).get('proxmox-ve')!.history.at(-1)!.t);
+    expect(order.slice(-2)).toEqual(['patch', 'history']);
+    svc.stop();
+  });
+
+  it('reads the certificate of https checks every few hours and publishes it', async () => {
+    const ctx = makeCtx(dataDir);
+    const notAfter = Date.UTC(2026, 11, 1);
+    const probe = vi.fn(async (url: string) => ({ notAfter, issuer: "Let's Encrypt", subject: new URL(url).hostname, selfSigned: false }));
+    const { fn } = fakeChecker({ 'https://10.10.20.10:8006/': { ok: true, ms: 40 } });
+    const svc = createHealthService(ctx, { checker: fn, tlsProbe: probe });
+    svc.start();
+    await vi.advanceTimersByTimeAsync(3500);
+    expect(probe).toHaveBeenCalledWith('https://10.10.20.10:8006/', 5000);
+    expect(probe).toHaveBeenCalledTimes(1); // the only https check
+    expect(byId(ctx.store).get('proxmox-ve')!.tls).toEqual({ notAfter, issuer: "Let's Encrypt", subject: '10.10.20.10', selfSigned: false });
+    expect(byId(ctx.store).get('home-assistant')!.tls).toBeUndefined();
+    probe.mockClear();
+    await vi.advanceTimersByTimeAsync(2 * 33_500);
+    expect(probe).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(TLS_PROBE_INTERVAL_MS);
+    expect(probe).toHaveBeenCalled();
+    svc.stop();
+    expect(JSON.parse(readFileSync(join(dataDir, 'health.json'), 'utf8')).services['proxmox-ve'].tls).toMatchObject({ notAfter, issuer: "Let's Encrypt" });
+  });
+
+  it('reaches a guest with an interface on another subnet at its address next to the Proxmox host', () => {
+    const ctx = makeCtx(dataDir, []);
+    ctx.store.set('guests', [
+      guest(102, 'docker-media', '192.168.50.31', {
+        ips: [
+          { address: '192.168.50.31', family: 4, source: 'lxc-interfaces' },
+          { address: '10.10.20.31', family: 4, source: 'lxc-interfaces' },
+        ],
+      }),
+    ]);
+    ctx.store.set('inventory', mediaInventory);
+    const svc = createHealthService(ctx, { checker: fakeChecker({}).fn });
+    svc.start();
+    expect(byId(ctx.store).get('docker-102-jellyfin')!.url).toBe('http://10.10.20.31:8096'); // proxmox.url is 10.10.20.10
+    svc.stop();
   });
 });

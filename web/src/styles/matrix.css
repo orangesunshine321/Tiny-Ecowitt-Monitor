@@ -1,0 +1,344 @@
+/*
+ * Matrix theme: the component touches that tokens alone cannot express (tokens.css holds every colour).
+ *
+ * Imported by glass.css, unlayered. Every rule is scoped to `:root[data-theme='matrix']` (specificity >= 0,3,0), so it
+ * beats ordinary component rules whatever order the production build links the CSS chunks in; where the component
+ * rule is itself compound (e.g. `.ui-btn[data-variant='prominent']`), the selector here is compound as well. The
+ * accessibility fallbacks in glass.css (Reduce Transparency, Increase Contrast) come later in the bundle and still win.
+ *
+ * What lives here:
+ *   1. Mono accents: titles, numbers, labels/eyebrows and status text in SF Mono; body text stays SF Pro.
+ *   2. Phosphor glow, sparingly: hero numbers and titles only.
+ *   3. Glass and controls: selected nav item, segmented thumb, switches, prominent buttons, Spotlight selection, and
+ *      the search fields / pop-up buttons / segmented controls on the wallpaper (blurred, so the rain never cuts
+ *      across their text).
+ *   4. Tinted tiles: solid colour icon tiles become dark tiles with a coloured glyph and rim (iOS "tinted" icons).
+ *
+ * Hooks for other code (they do nothing outside Matrix):
+ *   .t-glow          add the phosphor glow (hero figures and titles only)
+ *   .t-mono-accent   switch an element to the mono accent face
+ *   .u-matrix-only   hidden unless Matrix is on;   .u-no-matrix   hidden while Matrix is on
+ */
+
+/* ───────────────────────────── hooks (u-matrix-only reverts to the element's default display when shown) */
+.u-matrix-only {
+  display: none !important;
+}
+:root[data-theme='matrix'] .u-matrix-only {
+  display: revert !important;
+}
+:root[data-theme='matrix'] .u-no-matrix {
+  display: none !important;
+}
+:root[data-theme='matrix'] .t-mono-accent {
+  font-family: var(--font-mono);
+  letter-spacing: 0;
+}
+:root[data-theme='matrix'] .t-glow {
+  text-shadow: var(--matrix-glow);
+}
+
+/* ───────────────────────────── 1. mono accents */
+
+/* titles */
+:root[data-theme='matrix'] :is(.ui-pageheader-title, .ui-sheet-title, .ui-empty-title, .ov-hero-name) {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+:root[data-theme='matrix'] .ui-pageheader .ui-pageheader-title {
+  font-size: 31px;
+  line-height: var(--lh-large-title);
+}
+@media (max-width: 767.98px) {
+  :root[data-theme='matrix'] .ui-pageheader .ui-pageheader-title {
+    font-size: 29px;
+    line-height: 38px;
+  }
+}
+:root[data-theme='matrix'] .ov-hero-top .ov-hero-name {
+  font-size: 26px;
+}
+:root[data-theme='matrix']
+  :is(.ui-card-title, .shell-topbar-title, .ui-toast-title, .shell-fresh-title, .shell-nodeerr-title, .shell-sb-name, .gx-card-name, .svc-tile-name, .svc-group-name, .inf-section-title, .gd-section-title) {
+  font-family: var(--font-mono);
+  letter-spacing: -0.02em;
+}
+:root[data-theme='matrix'] .ui-card-header .ui-card-title {
+  font-size: 14px;
+}
+:root[data-theme='matrix'] .shell-sb-header .shell-sb-name {
+  font-size: 16px;
+}
+
+/* section headers and eyebrow labels: small mono caps with a little tracking */
+:root[data-theme='matrix']
+  :is(.ui-list-header, .ov-subhead, .ov-stat-label, .ov-fact dt, .t-upper, .spotlight-group-label, .shell-sb-heading, .al-tl-dayhead, .gx-card-alloc dt) {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+}
+:root[data-theme='matrix'] .shell-sb-section .shell-sb-heading {
+  text-transform: uppercase;
+  font-size: 10.5px;
+}
+:root[data-theme='matrix'] .ui-list .ui-list-header {
+  font-size: 11px;
+}
+
+/* numbers: tabular figures, ring/stat values (via --font-rounded = mono), right-aligned table cells. The compact
+   iPhone figures (ring captions, service latency line), the Overview "Busiest now" percentages and the alert timeline
+   times are listed too, so a figure reads in the same face on every device and next to its neighbours. */
+:root[data-theme='matrix']
+  :is(.t-num, .ui-meter-value, .ui-ring-caption, .ui-ring-sublabel, .ov-stat-caption, .shell-badge, .ui-iconbtn-badge, .ov-ringcell-sub, .svc-tile-compact, .ov-grow-pct, .al-tl-time) {
+  font-family: var(--font-mono);
+  letter-spacing: -0.01em;
+}
+/* the iPhone ring captions ("36.5 / 64 GiB") sit in an ~80 px column beside the ring: SF Mono's full-width spaces
+   are narrowed to a proportional space (~0.28em) so the mono caption fits instead of ending in "G…" (or squeezing
+   the ring); a 375 pt iPhone (SE, mini) also takes the caption down to the 11 px caption2 size. The Mac/iPad ring
+   sublabels get the same spacing, so the caption reads identically on every device. */
+:root[data-theme='matrix'] :is(.ov-ringcell .ov-ringcell-sub, .ui-ring .ui-ring-sublabel) {
+  letter-spacing: -0.02em;
+  word-spacing: -0.32em;
+}
+@media (max-width: 389.98px) {
+  :root[data-theme='matrix'] .ov-ringcell .ov-ringcell-sub {
+    font-size: 11px;
+  }
+}
+:root[data-theme='matrix'] .ui-table td[data-align='right'] {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: -0.01em;
+}
+:root[data-theme='matrix'] .ui-ring-dial .ui-ring-value {
+  font-weight: 500;
+  letter-spacing: -0.04em;
+}
+:root[data-theme='matrix'] .ov-stat .ov-stat-value {
+  font-weight: 500;
+  letter-spacing: -0.03em;
+}
+/* Backups hero / disk sheet stat figures (.inf-stat-value, the --font-rounded face, so mono here): SF Mono's ~0.6em
+   advance made a 22 px "Host helper" ~138 px wide, past the ~131 px stat column on an iPad in portrait ("Host help…").
+   Tighter tracking plus a proportional-width space (as for the ring captions) brings it to ~129 px at 22 px, and the
+   iPad/iPhone layouts (< 1100 px, where the columns are narrowest) step down to 20 px (~117 px). */
+:root[data-theme='matrix'] .inf-stat .inf-stat-value {
+  letter-spacing: -0.04em;
+  word-spacing: -0.3em;
+}
+@media (max-width: 1099.98px) {
+  :root[data-theme='matrix'] .inf-stat .inf-stat-value {
+    font-size: 20px;
+  }
+}
+
+/* status text: pills, badges, the Live label, the sidebar status capsule */
+:root[data-theme='matrix'] :is(.ui-badge, .shell-sb-status, .shell-live-label) {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+:root[data-theme='matrix'] .ui-badge:not([data-size='small']) {
+  font-size: 11.5px;
+}
+
+/* ───────────────────────────── 2. phosphor glow (hero numbers and titles only) */
+:root[data-theme='matrix'] :is(.ui-pageheader-title, .ov-hero-name, .ui-ring-value, .ov-stat-value) {
+  text-shadow: var(--matrix-glow);
+}
+
+/*
+ * Text set directly on the wallpaper (page titles and subtitles, section headers between cards): a tight dark halo
+ * (--matrix-backplate) knocks the rain out from behind the letters, so a glyph never reads as part of the text. The
+ * rain itself is also calmer near the top of the viewport (MatrixRain.ts rainIntensity). `.t-on-wallpaper` is the hook
+ * for other wallpaper-level text. The glow is listed first, so it paints above the halo.
+ */
+:root[data-theme='matrix'] .ui-pageheader .ui-pageheader-title {
+  text-shadow: var(--matrix-glow), var(--matrix-backplate);
+}
+:root[data-theme='matrix']
+  :is(.ui-pageheader-subtitle, .ui-list-header, .t-on-wallpaper, .inf-section-title, .inf-section-subtitle, .gd-section-title, .svc-group-name, .al-tl-dayhead, .gx-filters-templates) {
+  text-shadow: var(--matrix-backplate);
+}
+:root[data-theme='matrix'] :is(.ui-card, .glass, .material-card) :is(.ui-list-header, .inf-section-title, .inf-section-subtitle, .gd-section-title, .svc-group-name, .al-tl-dayhead, .t-on-wallpaper) {
+  /* the same classes inside a card or sheet sit on a calm surface: no halo */
+  text-shadow: none;
+}
+:root[data-theme='matrix'] :is(.ui-ring-value, .ov-stat-value) small {
+  text-shadow: none;
+}
+
+/* rings: the arc glows like a lit phosphor trace */
+:root[data-theme='matrix'] .ui-ring-dial svg {
+  filter: drop-shadow(0 0 5px rgb(0 255 102 / 0.32));
+}
+
+/* ───────────────────────────── 3. glass and controls */
+
+/* the sidebar app icon and the iPhone "More" icon turn phosphor (the blue squircle, hue-shifted to green) */
+:root[data-theme='matrix'] :is(.shell-sb-appicon, .shell-more-node img, .shell-a2hs img) {
+  filter: hue-rotate(-72deg) saturate(1.15) brightness(0.92);
+}
+
+/* selected nav item: green-tinted fill with a faint green rim (Liquid Glass "lit from within") */
+:root[data-theme='matrix'] .shell-nav-item[aria-current='page'] {
+  box-shadow: inset 0 0 0 0.5px rgb(0 255 102 / 0.28);
+}
+:root[data-theme='matrix'] .shell-tab:is([aria-current='page'], [data-selected]) {
+  background: var(--row-selected);
+  box-shadow: inset 0 0 0 0.5px rgb(0 255 102 / 0.24);
+}
+
+/* segmented control: the thumb is a pane of green glass */
+:root[data-theme='matrix'] .ui-seg .ui-seg-thumb {
+  box-shadow:
+    inset 0 0.5px 0 rgb(160 255 195 / 0.35),
+    0 0 0 0.5px rgb(0 255 102 / 0.36),
+    0 0 16px -4px rgb(0 255 102 / 0.42);
+}
+
+/* switches: a deeper phosphor track so the thumb stays visible, with a soft bloom */
+:root[data-theme='matrix'] .ui-switch[aria-checked='true'] {
+  background: var(--matrix-green-dim);
+  box-shadow: 0 0 14px -3px rgb(0 255 102 / 0.55);
+}
+:root[data-theme='matrix'] .ui-switch::after {
+  background: var(--matrix-ink);
+}
+
+/* prominent buttons: a lit pane of tinted glass (phosphor ink, bright rim, bloom) instead of a solid neon slab */
+:root[data-theme='matrix'] .ui-btn[data-variant='prominent'] {
+  color: color-mix(in oklab, var(--_tint) 70%, #fff);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--_tint) 30%, transparent), color-mix(in srgb, var(--_tint) 17%, transparent));
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--_tint) 60%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--_tint) 50%, #fff 20%),
+    0 0 26px -8px color-mix(in srgb, var(--_tint) 80%, transparent);
+  text-shadow: 0 0 10px color-mix(in srgb, var(--_tint) 55%, transparent);
+}
+:root[data-theme='matrix'] .ui-btn[data-variant='prominent']:hover {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--_tint) 38%, transparent), color-mix(in srgb, var(--_tint) 23%, transparent));
+}
+:root[data-theme='matrix'] .shell-skip {
+  color: var(--on-accent);
+}
+/* numbered steps (Settings guides, Add to Home Screen): tinted phosphor discs instead of solid neon */
+:root[data-theme='matrix'] .shell-a2hs li::before,
+:root[data-theme='matrix'] .set-steplist > li::before {
+  color: var(--accent);
+  background: rgb(0 255 102 / 0.14);
+  box-shadow: inset 0 0 0 1px rgb(0 255 102 / 0.5);
+}
+
+/* Spotlight: the selected result is a lit row of green glass (not a solid neon slab) */
+:root[data-theme='matrix'] .spotlight-option[aria-selected='true'] {
+  color: var(--label);
+  background: linear-gradient(180deg, rgb(0 255 102 / 0.24), rgb(0 255 102 / 0.14));
+  box-shadow:
+    inset 0 0 0 1px rgb(0 255 102 / 0.5),
+    0 0 22px -8px rgb(0 255 102 / 0.7);
+}
+:root[data-theme='matrix'] .spotlight-option[aria-selected='true'] :is(.spotlight-sub, .spotlight-kind) {
+  color: var(--label-2);
+}
+
+/* search fields, pop-up buttons and segmented controls that sit straight on the wallpaper (Guests, Services, Network,
+   Tasks, Backups) are panes of glass: the blur turns a rain glyph behind the placeholder into a soft smear instead of
+   a crisp character cutting across the text, and a half-opaque layer of the solid glass colour keeps the field calm.
+   The usual --fill-3 is layered on top, so each still reads as the same filled iOS capsule (inside a card it only
+   darkens a touch). A segmented control inside a glass toolbar group keeps that group's clear track. */
+:root[data-theme='matrix'] :is(.gx-search, .svc-search, .inf-search, .inf-select, .ui-seg:not(.ui-toolbar-group > .ui-seg)) {
+  background: linear-gradient(var(--fill-3), var(--fill-3)), color-mix(in srgb, var(--glass-solid) 50%, transparent);
+  -webkit-backdrop-filter: blur(10px) saturate(1.4);
+  backdrop-filter: blur(10px) saturate(1.4);
+}
+
+/* the services launcher tiles carry their own glass rim: tint it like .glass */
+:root[data-theme='matrix'] .svc-tile::before {
+  background: var(--glass-rim-gradient);
+  opacity: var(--glass-rim-opacity);
+}
+
+/* ───────────────────────────── 4. tinted tiles (iOS "tinted" icons: a dark tile, coloured glyph and rim) */
+:root[data-theme='matrix'] .ui-card-header .ui-card-icon {
+  --_mx: var(--_icon-bg, var(--accent));
+}
+:root[data-theme='matrix'] .ui-row-icon[data-tinted] {
+  --_mx: var(--_icon-bg);
+}
+:root[data-theme='matrix'] :is(.ui-toast-icon, .inf-banner-icon) {
+  --_mx: var(--_tone);
+}
+:root[data-theme='matrix'] .shell-nodeerr .shell-nodeerr-icon {
+  --_mx: var(--status-crit);
+}
+:root[data-theme='matrix'] :is(.spotlight-glyph, .set-callout-icon) {
+  --_mx: var(--_c, var(--gray));
+}
+:root[data-theme='matrix'] .ov-hero-top .ov-hero-glyph {
+  --_mx: var(--accent);
+}
+:root[data-theme='matrix'] :is(.ui-appicon[data-monogram], .ui-appicon[data-glyph]) {
+  --_mx: var(--_c, var(--gray));
+}
+:root[data-theme='matrix']
+  :is(
+    .ui-card-header .ui-card-icon,
+    .ui-row-icon[data-tinted],
+    .ui-toast-icon,
+    .inf-banner-icon,
+    .shell-nodeerr .shell-nodeerr-icon,
+    .spotlight-glyph,
+    .set-callout-icon,
+    .ov-hero-top .ov-hero-glyph,
+    .ui-appicon[data-monogram],
+    .ui-appicon[data-glyph]
+  ) {
+  color: color-mix(in oklab, var(--_mx) 86%, #fff);
+  background: linear-gradient(160deg, color-mix(in oklab, var(--_mx) 24%, #030a06), color-mix(in oklab, var(--_mx) 12%, #020604));
+  box-shadow:
+    inset 0 0 0 0.5px color-mix(in srgb, var(--_mx) 55%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--_mx) 30%, transparent),
+    0 0 14px -5px color-mix(in srgb, var(--_mx) 60%, transparent);
+  text-shadow: none;
+}
+:root[data-theme='matrix'] .ov-hero-top .ov-hero-glyph {
+  filter: drop-shadow(0 0 10px rgb(0 255 102 / 0.18));
+}
+
+/* ───────────────────────────── accessibility */
+
+/* Reduce Transparency and Increase Contrast keep their own looks: no bloom or glow on top of them */
+:root[data-theme='matrix'][data-reduce-transparency] .ui-seg .ui-seg-thumb {
+  box-shadow: 0 0 0 0.5px rgb(0 255 102 / 0.4);
+}
+/* wallpaper-level fields: opaque (the same filled capsule over solid glass), no blur */
+:root[data-theme='matrix'][data-reduce-transparency] :is(.gx-search, .svc-search, .inf-search, .inf-select, .ui-seg:not(.ui-toolbar-group > .ui-seg)) {
+  background: linear-gradient(var(--fill-3), var(--fill-3)), var(--glass-solid);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+@media (prefers-reduced-transparency: reduce) {
+  :root[data-theme='matrix'] :is(.gx-search, .svc-search, .inf-search, .inf-select, .ui-seg:not(.ui-toolbar-group > .ui-seg)) {
+    background: linear-gradient(var(--fill-3), var(--fill-3)), var(--glass-solid);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+@media (prefers-contrast: more) {
+  :root[data-theme='matrix'] :is(.ui-pageheader-title, .ov-hero-name, .ui-ring-value, .ov-stat-value, .t-glow, .ui-btn) {
+    text-shadow: none;
+  }
+  /* no bloom, but keep the halo behind wallpaper text: it only adds contrast */
+  :root[data-theme='matrix'] .ui-pageheader .ui-pageheader-title {
+    text-shadow: var(--matrix-backplate);
+  }
+  :root[data-theme='matrix'] .ui-ring-dial svg {
+    filter: none;
+  }
+  :root[data-theme='matrix'] .ui-seg .ui-seg-thumb {
+    box-shadow: 0 0 0 1px var(--label);
+  }
+}

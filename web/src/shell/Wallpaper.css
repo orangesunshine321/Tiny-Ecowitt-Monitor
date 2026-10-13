@@ -1,6 +1,13 @@
 /*
- * Animated wallpaper (research §1.6): a slow, blurred mesh of four colour blobs that animates only transform, on its
- * own layer. Paused when the page is hidden, still under reduced motion, a calm gradient under Reduce Transparency.
+ * Animated wallpaper (research §1.6): a slow mesh of four soft colour blobs that animates only transform, on its own
+ * layer. It drifts for a while after launch, navigation and resume, then pauses (Wallpaper.tsx sets data-paused) so the
+ * compositor can go idle between updates: every frame of drift re-samples the backdrop of every glass panel above it.
+ * No filter: blur(): the radial gradients are already soft (wide falloff), and a 60px blur on four viewport-sized
+ * layers is the most expensive thing on the page. Still under reduced motion, a calm gradient under Reduce Transparency.
+ *
+ * Matrix ([data-matrix]): no blobs. A static deep-green depth gradient (two soft glows from the Matrix --wp-* tokens,
+ * so the glass has something to refract) under the digital rain canvas (MatrixRain.css). Nothing here animates: the
+ * rain is the only moving layer.
  */
 .wallpaper {
   position: fixed;
@@ -17,30 +24,29 @@
   aspect-ratio: 1;
   border-radius: 50%;
   opacity: var(--wp-blob-opacity);
-  filter: blur(60px);
   will-change: transform;
   animation: wp-drift 96s ease-in-out infinite alternate;
 }
 .wallpaper i:nth-child(1) {
-  background: radial-gradient(circle, var(--wp-1), transparent 66%);
+  background: radial-gradient(circle, var(--wp-1), color-mix(in srgb, var(--wp-1) 80%, transparent) 25%, color-mix(in srgb, var(--wp-1) 52%, transparent) 45%, color-mix(in srgb, var(--wp-1) 24%, transparent) 60%, transparent 72%);
   left: -14vmax;
   top: -20vmax;
 }
 .wallpaper i:nth-child(2) {
-  background: radial-gradient(circle, var(--wp-2), transparent 66%);
+  background: radial-gradient(circle, var(--wp-2), color-mix(in srgb, var(--wp-2) 80%, transparent) 25%, color-mix(in srgb, var(--wp-2) 52%, transparent) 45%, color-mix(in srgb, var(--wp-2) 24%, transparent) 60%, transparent 72%);
   right: -18vmax;
   top: -6vmax;
   animation-duration: 124s;
   animation-direction: alternate-reverse;
 }
 .wallpaper i:nth-child(3) {
-  background: radial-gradient(circle, var(--wp-3), transparent 66%);
+  background: radial-gradient(circle, var(--wp-3), color-mix(in srgb, var(--wp-3) 80%, transparent) 25%, color-mix(in srgb, var(--wp-3) 52%, transparent) 45%, color-mix(in srgb, var(--wp-3) 24%, transparent) 60%, transparent 72%);
   left: 12vmax;
   bottom: -30vmax;
   animation-duration: 108s;
 }
 .wallpaper i:nth-child(4) {
-  background: radial-gradient(circle, var(--wp-4), transparent 68%);
+  background: radial-gradient(circle, var(--wp-4), color-mix(in srgb, var(--wp-4) 80%, transparent) 25%, color-mix(in srgb, var(--wp-4) 52%, transparent) 45%, color-mix(in srgb, var(--wp-4) 24%, transparent) 60%, transparent 74%);
   right: 4vmax;
   bottom: -26vmax;
   animation-duration: 142s;
@@ -61,6 +67,16 @@
   background-size: 160px 160px;
   mix-blend-mode: overlay;
 }
+/* Matrix: static depth (top-left and bottom-right glows), film grain against banding, then the rain on top */
+.wallpaper-depth {
+  position: absolute;
+  inset: 0;
+  opacity: var(--wp-blob-opacity);
+  background:
+    radial-gradient(70vmax 52vmax at 8% -6%, var(--wp-1), transparent 70%),
+    radial-gradient(64vmax 50vmax at 96% 104%, var(--wp-3), transparent 70%),
+    radial-gradient(44vmax 36vmax at 78% 18%, var(--wp-2), transparent 72%);
+}
 .wallpaper[data-paused] i {
   animation-play-state: paused;
 }
@@ -73,6 +89,7 @@
   background: var(--wp-calm);
 }
 :root[data-reduce-transparency] .wallpaper i,
-:root[data-reduce-transparency] .wallpaper-noise {
+:root[data-reduce-transparency] .wallpaper-noise,
+:root[data-reduce-transparency] .wallpaper-depth {
   display: none;
 }

@@ -3,6 +3,8 @@
  * notification settings (per-kind toggles). Glyphs match the Overview attention card.
  */
 import {
+  ShieldAlert,
+  Thermometer,
   Archive,
   ArchiveX,
   Bell,
@@ -36,6 +38,9 @@ export const ALERT_KINDS: Readonly<Record<AlertKind, AlertKindInfo>> = {
   disk_health: { label: 'Disk health', description: 'SMART fails or SSD wear runs high', icon: HardDrive },
   zfs_degraded: { label: 'ZFS pool degraded', description: 'A pool loses redundancy or faults', icon: Layers },
   updates_available: { label: 'Updates available', description: 'Package updates are pending', icon: CircleArrowDown },
+  guest_disk: { label: 'Guest disk full', description: 'A filesystem inside a guest fills up', icon: HardDrive },
+  cert_expiry: { label: 'Certificate expiring', description: 'A TLS certificate expires soon', icon: ShieldAlert },
+  temperature: { label: 'Temperature', description: 'A CPU or disk runs hot', icon: Thermometer },
   test: { label: 'Test notification', description: 'Sent from Settings', icon: Bell },
 };
 

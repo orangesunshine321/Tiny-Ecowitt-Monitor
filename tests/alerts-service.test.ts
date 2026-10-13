@@ -142,6 +142,8 @@ describe('AlertService', () => {
     await vi.advanceTimersByTimeAsync(1100);
     ctx.store.set('guests', [guest(102, 'docker-media', 'stopped'), guest(110, 'dev', 'running')]);
     await vi.advanceTimersByTimeAsync(1100);
+    expect(ctx.store.get('alerts').active).toEqual([]); // confirming the stop (alerts.rules.guestStopped.afterSeconds)
+    await vi.advanceTimersByTimeAsync(180_000);
     expect(ctx.store.get('alerts').active.map((a) => a.key)).toEqual(['guest_stopped:102']);
     svc.stop();
     expect(existsSync(join(dataDir, 'alerts.json'))).toBe(true);
@@ -158,8 +160,8 @@ describe('AlertService', () => {
     // restored immediately, before any data arrives
     expect(ctx2.store.get('alerts').active.map((a) => a.key)).toEqual(['guest_stopped:102']);
     ctx2.store.set('guests', [guest(102, 'docker-media', 'stopped'), guest(110, 'dev', 'stopped')]);
-    await vi.advanceTimersByTimeAsync(1100);
-    // 102 stays active (no new event); 110 stopped while we were down and was known running → fires
+    await vi.advanceTimersByTimeAsync(1100 + 180_000);
+    // 102 stays active (no new event); 110 stopped while we were down and was known running → fires once confirmed
     expect(ctx2.store.get('alerts').active.map((a) => a.key).sort()).toEqual(['guest_stopped:102', 'guest_stopped:110']);
     expect(events.map((e) => e.key)).toEqual(['guest_stopped:110']);
     expect(send.mock.calls.length).toBe(pushes + 1);
@@ -174,12 +176,12 @@ describe('AlertService', () => {
     ctx.store.set('guests', [guest(102, 'docker-media', 'running')]);
     await vi.advanceTimersByTimeAsync(1100);
     ctx.store.set('guests', [guest(102, 'docker-media', 'stopped')]);
-    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(1100 + 180_000);
     expect(ctx.store.get('alerts').active[0]!.body).toBe('LXC docker-media (102) was running and has been stopped since 21:00.');
     ctx.store.set('guests', [guest(102, 'docker-media', 'running')]);
     await vi.advanceTimersByTimeAsync(1100);
     const recovery = JSON.parse(send.mock.calls.at(-1)![1] as string);
-    expect(recovery.notification.body).toBe('Back to normal at 21:00 after 1 s.');
+    expect(recovery.notification.body).toBe('Back to normal at 21:03 after 1 s.');
     svc.stop();
   });
 
@@ -192,7 +194,7 @@ describe('AlertService', () => {
     ctx.store.set('guests', [guest(102, 'docker-media', 'running')]);
     await vi.advanceTimersByTimeAsync(1100);
     ctx.store.set('guests', [guest(102, 'docker-media', 'stopped')]);
-    await vi.advanceTimersByTimeAsync(1100);
+    await vi.advanceTimersByTimeAsync(1100 + 180_000);
     send.mockClear();
     ctx.store.set('services', [service('jellyfin', 'down')]);
     await vi.advanceTimersByTimeAsync(1100);
@@ -200,6 +202,113 @@ describe('AlertService', () => {
     expect(ctx.store.get('alerts').active).toHaveLength(2);
     const badges = send.mock.calls.map((c: unknown[]) => JSON.parse(c[1] as string).app_badge).sort();
     expect(badges).toEqual([1, 2]);
+    svc.stop();
+  });
+});
+
+describe('AlertService: restarts and snoozes', () => {
+  const HOUR = 3600_000;
+  const DAY = 24 * HOUR;
+  const keysOf = (ctx: AppContext) => ctx.store.get('alerts').active.map((a) => a.key).sort();
+  const docker = (status: ServiceEntry['status']): ServiceEntry => ({ ...service('docker-102-jellyfin', status), name: 'jellyfin', source: 'docker', vmid: 102 });
+
+  it('a restart does not resolve and re-fire backup_stale while the backup coverage is still being listed', async () => {
+    const ctx = makeCtx(dataDir);
+    const svc = createAlertService(ctx);
+    await svc.push.subscribe({ subscription: subscription(), name: 'iPhone' });
+    svc.start();
+    const stale = { vmid: 102, name: 'docker-media', type: 'lxc' as const, lastBackup: Date.now() - 10 * DAY, notInAnyJob: false, stale: true };
+    ctx.store.set('guests', [guest(102, 'docker-media', 'running')]);
+    ctx.store.set('backups', { items: [], jobs: [], coverage: [stale] });
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(keysOf(ctx)).toEqual(['backup_stale:102']);
+    svc.stop();
+    const pushes = send.mock.calls.length;
+
+    vi.setSystemTime(Date.now() + 2 * HOUR); // restarted two hours later
+    const ctx2 = makeCtx(dataDir);
+    const events: AlertEvent[] = [];
+    ctx2.store.on('alert', (e: AlertEvent) => events.push(e));
+    const svc2 = createAlertService(ctx2);
+    svc2.start();
+    ctx2.store.set('guests', [guest(102, 'docker-media', 'running')]);
+    // the backup job list (one fast API call) arrives long before the coverage (per-storage listing)
+    const jobs = [{ id: 'backup-nightly', enabled: true, selection: 'All guests' }];
+    ctx2.store.set('backups', { items: [], jobs, coverage: [] });
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(keysOf(ctx2)).toEqual(['backup_stale:102']);
+    ctx2.store.set('backups', { items: [], jobs, coverage: [stale] });
+    await vi.advanceTimersByTimeAsync(61_000);
+    expect(keysOf(ctx2)).toEqual(['backup_stale:102']);
+    expect(events).toEqual([]);
+    expect(send.mock.calls.length).toBe(pushes);
+    svc2.stop();
+  });
+
+  it('a restart keeps alerts of discovered services until the inventory lists them again', async () => {
+    const ctx = makeCtx(dataDir);
+    const svc = createAlertService(ctx);
+    await svc.push.subscribe({ subscription: subscription(), name: 'iPhone' });
+    svc.start();
+    ctx.store.set('services', [docker('down')]);
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(keysOf(ctx)).toEqual(['service_down:docker-102-jellyfin']);
+    svc.stop();
+    const pushes = send.mock.calls.length;
+
+    const ctx2 = makeCtx(dataDir);
+    const events: AlertEvent[] = [];
+    ctx2.store.on('alert', (e: AlertEvent) => events.push(e));
+    const svc2 = createAlertService(ctx2);
+    svc2.start();
+    // configured services are published at once; discovered ones need the first inventory sweep
+    ctx2.store.set('services', [service('npm', 'up')]);
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(keysOf(ctx2)).toEqual(['service_down:docker-102-jellyfin']);
+    ctx2.store.set('inventory', {
+      '102': { vmid: 102, source: 'pct-exec', collectedAt: Date.now(), ok: true, ips: [], services: [], ports: [], containers: [] },
+    });
+    ctx2.store.set('services', [service('npm', 'up'), docker('down')]);
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(keysOf(ctx2)).toEqual(['service_down:docker-102-jellyfin']);
+    expect(events).toEqual([]);
+    expect(send.mock.calls.length).toBe(pushes);
+    svc2.stop();
+  });
+
+  it('acknowledge snoozes an alert: persisted, published, out of the badge, reminded when it runs out', async () => {
+    const ctx = makeCtx(dataDir);
+    const svc = createAlertService(ctx);
+    await svc.push.subscribe({ subscription: subscription(), name: 'iPhone' });
+    svc.start();
+    ctx.store.set('services', [service('jellyfin', 'down'), service('npm', 'down')]);
+    await vi.advanceTimersByTimeAsync(1100);
+    const id = ctx.store.get('alerts').active.find((a) => a.key === 'service_down:jellyfin')!.id;
+    const now = Date.now();
+    expect(svc.acknowledge(id, 1)).toMatchObject({ id, acknowledged: { at: now, until: now + HOUR } });
+    expect(ctx.store.get('alerts').active.find((a) => a.id === id)!.acknowledged).toEqual({ at: now, until: now + HOUR });
+    const saved = JSON.parse(readFileSync(join(dataDir, 'alerts.json'), 'utf8'));
+    expect(saved.active.find((a: { event: AlertEvent }) => a.event.id === id).event.acknowledged).toEqual({ at: now, until: now + HOUR });
+
+    send.mockClear();
+    ctx.store.set('services', [service('jellyfin', 'down'), service('npm', 'down'), service('x', 'down')]);
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(send.mock.calls[0]![1] as string).app_badge).toBe(2); // the snoozed one is not counted
+
+    expect(svc.acknowledge('no-such-alert')).toBeUndefined();
+    expect(() => svc.acknowledge(id, -1)).toThrow(expect.objectContaining({ statusCode: 400 }));
+
+    // the snooze runs out: a reminder push
+    send.mockClear();
+    await vi.advanceTimersByTimeAsync(HOUR);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(send.mock.calls[0]![1] as string).notification.title).toBe('jellyfin is down');
+    expect(ctx.store.get('alerts').active.find((a) => a.id === id)!.acknowledged).toBeUndefined();
+
+    svc.acknowledge(id);
+    expect(svc.unacknowledge(id)!.acknowledged).toBeUndefined();
+    expect(svc.unacknowledge('no-such-alert')).toBeUndefined();
     svc.stop();
   });
 });

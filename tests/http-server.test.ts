@@ -1,4 +1,5 @@
 import { generateKeyPairSync } from 'node:crypto';
+import { brotliDecompressSync, gunzipSync } from 'node:zlib';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -16,9 +17,20 @@ import type {
   PushService,
   RrdTarget,
 } from '../server/context.js';
-import { CONTENT_SECURITY_POLICY, createHostCheck, createHttpServer, deviceNameFromUserAgent, hostName, mapError, UPID_RE } from '../server/http.js';
+import {
+  buildContentSecurityPolicy,
+  CONTENT_SECURITY_POLICY,
+  createHostCheck,
+  createHttpServer,
+  deviceNameFromUserAgent,
+  hostName,
+  mapError,
+  negotiateEncoding,
+  renderProblemPage,
+  UPID_RE,
+} from '../server/http.js';
 import { Store } from '../server/state.js';
-import type { Guest, PhysicalDisk, PushDevice, PushPrefs, Timeframe, ZfsPool } from '../shared/types.js';
+import type { AlertEvent, DiagnosticsReport, Guest, PhysicalDisk, PushDevice, PushPrefs, Timeframe, ZfsPool } from '../shared/types.js';
 
 // ─────────────────────────────────────────────────────────────── fakes
 
@@ -48,15 +60,15 @@ function makeCtx(dataDir: string, over: Record<string, unknown> = {}): AppContex
 }
 
 class FakeProxmox implements ProxmoxService {
-  rrdCalls: Array<{ target: RrdTarget; timeframe: Timeframe }> = [];
+  rrdCalls: Array<{ target: RrdTarget; timeframe: Timeframe; opts?: { maxPoints?: number } }> = [];
   taskLogCalls: Array<{ upid: string; limit?: number }> = [];
   smartCalls: string[] = [];
   zfsCalls: string[] = [];
   error: unknown;
   start(): void {}
   stop(): void {}
-  async getRrd(target: RrdTarget, timeframe: Timeframe) {
-    this.rrdCalls.push({ target, timeframe });
+  async getRrd(target: RrdTarget, timeframe: Timeframe, opts?: { maxPoints?: number }) {
+    this.rrdCalls.push(opts === undefined ? { target, timeframe } : { target, timeframe, opts });
     if (this.error) throw this.error;
     return [{ time: 1_760_000_000_000, cpu: 0.25 }];
   }
@@ -197,11 +209,41 @@ beforeAll(() => {
   writeFileSync(join(webRoot, 'sw.js'), 'self.addEventListener("push", () => {});');
   writeFileSync(join(webRoot, 'manifest.webmanifest'), '{"name":"pve1"}');
   writeFileSync(join(webRoot, 'assets', 'index-AbC123.js'), 'console.log("app")');
+  writeFileSync(join(webRoot, 'assets', 'big-XyZ789.js'), BIG_JS);
 });
+
+/** A compressible static asset well above the compression threshold. */
+const BIG_JS = Array.from({ length: 2000 }, (_, i) => `export const value${i} = "pve1-dash asset line ${i}";`).join('\n');
 
 afterAll(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
+
+const ALERT: AlertEvent = {
+  id: '6f1c2a90-1b2c-4d5e-8f90-0a1b2c3d4e5f',
+  key: 'service_down:jellyfin',
+  kind: 'service_down',
+  severity: 'critical',
+  title: 'Jellyfin is down',
+  body: 'HTTP 502',
+  time: 1_760_000_000_000,
+  resolved: false,
+};
+
+class FakeAlerts implements AlertService {
+  calls: Array<{ method: string; args: unknown[] }> = [];
+  constructor(readonly push: FakePush) {}
+  start(): void {}
+  stop(): void {}
+  acknowledge(id: string, hours?: number): AlertEvent | undefined {
+    this.calls.push({ method: 'acknowledge', args: [id, hours] });
+    return id === ALERT.id ? { ...ALERT, acknowledged: { at: 1, ...(hours ? { until: 1 + hours * 3_600_000 } : {}) } } : undefined;
+  }
+  unacknowledge(id: string): AlertEvent | undefined {
+    this.calls.push({ method: 'unacknowledge', args: [id] });
+    return id === ALERT.id ? ALERT : undefined;
+  }
+}
 
 interface Harness {
   app: FastifyInstance;
@@ -209,16 +251,28 @@ interface Harness {
   proxmox: FakeProxmox;
   inventory: FakeInventory;
   push: FakePush;
+  alerts: FakeAlerts;
 }
 
-async function harness(opts: { webRoot?: string; config?: Record<string, unknown> } = {}): Promise<Harness> {
+interface HarnessOptions {
+  webRoot?: string;
+  config?: Record<string, unknown>;
+  diagnostics?: () => Promise<DiagnosticsReport>;
+  diagnosticsTimeoutMs?: number;
+}
+
+async function harness(opts: HarnessOptions = {}): Promise<Harness> {
   const ctx = makeCtx(join(tmp, 'data'), opts.config);
   const proxmox = new FakeProxmox();
   const inventory = new FakeInventory();
   const push = new FakePush();
-  const alerts: AlertService = { start() {}, stop() {}, push };
-  const app = await createHttpServer(ctx, { proxmox, inventory, alerts }, { webRoot: opts.webRoot ?? webRoot });
-  return { app, ctx, proxmox, inventory, push };
+  const alerts = new FakeAlerts(push);
+  const app = await createHttpServer(
+    ctx,
+    { proxmox, inventory, alerts, ...(opts.diagnostics ? { diagnostics: opts.diagnostics } : {}) },
+    { webRoot: opts.webRoot ?? webRoot, configPath: '/etc/pve1-dash/config.yaml', diagnosticsTimeoutMs: opts.diagnosticsTimeoutMs },
+  );
+  return { app, ctx, proxmox, inventory, push, alerts };
 }
 
 let h: Harness;
@@ -811,5 +865,491 @@ describe('helpers', () => {
     expect(mapError(Object.assign(new Error('Request body is too large'), { statusCode: 413 })).status).toBe(413);
     expect(mapError(pveError(401)).status).toBe(502);
     expect(mapError(pveError(500, undefined, 'got timeout')).body).toEqual({ error: 'Proxmox API error (HTTP 500)', detail: 'got timeout' });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────── improvement round
+
+describe('Host header: open mode and the 421 page', () => {
+  it('answers every host name when neither publicUrl nor allowedHosts is set', async () => {
+    const open = await harness({ config: { publicUrl: undefined } });
+    try {
+      for (const host of ['dash.bgreen.cloud', 'DASH.bgreen.cloud:443', 'anything.example']) {
+        expect((await open.app.inject({ url: '/api/snapshot', headers: { host } })).statusCode, host).toBe(200);
+      }
+    } finally {
+      await open.app.close();
+    }
+  });
+
+  it('accepts publicUrl with a trailing slash or a path, and allowedHosts written as URLs', async () => {
+    for (const config of [
+      { publicUrl: 'https://dash.bgreen.cloud/' },
+      { publicUrl: 'https://dash.bgreen.cloud/sub/' },
+      { publicUrl: undefined, allowedHosts: ['https://dash.bgreen.cloud/'] },
+      { publicUrl: undefined, allowedHosts: ['dash.bgreen.cloud/'] },
+    ]) {
+      const own = await harness({ config });
+      try {
+        expect((await own.app.inject({ url: '/api/snapshot', headers: { host: 'dash.bgreen.cloud' } })).statusCode, JSON.stringify(config)).toBe(200);
+        expect((await own.app.inject({ url: '/api/snapshot', headers: { host: 'other.example' } })).statusCode, JSON.stringify(config)).toBe(421);
+      } finally {
+        await own.app.close();
+      }
+    }
+  });
+
+  it('tells a browser which config line to set, and API clients get JSON', async () => {
+    const page = await h.app.inject({ url: '/', headers: { host: 'dash.bgreen.cloud', accept: 'text/html', 'x-forwarded-proto': 'https' } });
+    expect(page.statusCode).toBe(421);
+    expect(page.headers['content-type']).toMatch(/^text\/html/);
+    expect(page.headers['content-security-policy']).toBe(CONTENT_SECURITY_POLICY);
+    expect(page.body).toContain('This dashboard does not answer to &quot;dash.bgreen.cloud&quot;');
+    expect(page.body).toContain('publicUrl: &quot;https://dash.bgreen.cloud&quot;');
+    expect(page.body).toContain('allowedHosts: [&quot;dash.bgreen.cloud&quot;]');
+    expect(page.body).toContain('/etc/pve1-dash/config.yaml');
+    expect(page.body).toContain('systemctl restart pve1-dash');
+    expect(page.body).not.toContain('<script');
+
+    const api = await h.app.inject({ url: '/api/snapshot', headers: { host: 'dash.bgreen.cloud:8443', accept: 'text/html', 'x-forwarded-proto': 'https' } });
+    expect(api.statusCode).toBe(421);
+    expect(api.body).toContain('publicUrl: &quot;https://dash.bgreen.cloud:8443&quot;');
+
+    const json = await h.app.inject({ url: '/api/snapshot', headers: { host: 'dash.bgreen.cloud' } });
+    expect(json.statusCode).toBe(421);
+    expect(json.json()).toEqual({
+      error: 'Unknown host',
+      detail: 'This dashboard does not answer to "dash.bgreen.cloud". Set publicUrl: "http://dash.bgreen.cloud" (or add "dash.bgreen.cloud" to allowedHosts) in config.yaml, then restart pve1-dash.',
+    });
+  });
+
+  it('without publicUrl, a push subscription still learns the origin the page was opened on', async () => {
+    const open = await harness({ config: { publicUrl: undefined } });
+    const subscription = { endpoint: 'https://web.push.apple.com/QGx1', keys: { p256dh: 'B'.repeat(87), auth: 'A'.repeat(22) } };
+    try {
+      const sub = (origin: string) =>
+        open.app.inject({
+          method: 'POST',
+          url: '/api/push/subscribe',
+          headers: { 'content-type': 'application/json', host: 'dash.bgreen.cloud', origin, 'x-forwarded-proto': 'https' },
+          payload: JSON.stringify({ subscription, name: 'iPhone' }),
+        });
+      expect((await sub('https://dash.bgreen.cloud')).statusCode).toBe(200);
+      expect((open.push.calls.at(-1)!.args[0] as { origin?: string }).origin).toBe('https://dash.bgreen.cloud');
+      // an Origin that is not where the request went is ignored; the request's own scheme://host is used instead
+      await sub('https://evil.example');
+      expect((open.push.calls.at(-1)!.args[0] as { origin?: string }).origin).toBe('https://dash.bgreen.cloud');
+    } finally {
+      await open.app.close();
+    }
+  });
+
+  it('escapes everything it echoes', () => {
+    const html = renderProblemPage({ title: 'x <b>"y"</b>', paragraphs: ['<script>alert(1)</script>'], code: ['a & b'] });
+    expect(html).toContain('x &lt;b&gt;&quot;y&quot;&lt;/b&gt;');
+    expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+    expect(html).toContain('a &amp; b');
+    expect(html).not.toContain('<script>');
+  });
+
+  it('mentions an invalid config.yaml on the page', async () => {
+    const ctx = makeCtx(join(tmp, 'data'));
+    const push = new FakePush();
+    const app = await createHttpServer(
+      ctx,
+      { proxmox: new FakeProxmox(), inventory: new FakeInventory(), alerts: new FakeAlerts(push) },
+      { webRoot, configFallback: 'line 3: YAML syntax error' },
+    );
+    try {
+      const page = await app.inject({ url: '/', headers: { host: 'nope.example', accept: 'text/html' } });
+      expect(page.body).toContain('is currently invalid');
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('listen.allowedSources', () => {
+  let own: Harness;
+  beforeEach(async () => {
+    own = await harness({ config: { listen: { allowedSources: ['10.10.10.0/24', 'fd00:10::/64'] } } });
+  });
+  afterEach(async () => {
+    await own.app.close();
+  });
+
+  it('admits listed networks and loopback, by socket address', async () => {
+    for (const remoteAddress of ['10.10.10.5', '::ffff:10.10.10.7', 'fd00:10::5', '127.0.0.1', '::1']) {
+      expect((await own.app.inject({ url: '/api/snapshot', remoteAddress })).statusCode, remoteAddress).toBe(200);
+    }
+  });
+
+  it('refuses everything else with 403, whatever X-Forwarded-For says', async () => {
+    const res = await own.app.inject({ url: '/api/snapshot', remoteAddress: '10.10.20.5', headers: { 'x-forwarded-for': '10.10.10.5', 'x-real-ip': '10.10.10.5' } });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toEqual({ error: 'Forbidden', detail: 'connections from 10.10.20.5 are not allowed (listen.allowedSources in config.yaml)' });
+    expect(res.headers['content-security-policy']).toBe(CONTENT_SECURITY_POLICY);
+
+    const page = await own.app.inject({ url: '/', remoteAddress: '::ffff:192.168.50.9', headers: { accept: 'text/html' } });
+    expect(page.statusCode).toBe(403);
+    expect(page.body).toContain('Your connection came from 192.168.50.9');
+    expect(page.body).toContain('allowedSources');
+
+    // POSTs and the stream are covered too; /healthz stays open for monitors
+    const post = await own.app.inject({ method: 'POST', url: '/api/push/test', remoteAddress: '10.10.20.5', ...json({ id: 'd1' }) });
+    expect(post.statusCode).toBe(403);
+    expect(own.push.calls).toHaveLength(0);
+    expect((await own.app.inject({ url: '/api/stream', remoteAddress: '10.10.20.5' })).statusCode).toBe(403);
+    expect((await own.app.inject({ url: '/healthz', remoteAddress: '10.10.20.5' })).statusCode).toBe(200);
+  });
+
+  it('is checked before the Host header', async () => {
+    const res = await own.app.inject({ url: '/api/snapshot', remoteAddress: '10.10.20.5', headers: { host: 'attacker.example' } });
+    expect(res.statusCode).toBe(403);
+  });
+});
+
+describe('alert acknowledgement', () => {
+  it('acknowledges for some hours or until resolved, and unacknowledges', async () => {
+    const snooze = await h.app.inject({ method: 'POST', url: `/api/alerts/${ALERT.id}/ack`, ...json({ hours: 8 }) });
+    expect(snooze.statusCode).toBe(200);
+    expect(snooze.json()).toMatchObject({ id: ALERT.id, acknowledged: { at: 1, until: 1 + 8 * 3_600_000 } });
+    const forever = await h.app.inject({ method: 'POST', url: `/api/alerts/${ALERT.id}/ack` });
+    expect(forever.statusCode).toBe(200);
+    const unack = await h.app.inject({ method: 'POST', url: `/api/alerts/${ALERT.id}/unack` });
+    expect(unack.statusCode).toBe(200);
+    expect(unack.json().acknowledged).toBeUndefined();
+    expect(h.alerts.calls).toEqual([
+      { method: 'acknowledge', args: [ALERT.id, 8] },
+      { method: 'acknowledge', args: [ALERT.id, undefined] },
+      { method: 'unacknowledge', args: [ALERT.id] },
+    ]);
+  });
+
+  it('answers 404 for alerts that are not active and validates the input', async () => {
+    const gone = await h.app.inject({ method: 'POST', url: '/api/alerts/a-resolved-one/ack', ...json({ hours: 1 }) });
+    expect(gone.statusCode).toBe(404);
+    expect(gone.json().error).toBe('unknown alert');
+    expect((await h.app.inject({ method: 'POST', url: '/api/alerts/nope/unack' })).statusCode).toBe(404);
+    for (const body of [{ hours: 0 }, { hours: -1 }, { hours: 721 }, { hours: '8' }]) {
+      const res = await h.app.inject({ method: 'POST', url: `/api/alerts/${ALERT.id}/ack`, ...json(body) });
+      expect(res.statusCode, JSON.stringify(body)).toBe(400);
+    }
+    expect((await h.app.inject({ method: 'POST', url: `/api/alerts/${encodeURIComponent('a b')}/ack` })).statusCode).toBe(400);
+    expect((await h.app.inject({ method: 'GET', url: `/api/alerts/${ALERT.id}/ack` })).statusCode).toBe(404);
+    expect(h.alerts.calls.map((c) => c.args[0])).toEqual(['a-resolved-one', 'nope']);
+  });
+});
+
+describe('GET /api/diagnostics', () => {
+  const report = (n: number): DiagnosticsReport => ({
+    generatedAt: n,
+    appVersion: '0.0.0-test',
+    checks: [{ id: 'pve.auth', group: 'proxmox', title: 'API token', status: 'ok', detail: `run ${n}` }],
+  });
+
+  it('is 404 when the server has no diagnostics', async () => {
+    const res = await h.app.inject('/api/diagnostics');
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('caches a run for 15 s, shares concurrent runs and appends the HTTP checks', async () => {
+    let runs = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const own = await harness({
+      diagnostics: async () => {
+        runs++;
+        await gate;
+        return report(runs);
+      },
+    });
+    try {
+      const t0 = Date.now();
+      const now = vi.spyOn(Date, 'now').mockReturnValue(t0);
+      const pending = [own.app.inject('/api/diagnostics'), own.app.inject('/api/diagnostics')];
+      await new Promise((r) => setTimeout(r, 20));
+      release();
+      const [a, b] = await Promise.all(pending);
+      expect(runs).toBe(1);
+      expect(a!.statusCode).toBe(200);
+      expect(a!.headers['cache-control']).toBe('no-store');
+      const body = a!.json() as DiagnosticsReport;
+      expect(body.checks[0]).toEqual(report(1).checks[0]);
+      expect(body.checks.map((c) => c.id)).toEqual(['pve.auth', 'http.hosts']);
+      expect(b!.json().checks[0].detail).toBe('run 1');
+
+      now.mockReturnValue(t0 + 14_000);
+      expect((await own.app.inject('/api/diagnostics')).json().checks[0].detail).toBe('run 1');
+      now.mockReturnValue(t0 + 15_001);
+      expect((await own.app.inject('/api/diagnostics')).json().checks[0].detail).toBe('run 2');
+    } finally {
+      await own.app.close();
+    }
+  });
+
+  it('does not cache failures and gives up waiting after the timeout', async () => {
+    let fail = true;
+    const own = await harness({
+      diagnosticsTimeoutMs: 50,
+      diagnostics: async () => {
+        if (fail) throw new Error('boom');
+        return new Promise<DiagnosticsReport>(() => {}); // never settles
+      },
+    });
+    try {
+      expect((await own.app.inject('/api/diagnostics')).statusCode).toBe(500);
+      fail = false;
+      const slow = await own.app.inject('/api/diagnostics');
+      expect(slow.statusCode).toBe(504);
+      expect(slow.json().error).toBe('diagnostics timed out');
+    } finally {
+      await own.app.close();
+    }
+  });
+
+  it('reports refused host names, open host mode and how the request arrived', async () => {
+    const diagnostics = async () => report(1);
+    const strict = await harness({ diagnostics });
+    try {
+      await strict.app.inject({ url: '/', headers: { host: 'dash.bgreen.cloud' } });
+      const viaProxy = (
+        await strict.app.inject({
+          url: '/api/diagnostics',
+          remoteAddress: '10.10.10.3',
+          headers: { host: 'dash.home.lan', 'x-forwarded-for': '10.10.10.50', 'x-forwarded-proto': 'https' },
+        })
+      ).json() as DiagnosticsReport;
+      const hosts = viaProxy.checks.find((c) => c.id === 'http.hosts')!;
+      expect(hosts.status).toBe('warn');
+      expect(hosts.detail).toContain('"dash.bgreen.cloud"');
+      expect(hosts.fix).toContain('publicUrl: "https://dash.bgreen.cloud"');
+      expect(viaProxy.checks.find((c) => c.id === 'http.request')).toMatchObject({ status: 'ok', detail: expect.stringContaining('HTTPS through a reverse proxy (10.10.10.3)') });
+
+      const plain = (await strict.app.inject({ url: '/api/diagnostics', remoteAddress: '10.10.10.50', headers: { host: '10.10.10.60:8080' } })).json() as DiagnosticsReport;
+      expect(plain.checks.find((c) => c.id === 'http.request')).toMatchObject({ status: 'warn', fix: 'Open https://dash.home.lan instead.' });
+
+      const noProto = (await strict.app.inject({ url: '/api/diagnostics', remoteAddress: '10.10.10.3', headers: { 'x-forwarded-for': '10.10.10.50' } })).json() as DiagnosticsReport;
+      expect(noProto.checks.find((c) => c.id === 'http.request')?.detail).toContain('does not send X-Forwarded-Proto');
+
+      // the doctor asks over loopback without a proxy: no "this connection" check
+      const local = (await strict.app.inject({ url: '/api/diagnostics' })).json() as DiagnosticsReport;
+      expect(local.checks.some((c) => c.id === 'http.request')).toBe(false);
+    } finally {
+      await strict.app.close();
+    }
+
+    const open = await harness({ diagnostics, config: { publicUrl: undefined } });
+    try {
+      const body = (await open.app.inject('/api/diagnostics')).json() as DiagnosticsReport;
+      expect(body.checks.find((c) => c.id === 'http.hosts')).toMatchObject({ status: 'warn', title: 'Host name protection' });
+    } finally {
+      await open.app.close();
+    }
+
+    const sources = await harness({ diagnostics, config: { listen: { allowedSources: ['10.10.10.0/24'] } } });
+    try {
+      await sources.app.inject({ url: '/', remoteAddress: '10.10.30.7' });
+      const body = (await sources.app.inject('/api/diagnostics')).json() as DiagnosticsReport;
+      expect(body.checks.find((c) => c.id === 'http.sources')).toMatchObject({ status: 'warn', detail: expect.stringContaining('10.10.30.7') });
+    } finally {
+      await sources.app.close();
+    }
+  });
+});
+
+describe('RRD maxPoints', () => {
+  it('passes maxPoints through, caches per value and validates the range', async () => {
+    await h.app.inject('/api/rrd/node?timeframe=day&maxPoints=200');
+    await h.app.inject('/api/rrd/node?timeframe=day&maxPoints=200');
+    await h.app.inject('/api/rrd/node?timeframe=day');
+    expect(h.proxmox.rrdCalls).toEqual([
+      { target: { kind: 'node' }, timeframe: 'day', opts: { maxPoints: 200 } },
+      { target: { kind: 'node' }, timeframe: 'day' },
+    ]);
+    h.ctx.store.set('guests', [guest(101)]);
+    expect((await h.app.inject('/api/rrd/guest/101?timeframe=week&maxPoints=2000')).statusCode).toBe(200);
+    expect(h.proxmox.rrdCalls.at(-1)).toEqual({ target: { kind: 'guest', vmid: 101 }, timeframe: 'week', opts: { maxPoints: 2000 } });
+    for (const bad of ['49', '2001', 'abc', '-5', '1e3']) {
+      expect((await h.app.inject(`/api/rrd/node?maxPoints=${bad}`)).statusCode, bad).toBe(400);
+    }
+  });
+});
+
+describe('push prefs: quiet hours and new alert kinds', () => {
+  it('accepts quiet hours, null to turn them off, and the new kinds', async () => {
+    const on = await h.app.inject({ method: 'POST', url: '/api/push/prefs', ...json({ id: 'd1', prefs: { quietHours: { start: '22:00', end: '07:00' } } }) });
+    expect(on.statusCode).toBe(200);
+    expect(h.push.calls.at(-1)!.args[1]).toEqual({ quietHours: { start: '22:00', end: '07:00', allowCritical: true } });
+
+    await h.app.inject({
+      method: 'POST',
+      url: '/api/push/prefs',
+      ...json({ id: 'd1', prefs: { quietHours: { start: '23:30', end: '06:15', allowCritical: false, timeZone: 'Europe/Berlin' } } }),
+    });
+    expect(h.push.calls.at(-1)!.args[1]).toEqual({ quietHours: { start: '23:30', end: '06:15', allowCritical: false, timeZone: 'Europe/Berlin' } });
+
+    await h.app.inject({ method: 'POST', url: '/api/push/prefs', ...json({ id: 'd1', prefs: { quietHours: null } }) });
+    const off = h.push.calls.at(-1)!.args[1] as Partial<PushPrefs>;
+    expect('quietHours' in off).toBe(true);
+    expect(off.quietHours).toBeUndefined();
+
+    const kinds = await h.app.inject({ method: 'POST', url: '/api/push/prefs', ...json({ id: 'd1', prefs: { kinds: ['guest_disk', 'cert_expiry', 'temperature'] } }) });
+    expect(kinds.statusCode).toBe(200);
+
+    for (const quietHours of [{ start: '25:00', end: '07:00' }, { start: '7:00', end: '08:00' }, { start: '22:00' }, { start: '22:00', end: '07:00', timeZone: 'Mars/Olympus' }]) {
+      const res = await h.app.inject({ method: 'POST', url: '/api/push/prefs', ...json({ id: 'd1', prefs: { quietHours } }) });
+      expect(res.statusCode, JSON.stringify(quietHours)).toBe(400);
+    }
+  });
+});
+
+describe('CSP img-src for configured icon URLs', () => {
+  it('adds the origins of absolute icon URLs from services.items and services.overrides', async () => {
+    const own = await harness({
+      config: {
+        services: {
+          items: [
+            { name: 'A', icon: 'https://icons.example.com/a.png' },
+            { name: 'B', icon: 'jellyfin' },
+            { name: 'C', icon: 'https://icons.example.com/c.svg' },
+          ],
+          overrides: { x: { icon: 'http://10.10.10.9:8080/x.png' } },
+        },
+      },
+    });
+    try {
+      const expected = buildContentSecurityPolicy(['https://icons.example.com', 'http://10.10.10.9:8080']);
+      expect(expected).toContain("img-src 'self' data: blob: https://cdn.jsdelivr.net https://icons.example.com http://10.10.10.9:8080;");
+      expect((await own.app.inject('/healthz')).headers['content-security-policy']).toBe(expected);
+      expect((await own.app.inject('/')).headers['content-security-policy']).toBe(expected);
+    } finally {
+      await own.app.close();
+    }
+    expect(buildContentSecurityPolicy()).toBe(CONTENT_SECURITY_POLICY);
+  });
+});
+
+describe('response compression', () => {
+  const bigGuests = () => Array.from({ length: 40 }, (_, i) => guest(100 + i));
+
+  it('negotiates br, then gzip, honouring q=0', () => {
+    expect(negotiateEncoding('gzip, deflate, br')).toBe('br');
+    expect(negotiateEncoding('gzip, deflate')).toBe('gzip');
+    expect(negotiateEncoding('br;q=0, gzip;q=0.5')).toBe('gzip');
+    expect(negotiateEncoding('*')).toBe('br');
+    expect(negotiateEncoding('identity')).toBeUndefined();
+    expect(negotiateEncoding('gzip;q=0')).toBeUndefined();
+    expect(negotiateEncoding(undefined)).toBeUndefined();
+  });
+
+  it('compresses JSON API responses and leaves small or non-accepting ones alone', async () => {
+    h.ctx.store.set('guests', bigGuests());
+    const br = await h.app.inject({ url: '/api/snapshot', headers: { 'accept-encoding': 'gzip, deflate, br' } });
+    expect(br.statusCode).toBe(200);
+    expect(br.headers['content-encoding']).toBe('br');
+    expect(br.headers['vary']).toBe('Accept-Encoding');
+    expect(br.headers['content-type']).toMatch(/^application\/json/);
+    const decoded = JSON.parse(brotliDecompressSync(br.rawPayload).toString('utf8'));
+    expect(decoded.guests).toHaveLength(40);
+    expect(Number(br.headers['content-length'])).toBe(br.rawPayload.length);
+
+    const gz = await h.app.inject({ url: '/api/snapshot', headers: { 'accept-encoding': 'gzip' } });
+    expect(gz.headers['content-encoding']).toBe('gzip');
+    expect(JSON.parse(gunzipSync(gz.rawPayload).toString('utf8')).guests).toHaveLength(40);
+
+    const plain = await h.app.inject('/api/snapshot');
+    expect(plain.headers['content-encoding']).toBeUndefined();
+    expect(plain.json().guests).toHaveLength(40);
+
+    const small = await h.app.inject({ url: '/healthz', headers: { 'accept-encoding': 'br' } });
+    expect(small.headers['content-encoding']).toBeUndefined();
+    expect(small.json()).toEqual({ ok: true });
+  });
+
+  it('compresses static files once per build (ETag) and keeps HEAD, 304 and ranges uncompressed', async () => {
+    const first = await h.app.inject({ url: '/assets/big-XyZ789.js', headers: { 'accept-encoding': 'br' } });
+    expect(first.statusCode).toBe(200);
+    expect(first.headers['content-encoding']).toBe('br');
+    expect(first.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+    expect(first.headers['accept-ranges']).toBeUndefined();
+    expect(brotliDecompressSync(first.rawPayload).toString('utf8')).toBe(BIG_JS);
+    expect(first.rawPayload.length).toBeLessThan(BIG_JS.length / 4);
+    expect(Number(first.headers['content-length'])).toBe(first.rawPayload.length);
+    const second = await h.app.inject({ url: '/assets/big-XyZ789.js', headers: { 'accept-encoding': 'br' } });
+    expect(second.rawPayload.equals(first.rawPayload)).toBe(true);
+
+    const gz = await h.app.inject({ url: '/assets/big-XyZ789.js', headers: { 'accept-encoding': 'gzip' } });
+    expect(gunzipSync(gz.rawPayload).toString('utf8')).toBe(BIG_JS);
+
+    const head = await h.app.inject({ method: 'HEAD', url: '/assets/big-XyZ789.js', headers: { 'accept-encoding': 'br' } });
+    expect(head.headers['content-encoding']).toBeUndefined();
+
+    const etag = first.headers['etag'] as string;
+    const notModified = await h.app.inject({ url: '/assets/big-XyZ789.js', headers: { 'accept-encoding': 'br', 'if-none-match': etag } });
+    expect(notModified.statusCode).toBe(304);
+    expect(notModified.headers['content-encoding']).toBeUndefined();
+
+    const range = await h.app.inject({ url: '/assets/big-XyZ789.js', headers: { 'accept-encoding': 'br', range: 'bytes=0-9' } });
+    expect(range.statusCode).toBe(206);
+    expect(range.headers['content-encoding']).toBeUndefined();
+    expect(range.body).toBe(BIG_JS.slice(0, 10));
+
+    const plain = await h.app.inject('/assets/big-XyZ789.js');
+    expect(plain.headers['content-encoding']).toBeUndefined();
+    expect(plain.body).toBe(BIG_JS);
+  });
+
+  it('compresses the SPA index for every client-side route', async () => {
+    const root = join(tmp, 'bigindex');
+    mkdirSync(root, { recursive: true });
+    const index = `<!doctype html><title>APP</title>${'<meta name="x" content="padding padding padding">'.repeat(60)}`;
+    writeFileSync(join(root, 'index.html'), index);
+    const own = await harness({ webRoot: root });
+    try {
+      for (const url of ['/', '/guests/101', '/board']) {
+        const res = await own.app.inject({ url, headers: { accept: 'text/html', 'accept-encoding': 'br' } });
+        expect(res.statusCode, url).toBe(200);
+        expect(res.headers['content-encoding'], url).toBe('br');
+        expect(res.headers['cache-control'], url).toBe('no-cache');
+        expect(brotliDecompressSync(res.rawPayload).toString('utf8'), url).toBe(index);
+      }
+    } finally {
+      await own.app.close();
+    }
+  });
+
+  it('never compresses the guest setup script', async () => {
+    h.inventory.key = ed25519PublicKeyLine();
+    const res = await h.app.inject({ url: '/setup/guest.sh', headers: { 'accept-encoding': 'gzip, br' } });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-encoding']).toBeUndefined();
+    expect(res.body.startsWith('#!/bin/sh\n')).toBe(true);
+  });
+
+  it('serves compressed files correctly over a real socket', async () => {
+    await h.app.listen({ host: '127.0.0.1', port: 0 });
+    const port = (h.app.server.address() as AddressInfo).port;
+    const body = await new Promise<{ encoding?: string; data: Buffer }>((resolve, reject) => {
+      http
+        .get({ host: '127.0.0.1', port, path: '/assets/big-XyZ789.js', headers: { 'accept-encoding': 'br' } }, (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => resolve({ encoding: res.headers['content-encoding'], data: Buffer.concat(chunks) }));
+        })
+        .on('error', reject);
+    });
+    expect(body.encoding).toBe('br');
+    expect(brotliDecompressSync(body.data).toString('utf8')).toBe(BIG_JS);
+  });
+});
+
+describe('GET /api/snapshot', () => {
+  it('is the store snapshot, built from the cached section JSON', async () => {
+    h.ctx.store.set('guests', [guest(101), guest(102)]);
+    h.ctx.store.set('hostInventory', { collectedAt: 1, ok: true, temps: [], sensorsAvailable: false });
+    const body = (await h.app.inject('/api/snapshot')).json();
+    const expected = JSON.parse(JSON.stringify(h.ctx.store.snapshot()));
+    expect({ ...body, meta: { ...body.meta, serverTime: 0 } }).toEqual({ ...expected, meta: { ...expected.meta, serverTime: 0 } });
   });
 });

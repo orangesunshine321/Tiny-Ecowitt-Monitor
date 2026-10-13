@@ -1,6 +1,5 @@
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, Stethoscope } from 'lucide-react';
 import { useRef, useState } from 'react';
-import type { CollectorStatus } from '../../../shared/types';
 import { IconButton } from '../components/IconButton';
 import { Popover } from '../components/Popover';
 import { RelativeTime } from '../components/RelativeTime';
@@ -8,49 +7,13 @@ import { StatusDot } from '../components/StatusDot';
 import type { Tone } from '../components/status';
 import { formatDuration } from '../format';
 import { useServerNow } from '../hooks/useNow';
-import { reconnectNow, useConnection, useSnapshot, type ConnectionState } from '../store';
+import { navigate } from '../router';
+import { reconnectNow, useConnection, useSnapshot } from '../store';
+import { DIAGNOSTICS_PATH, collectorEvery, collectorLabel, collectorTone, describeNodeError, liveState, statusPollTone } from './freshness';
 import './LiveIndicator.css';
 
-/** Friendly names for collectors (server/proxmox, inventory, health). Unknown names are shown capitalised. */
-const COLLECTOR_LABEL: Record<string, string> = {
-  status: 'Node status',
-  rrd: 'History (RRD)',
-  tasks: 'Tasks',
-  storage: 'Storage',
-  network: 'Network',
-  updates: 'Package updates',
-  backupJobs: 'Backup jobs',
-  backups: 'Backups',
-  zfs: 'ZFS pools',
-  disks: 'Disks & SMART',
-  hostInfo: 'Host info',
-  guestDetails: 'Guest details',
-  health: 'Health checks',
-  inventory: 'Apps & services',
-  sensors: 'Temperatures',
-};
-
-export function collectorLabel(name: string): string {
-  return COLLECTOR_LABEL[name] ?? name.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, (c) => c.toUpperCase());
-}
-
-/** Freshness of one collector: ok within 2× its interval, warn when older, crit when the last attempt failed. */
-export function collectorTone(c: CollectorStatus, now: number): Tone {
-  const failedLast = c.lastErrorAt !== undefined && (c.lastSuccess === undefined || c.lastErrorAt > c.lastSuccess);
-  if (failedLast) return 'crit';
-  if (c.lastSuccess === undefined) return 'off';
-  return now - c.lastSuccess > c.intervalSec * 2000 + 5000 ? 'warn' : 'ok';
-}
-
-/** Overall indicator state from the stream, the node and the status collector. */
-export function liveState(conn: ConnectionState, nodeOnline: boolean, statusTone: Tone | undefined): { tone: Tone; label: string } {
-  if (conn === 'offline') return { tone: 'crit', label: 'Offline' };
-  if (conn === 'connecting') return { tone: 'off', label: 'Connecting' };
-  if (conn === 'stale') return { tone: 'warn', label: 'Stale' };
-  if (!nodeOnline) return { tone: 'crit', label: 'Node offline' };
-  if (statusTone === 'warn' || statusTone === 'crit') return { tone: 'warn', label: 'Stale' };
-  return { tone: 'ok', label: 'Live' };
-}
+// The pure helpers live in freshness.ts (unit-tested); re-exported for existing imports.
+export { collectorEvery, collectorLabel, collectorTone, liveState } from './freshness';
 
 /**
  * Toolbar Live indicator: green pulsing when the stream is connected and the node online, amber when data is stale
@@ -61,10 +24,18 @@ export function LiveIndicator() {
   const [open, setOpen] = useState(false);
   const conn = useConnection();
   const now = useServerNow(5_000);
-  const node = useSnapshot((s) => ({ online: s.node.online, error: s.node.error, name: s.meta.title || s.node.node, lastUpdated: s.node.lastUpdated }));
+  const node = useSnapshot((s) => ({
+    online: s.node.online,
+    error: s.node.error,
+    errorKind: s.node.errorKind,
+    errorHint: s.node.errorHint,
+    name: s.meta.title || s.node.node,
+    lastUpdated: s.node.lastUpdated,
+  }));
   const collectors = useSnapshot((s) => s.meta.collectors, Object.is);
   const status = collectors.find((c) => c.name === 'status');
-  const state = liveState(conn.connection, node.online, status ? collectorTone(status, now) : undefined);
+  const state = liveState(conn.connection, node.online, statusPollTone(node, status, now), node);
+  const nodeError = describeNodeError(node);
   const sorted = [...collectors].sort((a, b) => collectorLabel(a.name).localeCompare(collectorLabel(b.name)));
 
   return (
@@ -78,7 +49,8 @@ export function LiveIndicator() {
         aria-label={`Connection: ${state.label}. Show data freshness`}
         onClick={() => setOpen((o) => !o)}
       >
-        <StatusDot tone={state.tone} pulse={state.tone === 'ok'} size={9} />
+        {/* re-keyed per state so the dot pulses a few times on each change, then holds still */}
+        <StatusDot key={state.label} tone={state.tone} pulse={state.tone === 'ok'} size={9} />
         <span className="shell-live-label">{state.label}</span>
       </button>
       <Popover open={open} onClose={() => setOpen(false)} anchorRef={ref} ariaLabel="Data freshness" width={340}>
@@ -86,7 +58,7 @@ export function LiveIndicator() {
           <div className="shell-fresh-head">
             <StatusDot tone={state.tone} size={10} />
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="shell-fresh-title">{state.label === 'Live' ? `${node.name} is live` : state.label}</div>
+              <div className="shell-fresh-title">{state.label === 'Live' ? `${node.name} is live` : nodeError && conn.connection === 'live' ? nodeError.title : state.label}</div>
               <div className="shell-fresh-sub">
                 {conn.sample
                   ? 'Sample data (development)'
@@ -97,18 +69,43 @@ export function LiveIndicator() {
             </div>
             <IconButton icon={<RefreshCw size={15} strokeWidth={2.3} />} label="Reconnect now" size="small" variant="gray" onClick={() => reconnectNow()} />
           </div>
-          {!node.online && node.error && <p className="shell-fresh-err" style={{ padding: '0 4px 8px' }}>{node.error}</p>}
+          {nodeError && (
+            <div className="shell-fresh-node">
+              {nodeError.detail && <p className="shell-fresh-err">{nodeError.detail}</p>}
+              {nodeError.hint && <p className="shell-fresh-hint">{nodeError.hint}</p>}
+              <button
+                type="button"
+                className="shell-fresh-link"
+                onClick={() => {
+                  setOpen(false);
+                  navigate(DIAGNOSTICS_PATH);
+                }}
+              >
+                <Stethoscope size={14} strokeWidth={2.2} aria-hidden="true" />
+                Open Diagnostics
+              </button>
+            </div>
+          )}
           <ul className="shell-fresh-list" aria-label="Collectors">
             {sorted.length === 0 && <li className="shell-fresh-row"><span /><span className="t-label-2">No collector has reported yet.</span><span /></li>}
             {sorted.map((c) => {
               const tone = collectorTone(c, now);
+              const every = collectorEvery(c, (sec) => formatDuration(sec, { units: 1 }));
               return (
                 <li key={c.name} className="shell-fresh-row">
                   <StatusDot tone={tone} size={7} label={tone === 'ok' ? 'fresh' : tone === 'warn' ? 'stale' : tone === 'crit' ? 'failing' : 'waiting'} />
                   <span>
-                    {collectorLabel(c.name)} <span className="shell-fresh-when">· every {formatDuration(c.intervalSec, { units: 1 })}</span>
+                    {collectorLabel(c.name)}
+                    {every && <span className="shell-fresh-when"> · {every}</span>}
                   </span>
-                  {c.lastSuccess ? <RelativeTime time={c.lastSuccess} /> : <span className="shell-fresh-when">never</span>}
+                  {c.lastSuccess ? (
+                    <RelativeTime time={c.lastSuccess} />
+                  ) : !every && c.lastErrorAt ? (
+                    // event-driven (config): it never "succeeds", so show when it reported
+                    <RelativeTime time={c.lastErrorAt} />
+                  ) : (
+                    <span className="shell-fresh-when">never</span>
+                  )}
                   {tone === 'crit' && c.lastError && <span className="shell-fresh-err">{c.lastError}</span>}
                 </li>
               );

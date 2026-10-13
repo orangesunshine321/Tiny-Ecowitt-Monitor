@@ -15,19 +15,10 @@
     0 1px 2px rgb(0 0 0 / 0.08),
     0 2px 8px -2px rgb(0 0 0 / 0.08);
 }
-:root[data-theme='dark'] .ui-appicon:not([data-monogram]):not([data-glyph]) {
-  background: linear-gradient(180deg, #f2f2f6, #dedee4);
-  box-shadow:
-    0 0 0 0.5px rgb(255 255 255 / 0.12),
-    0 2px 8px -2px rgb(0 0 0 / 0.5);
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .ui-appicon:not([data-monogram]):not([data-glyph]) {
-    background: linear-gradient(180deg, #f2f2f6, #dedee4);
-    box-shadow:
-      0 0 0 0.5px rgb(255 255 255 / 0.12),
-      0 2px 8px -2px rgb(0 0 0 / 0.5);
-  }
+/* the light tile behind brand logos: per theme in tokens.css (--appicon-tile, --appicon-tile-shadow) */
+.ui-appicon:not([data-monogram]):not([data-glyph]) {
+  background: var(--appicon-tile);
+  box-shadow: var(--appicon-tile-shadow);
 }
 .ui-appicon img {
   width: 72%;

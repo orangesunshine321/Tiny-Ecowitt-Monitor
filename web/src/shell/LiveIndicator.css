@@ -86,3 +86,32 @@
   font-size: var(--fs-footnote);
   color: var(--label-2);
 }
+.shell-fresh-node {
+  display: grid;
+  gap: 6px;
+  padding: 0 4px 10px;
+}
+.shell-fresh-node .shell-fresh-err {
+  margin: 0;
+}
+.shell-fresh-hint {
+  margin: 0;
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  color: var(--label);
+  overflow-wrap: anywhere;
+}
+.shell-fresh-link {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 2px;
+  font-size: var(--fs-subhead);
+  font-weight: 600;
+  color: var(--accent);
+}
+.shell-fresh-link:hover {
+  text-decoration: underline;
+}

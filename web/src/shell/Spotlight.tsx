@@ -123,6 +123,7 @@ function SpotlightPanel() {
             <input
               ref={input}
               className="spotlight-input"
+              data-keep-font=""
               type="search"
               placeholder={bp === 'iphone' ? 'Search' : 'Search guests, services, containers, pages'}
               value={query}
@@ -209,7 +210,7 @@ function Glyph({ item }: { item: SpotlightItem }) {
   const nav = NAV.find((x) => x.id === item.pageId);
   const Icon = nav?.icon ?? (item.kind === 'page' ? AppWindow : Monitor);
   return (
-    <span className="spotlight-glyph" style={{ '--_c': 'var(--blue)' } as CSSProperties}>
+    <span className="spotlight-glyph" style={{ '--_c': 'var(--accent)' } as CSSProperties}>
       <Icon strokeWidth={2} aria-hidden="true" />
     </span>
   );

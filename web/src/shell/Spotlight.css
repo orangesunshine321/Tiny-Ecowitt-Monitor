@@ -10,16 +10,8 @@
 .spotlight-scrim {
   position: absolute;
   inset: 0;
-  background: rgb(0 0 0 / 0.14);
+  background: var(--spotlight-scrim); /* per theme in tokens.css */
   animation: shell-fade 200ms ease both;
-}
-:root[data-theme='dark'] .spotlight-scrim {
-  background: rgb(0 0 0 / 0.36);
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .spotlight-scrim {
-    background: rgb(0 0 0 / 0.36);
-  }
 }
 .spotlight {
   --glass-radius: 26px;

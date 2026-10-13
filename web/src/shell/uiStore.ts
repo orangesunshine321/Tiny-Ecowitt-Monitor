@@ -17,6 +17,8 @@ interface ShellUiState {
   /** iPhone: the "More" sheet */
   moreOpen: boolean;
   spotlightOpen: boolean;
+  /** the keyboard shortcuts sheet ("?") */
+  shortcutsOpen: boolean;
   header: HeaderInfo | null;
   /** the large title scrolled out of view */
   collapsed: boolean;
@@ -30,6 +32,7 @@ export const useShellUi = create<ShellUiState>(() => ({
   sidebarOpen: false,
   moreOpen: false,
   spotlightOpen: false,
+  shortcutsOpen: false,
   header: null,
   collapsed: false,
   toolbarSlot: null,
@@ -42,6 +45,7 @@ export const shellUi = {
   setMoreOpen: (moreOpen: boolean) => useShellUi.setState({ moreOpen }),
   setSpotlightOpen: (spotlightOpen: boolean) => useShellUi.setState({ spotlightOpen }),
   toggleSpotlight: () => useShellUi.setState((s) => ({ spotlightOpen: !s.spotlightOpen })),
+  setShortcutsOpen: (shortcutsOpen: boolean) => useShellUi.setState({ shortcutsOpen }),
   setHeader: (header: HeaderInfo | null) => useShellUi.setState({ header }),
   setCollapsed: (collapsed: boolean) => useShellUi.setState((s) => (s.collapsed === collapsed ? s : { collapsed })),
   setToolbarSlot: (toolbarSlot: HTMLElement | null) => useShellUi.setState({ toolbarSlot }),

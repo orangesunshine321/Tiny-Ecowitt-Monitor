@@ -34,7 +34,9 @@ export interface AddToHomeScreenHintProps {
  */
 export function AddToHomeScreenHint({ force, reason = 'Notifications on iPhone and iPad work only in the Home Screen app.', className }: AddToHomeScreenHintProps) {
   const needs = useNeedsHomeScreenInstall();
-  if (!needs && !force) return null;
+  // Over plain HTTP a Home Screen app can't get push or a service worker: Settings explains "open the HTTPS address"
+  // instead, so don't suggest installing from here.
+  if (!force && (!needs || (typeof window !== 'undefined' && !window.isSecureContext))) return null;
   return (
     <div className={`shell-a2hs ${className ?? ''}`}>
       <img src="/icons/apple-touch-icon.png" alt="" />

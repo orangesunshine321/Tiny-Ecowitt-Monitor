@@ -3,6 +3,8 @@
  * tests/web-overview-attention.test.ts.
  */
 import type { Guest, ServiceEntry, ServiceStatus, TempReading } from '../../../../shared/types';
+import { plural } from '../../format';
+import type { GuestsUpdateSummary } from '../guests/guestUtil';
 
 // ───────────────────────────────────────────────────────────── departures
 
@@ -17,6 +19,27 @@ export function departureOrder(services: readonly ServiceEntry[]): ServiceEntry[
   );
 }
 
+/**
+ * The services starred on this device (D49), in the order they were starred; ids that no longer exist are skipped.
+ * At most `max`.
+ */
+export function favouriteServices(services: readonly ServiceEntry[], favourites: readonly string[], max = 12): ServiceEntry[] {
+  if (!favourites.length) return [];
+  const byId = new Map(services.map((s) => [s.id, s] as const));
+  const out: ServiceEntry[] = [];
+  for (const id of favourites) {
+    const s = byId.get(id);
+    if (s && !out.includes(s)) out.push(s);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+/** A launcher URL the browser can open (http/https only). */
+export function openableUrl(url: string | undefined): string | undefined {
+  return url && /^https?:\/\//i.test(url) ? url : undefined;
+}
+
 // ───────────────────────────────────────────────────────────── guests
 
 /** Running guests with the highest CPU use (non-templates), at most `n`. */
@@ -25,6 +48,16 @@ export function topByCpu(guests: readonly Guest[], n = 5): Guest[] {
     .filter((g) => g.status === 'running' && !g.template)
     .sort((a, b) => b.cpu - a.cpu || a.vmid - b.vmid)
     .slice(0, n);
+}
+
+// ───────────────────────────────────────────────────────────── updates inside guests
+
+/** "5 guests have updates · 2 need a reboot" (empty when there is nothing pending). */
+export function updatesLine(u: GuestsUpdateSummary): string {
+  const parts: string[] = [];
+  if (u.guests) parts.push(`${plural(u.guests, 'guest')} ${u.guests === 1 ? 'has' : 'have'} updates`);
+  if (u.reboot) parts.push(`${u.reboot} need${u.reboot === 1 ? 's' : ''} a reboot`);
+  return parts.join(' · ');
 }
 
 // ───────────────────────────────────────────────────────────── temperatures

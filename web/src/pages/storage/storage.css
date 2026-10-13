@@ -292,3 +292,42 @@
     padding-left: var(--s3);
   }
 }
+
+/* Matrix: mono figures sit a little tighter than the rounded face they replace */
+:root[data-theme='matrix'] .stor-figure-used {
+  letter-spacing: -0.04em;
+}
+
+/* LVM-thin metadata (D52) */
+.stor-thin-meta {
+  margin-top: var(--s3);
+}
+.stor-thin-meta-head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--s2);
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  color: var(--label-2);
+}
+.stor-thin-hint {
+  margin: 4px 0 0;
+  font-size: var(--fs-footnote);
+  line-height: var(--lh-footnote);
+  color: var(--label-2);
+}
+.stor-thin-hint code {
+  overflow-wrap: anywhere;
+}
+
+/* Matrix (M3): the figures and eyebrows beside the mono usage figure read in the same face, like the Overview stat
+   tiles ("of 94 GiB", the available line, Free / Fragmentation / Dedup, thin-pool metadata) */
+:root[data-theme='matrix'] :is(.stor-figure-of, .stor-figure-pct, .stor-usage-foot > span, .stor-mini dd, .stor-thin-meta-head) {
+  font-family: var(--font-mono);
+  letter-spacing: -0.01em;
+}
+:root[data-theme='matrix'] .stor-mini dt {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+}

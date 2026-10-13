@@ -11,12 +11,18 @@
 #   P1D_HOST_KEY                   "ssh-ed25519 AAAA..." from the host's /etc/ssh/ssh_host_ed25519_key.pub  (required)
 #   P1D_NODE                       Proxmox node name, e.g. pve1                         (required for a new config)
 #   P1D_TLS_FINGERPRINT            SHA-256 of the Proxmox certificate, "AB:CD:..."      (required for a new config,
-#                                  unless P1D_PVE_HOST is set)
+#                                  unless P1D_PVE_HOST or P1D_TLS_CA is set)
+#   P1D_TLS_CA                     PEM of the Proxmox cluster CA (/etc/pve/pve-root-ca.pem), when the host checked
+#                                  that its certificate verifies with it for P1D_NODE_IP: stored as
+#                                  /etc/pve1-dash/pve-root-ca.pem, and a new config verifies with it instead of a pin
+#                                  (survives Proxmox's automatic certificate renewals)
 #   P1D_VAPID_EMAIL                your email address, the Web Push contact             (required for a new config)
-#   P1D_PUBLIC_URL                 public HTTPS URL of the dashboard                    (optional)
+#   P1D_PUBLIC_URL                 public HTTPS URL of the dashboard (optional; also set in an existing config)
+#   P1D_ALLOWED_SOURCES            CIDRs/addresses allowed to connect, space separated, "any" for everyone
+#                                  (optional; listen.allowedSources, also set in an existing config)
 #   P1D_TOKEN_ID                   API token id (default pve1dash@pve!dashboard)
 #   P1D_TOKEN_SECRET               token secret; needed on the first install and after a rotation
-#   P1D_CTID                       this container's id (used in the SSH key comment)
+#   P1D_CTID                       this container's id (SSH key comment, and recorded in install.env)
 #   P1D_COMMIT                     full commit id of PVE1_DASH_REF to check out (install.sh resolves the ref once, so
 #                                  the container builds exactly what the host compares the helper with)
 #   P1D_PVE_HOST                   host name on a publicly trusted (ACME) Proxmox certificate: a new config then uses
@@ -25,9 +31,10 @@
 #                                  points at an address the host no longer has is moved to P1D_NODE_IP
 #
 # Result: Node.js 24 in /opt/node, the app in /opt/pve1-dash (built from source), the system user pve1dash,
-# /etc/pve1-dash/{config.yaml,token,ssh/}, state in /var/lib/pve1-dash, the systemd service pve1-dash and the
-# update tool /usr/local/bin/pve1-dash-update. An existing config.yaml is kept; only its TLS fingerprint is updated
-# when the Proxmox certificate changed, and the host address when the host no longer has the old one.
+# /etc/pve1-dash/{config.yaml,token,ssh/}, state in /var/lib/pve1-dash, the systemd service pve1-dash and the tools
+# pve1-dash-update, pve1-dash-doctor and pve1-dash-config in /usr/local/bin. An existing config.yaml is kept; only its
+# TLS fingerprint is updated when the Proxmox certificate changed, the host address when the host no longer has the
+# old one, and publicUrl / listen.allowedSources when they are given.
 #
 # A new token secret is stored before anything slow happens, so a failing later step never loses it. When an upgrade
 # does not come up healthy, the previous version is restored, as pve1-dash-update does.
@@ -43,6 +50,7 @@ CONF_DIR=/etc/pve1-dash
 SSH_DIR=/etc/pve1-dash/ssh
 TOKEN_FILE=/etc/pve1-dash/token
 CONFIG_FILE=/etc/pve1-dash/config.yaml
+CA_FILE=/etc/pve1-dash/pve-root-ca.pem
 DATA_DIR=/var/lib/pve1-dash
 SVC_USER=pve1dash
 DEFAULT_TOKEN_ID='pve1dash@pve!dashboard'
@@ -89,6 +97,16 @@ is_https_url() { [[ $1 =~ ^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9
 is_token_id() { [[ $1 =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9._-]+![A-Za-z][A-Za-z0-9._-]+$ ]]; }
 is_token_secret() { [[ $1 =~ ^[A-Za-z0-9-]{8,128}$ ]]; }
 is_commit() { [[ $1 =~ ^[0-9a-f]{40}$ ]]; }
+# One or more PEM certificates, nothing else.
+is_pem_certs() {
+  [[ $1 == '-----BEGIN CERTIFICATE-----'* && $1 == *'-----END CERTIFICATE-----'* && $1 =~ ^[A-Za-z0-9+/=[:space:]-]+$ ]]
+}
+# An IPv4 address or CIDR (a.b.c.d/0-32).
+is_ipv4_cidr() {
+  is_ipv4 "${1%/*}" || return 1
+  [[ $1 != */* ]] && return 0
+  [[ ${1#*/} =~ ^[0-9]{1,2}$ ]] && ((10#${1#*/} <= 32))
+}
 # A fully qualified host name (at least one dot), not an IP address.
 is_dns_name() {
   [[ ${#1} -le 253 && $1 =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$ ]] && ! is_ipv4 "$1"
@@ -106,6 +124,9 @@ validate_settings() {
   P1D_TOKEN_ID=${P1D_TOKEN_ID:-$DEFAULT_TOKEN_ID}
   P1D_PUBLIC_URL=${P1D_PUBLIC_URL-}
   P1D_PUBLIC_URL=${P1D_PUBLIC_URL%/}
+  P1D_ALLOWED_SOURCES=${P1D_ALLOWED_SOURCES-}
+  P1D_ALLOWED_SOURCES=${P1D_ALLOWED_SOURCES//,/ }
+  P1D_TLS_CA=${P1D_TLS_CA-}
   P1D_TLS_FINGERPRINT=${P1D_TLS_FINGERPRINT-}
   P1D_TLS_FINGERPRINT=${P1D_TLS_FINGERPRINT^^}
   P1D_COMMIT=${P1D_COMMIT-}
@@ -127,11 +148,19 @@ validate_settings() {
     P1D_TIMEZONE=''
   fi
   is_ipv4_list "$P1D_NODE_IPS" || die 'P1D_NODE_IPS must be IPv4 addresses separated by spaces'
+  [[ -z $P1D_PUBLIC_URL ]] || is_https_url "$P1D_PUBLIC_URL" || die 'P1D_PUBLIC_URL must be an https:// URL'
+  [[ -z $P1D_TLS_CA ]] || is_pem_certs "$P1D_TLS_CA" || die 'P1D_TLS_CA must be PEM certificates'
+  if [[ -n $P1D_ALLOWED_SOURCES && $P1D_ALLOWED_SOURCES != any ]]; then
+    local w
+    for w in $P1D_ALLOWED_SOURCES; do
+      is_ipv4_cidr "$w" || die "P1D_ALLOWED_SOURCES: \"$w\" is not an IPv4 address or CIDR such as 10.10.10.0/24"
+    done
+  fi
   if [[ $need_config == yes ]]; then
     is_node "${P1D_NODE-}" || die 'P1D_NODE must be the Proxmox node name (e.g. pve1)'
-    [[ -n $P1D_TLS_FINGERPRINT || -n $P1D_PVE_HOST ]] || die 'P1D_TLS_FINGERPRINT (or P1D_PVE_HOST) is required for a new config'
+    [[ -n $P1D_TLS_FINGERPRINT || -n $P1D_PVE_HOST || -n $P1D_TLS_CA ]] ||
+      die 'P1D_TLS_FINGERPRINT (or P1D_TLS_CA or P1D_PVE_HOST) is required for a new config'
     is_email "${P1D_VAPID_EMAIL-}" || die 'P1D_VAPID_EMAIL must be your email address (Web Push contact)'
-    [[ -z $P1D_PUBLIC_URL ]] || is_https_url "$P1D_PUBLIC_URL" || die 'P1D_PUBLIC_URL must be an https:// URL'
   fi
 }
 
@@ -175,7 +204,7 @@ checkout() {
     [[ $head == "$commit" ]] || die "checked out $head instead of $commit"
   fi
   is_pve1_dash_source "$dir" ||
-    die "$repo @ $ref is not pve1-dash (its package.json is not named pve1-dash). Before the pve1-dash branch is merged, \"main\" still holds the old Tiny Ecowitt app: use that branch as the ref."
+    die "$repo @ $ref is not pve1-dash (its package.json is not named pve1-dash). Check PVE1_DASH_REPO / PVE1_DASH_REF, or install from main."
 }
 
 # ───────────────────────────────────────────────────────────────────────── config
@@ -188,13 +217,20 @@ yq() {
   printf '"%s"' "$s"
 }
 
-# The proxmox.tls lines of a new config: a fingerprint pin, or (P1D_PVE_HOST) a check against the public CAs.
+# The proxmox.tls lines of a new config: (P1D_PVE_HOST) a check against the public CAs, (P1D_TLS_CA) a check against
+# Proxmox's own cluster CA, else a fingerprint pin.
 render_tls() {
   if [[ -n ${P1D_PVE_HOST-} ]]; then
     printf '%s\n' \
       '    # No pin: the certificate is checked against the public CAs and the host name in url, like a browser does.' \
       '    # (It is an ACME certificate, renewed every 60-90 days; a pin would break at each renewal.)' \
       '    insecure: false'
+  elif [[ -n ${P1D_TLS_CA-} ]]; then
+    printf '%s\n' \
+      "    # Proxmox's own cluster CA (a copy of /etc/pve/pve-root-ca.pem). It signs the node certificate and each of" \
+      '    # its automatic renewals, so nothing needs updating when Proxmox renews it. The address in url must be on the' \
+      '    # certificate (the installer checked that). To pin one certificate instead: docs/TROUBLESHOOTING.md.' \
+      "    ca: $CA_FILE"
   else
     printf '%s\n' \
       '    # SHA-256 of the certificate pveproxy serves. Update it after the certificate changes' \
@@ -215,17 +251,19 @@ render_config() {
   if [[ -n ${P1D_PUBLIC_URL-} ]]; then
     public="publicUrl: $(yq "$P1D_PUBLIC_URL")"
   else
-    public='# publicUrl: "https://dash.home.lan"   # your HTTPS URL behind the reverse proxy (needed for iPhone push)'
+    public='# publicUrl: "https://dash.example.com"   # your HTTPS URL behind the reverse proxy (needed for push links)'
   fi
   cat <<EOF
 # pve1-dash configuration, written by the installer on $(date -u +%Y-%m-%d).
 # All options with their defaults and examples: /opt/pve1-dash/deploy/config.example.yaml
-# After editing: systemctl restart pve1-dash   (then check: journalctl -u pve1-dash -n 30)
+# Edit it with: pve1-dash-config   (checks your changes before saving them, then restarts the dashboard)
+# Something wrong? pve1-dash-doctor   (read-only check of config, Proxmox API, SSH helper and push, with fixes)
 
 title: $(yq "$P1D_NODE")
 $public
 $tz
 dataDir: /var/lib/pve1-dash
+$(render_listen)
 
 proxmox:
   url: $(yq "https://${P1D_PVE_HOST:-$P1D_NODE_IP}:8006")
@@ -258,6 +296,18 @@ alerts:
 EOF
 }
 
+# The listen section of a new config: only when P1D_ALLOWED_SOURCES restricts who may connect.
+render_listen() {
+  local list='' w
+  [[ -n ${P1D_ALLOWED_SOURCES-} && $P1D_ALLOWED_SOURCES != any ]] || return 0
+  for w in $P1D_ALLOWED_SOURCES; do list+="${list:+, }$(yq "$w")"; done
+  printf '%s\n' '' 'listen:' '  port: 8080' \
+    '  # Only these addresses may connect (checked on the connection itself, never on X-Forwarded-For). Your reverse' \
+    "  # proxy's address must be in here: it is what connects for your phone. Loopback and /healthz always work." \
+    '  # Set [] to allow everyone.' \
+    "  allowedSources: [$list]"
+}
+
 # Set proxmox.tls.fingerprint in FILE to FP, keeping everything else. Returns 0 when changed, 1 when it already had
 # FP, 2 when there are several "fingerprint:" lines, 3 when there is none (the config uses tls.ca or the public CAs).
 set_fingerprint() {
@@ -268,6 +318,18 @@ set_fingerprint() {
   current=$(sed -nE 's/^[[:space:]]+fingerprint:[[:space:]]*["'"'"']?([0-9A-Fa-f:]*).*/\1/p' "$file")
   if [[ ${current^^} == "$fp" ]]; then return 1; fi
   sed -i -E "s/^([[:space:]]+fingerprint:).*/\\1 \"$fp\"/" "$file"
+}
+
+# Switch a config that verifies with proxmox.tls.ca to pinning FP: for when the host's certificate no longer verifies
+# with the cluster CA (a custom or ACME certificate was uploaded, or the address is not on it any more). Replaces the
+# one "ca:" line in place (same indentation). Returns 0 when changed, 3 when there is no single "ca:" line or the
+# config already has a "fingerprint:" line.
+ca_to_fingerprint() {
+  local file=$1 fp=$2 n
+  ! grep -qE '^[[:space:]]+fingerprint:' "$file" || return 3
+  n=$(grep -cE '^[[:space:]]+ca:' "$file") || n=0
+  [[ $n == 1 ]] || return 3
+  sed -i -E "s|^([[:space:]]+)ca:.*|\\1fingerprint: \"$fp\"|" "$file"
 }
 
 # Keep an existing config pointed at the Proxmox host. proxmox.url and inventory.host.address are moved to IP only
@@ -314,8 +376,69 @@ sync_node_ip() {
   printf '%s\n' "$out"
 }
 
+# Set publicUrl and/or listen.allowedSources in an existing FILE, keeping comments and layout (yaml package of the
+# release in APPDIR). URL empty: publicUrl is left alone; SOURCES empty: allowedSources is left alone, "any" sets [].
+# A commented-out "# publicUrl: ..." line (as the installer writes it) is replaced in place. Prints one "changed <what>"
+# line per edit; FILE is rewritten only when something changed.
+set_config_values() {
+  local file=$1 url=$2 sources=$3 appdir=$4 out
+  rm -f "$file.new"
+  # shellcheck disable=SC2016 # JavaScript template literals, not shell expansions
+  out=$(cd "$appdir" && node -e '
+    const fs = require("fs"), YAML = require("yaml");
+    const [file, url, sources] = process.argv.slice(1);
+    const orig = fs.readFileSync(file, "utf8");
+    let doc = YAML.parseDocument(orig);
+    if (doc.errors.length) { console.error(doc.errors[0].message); process.exit(2); }
+    const out = [];
+    const commented = /^#[ \t]*publicUrl:.*$/m;
+    if (url && !doc.has("publicUrl") && commented.test(orig)) {
+      const d = YAML.parseDocument(orig.replace(commented, `publicUrl: ${JSON.stringify(url)}`));
+      if (!d.errors.length && d.get("publicUrl") === url) { doc = d; out.push(`publicUrl ${url}`); }
+    }
+    if (url && doc.get("publicUrl") !== url) {
+      const node = doc.get("publicUrl", true);
+      out.push(`publicUrl ${YAML.isScalar(node) ? `${node.value} -> ` : ""}${url}`);
+      if (YAML.isScalar(node)) node.value = url; else doc.set("publicUrl", url);
+    }
+    if (sources) {
+      const list = sources === "any" ? [] : sources.split(/\s+/).filter(Boolean);
+      const cur = doc.getIn(["listen", "allowedSources"]);
+      const now = YAML.isSeq(cur) ? cur.toJSON() : cur === undefined ? [] : cur;
+      if (JSON.stringify(now) !== JSON.stringify(list)) {
+        const seq = doc.createNode(list);
+        seq.flow = true;
+        doc.setIn(["listen", "allowedSources"], seq);
+        out.push(`listen.allowedSources [${list.join(", ")}]`);
+      }
+    }
+    if (out.length) fs.writeFileSync(file + ".new", String(doc));
+    process.stdout.write(out.map((c) => `changed ${c}\n`).join(""));' "$file" "$url" "$sources") || {
+    rm -f "$file.new"
+    return 1
+  }
+  if [[ -f $file.new ]]; then mv -f "$file.new" "$file" || return 1; fi
+  printf '%s' "$out"
+}
+
+# Proxmox's cluster CA, for a config that verifies with tls.ca (see render_tls). Public data: readable by everyone.
+write_ca() {
+  [[ -n ${P1D_TLS_CA-} ]] || return 0
+  local tmp
+  tmp=$(mktemp "$CONF_DIR/.ca.XXXXXX")
+  printf '%s\n' "$P1D_TLS_CA" >"$tmp"
+  chmod 0644 "$tmp"
+  if cmp -s "$tmp" "$CA_FILE"; then
+    rm -f "$tmp"
+  else
+    mv -f "$tmp" "$CA_FILE"
+    ok "stored the Proxmox cluster CA in $CA_FILE"
+  fi
+}
+
 write_config() {
   PIN_ADDR=$P1D_NODE_IP
+  write_ca
   if [[ -f $CONFIG_FILE ]]; then
     ok "keeping $CONFIG_FILE"
     if [[ -n $P1D_TLS_FINGERPRINT ]]; then
@@ -324,7 +447,14 @@ write_config() {
       case $rc in
         0) ok 'updated proxmox.tls.fingerprint (the Proxmox certificate changed)' ;;
         1) : ;;
-        3) ok 'the config pins no certificate (tls.ca or the public CAs): TLS settings left alone' ;;
+        3)
+          # tls.ca, but the host's certificate no longer verifies with the cluster CA: pin it, or every API call fails
+          if [[ -z ${P1D_TLS_CA-} ]] && ca_to_fingerprint "$CONFIG_FILE" "$P1D_TLS_FINGERPRINT"; then
+            ok "the Proxmox certificate no longer verifies with the cluster CA (custom or ACME certificate?): pinned it instead (proxmox.tls.fingerprint ${P1D_TLS_FINGERPRINT:0:23}...)"
+          else
+            ok 'the config pins no certificate (tls.ca or the public CAs): TLS settings left alone'
+          fi
+          ;;
         *) warn "could not update proxmox.tls.fingerprint automatically; set it to \"$P1D_TLS_FINGERPRINT\" if API calls fail" ;;
       esac
     fi
@@ -339,6 +469,15 @@ write_config() {
       is_ipv4 "$PIN_ADDR" || PIN_ADDR=$P1D_NODE_IP
     else
       warn "could not check the Proxmox address in $CONFIG_FILE; if the host's IP changed, update proxmox.url and inventory.host.address"
+    fi
+    if [[ -n $P1D_PUBLIC_URL || -n $P1D_ALLOWED_SOURCES ]]; then
+      if out=$(set_config_values "$CONFIG_FILE" "$P1D_PUBLIC_URL" "$P1D_ALLOWED_SOURCES" "$APP_DIR"); then
+        while IFS= read -r line; do
+          if [[ $line == 'changed '* ]]; then ok "set ${line#changed }"; fi
+        done <<<"$out"
+      else
+        warn "could not update $CONFIG_FILE; set publicUrl / listen.allowedSources by hand: pve1-dash-config"
+      fi
     fi
   else
     local tmp
@@ -424,6 +563,8 @@ lxc_setup_main() {
   # shellcheck source=deploy/update.sh
   source "$staging/deploy/update.sh"
 
+  # Older update.sh versions (an explicit old PVE1_DASH_REF) have no space check.
+  if declare -F check_free_space >/dev/null; then check_free_space "${APP_DIR%/*}"; fi
   try_update_node
   build_release "$staging"
   activate_release "$staging"
@@ -444,7 +585,7 @@ lxc_setup_main() {
     die 'the service did not become healthy (see the log lines above).'
   fi
   # Recorded only once the new version runs, so a rolled-back run keeps the previous source.
-  save_install_env "$PVE1_DASH_REPO" "$PVE1_DASH_REF"
+  save_install_env "$PVE1_DASH_REPO" "$PVE1_DASH_REF" "${P1D_CTID-}"
   ok 'setup complete'
 }
 

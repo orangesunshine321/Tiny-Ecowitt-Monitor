@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { ServiceEntry } from '../shared/types';
+import { effectiveDensity, parseServicePrefs } from '../web/src/pages/services/servicePrefs';
 import {
+  FAVOURITES_GROUP,
+  certStatus,
   countByFilter,
   filterServices,
   groupName,
@@ -47,13 +50,16 @@ const list: ServiceEntry[] = [
 describe('filters and search', () => {
   it('parses the filter query parameter', () => {
     expect(parseFilter('problems')).toBe('problems');
-    expect(parseFilter('docker')).toBe('docker');
+    expect(parseFilter('discovered')).toBe('discovered');
+    // older deep links (?filter=docker) land on the Discovered filter
+    expect(parseFilter('docker')).toBe('discovered');
     expect(parseFilter('bogus')).toBe('all');
     expect(parseFilter(null)).toBe('all');
   });
 
   it('counts each filter', () => {
-    expect(countByFilter(list)).toEqual({ all: 8, problems: 2, docker: 4, configured: 4 });
+    expect(countByFilter(list)).toEqual({ all: 8, problems: 2, discovered: 4, configured: 4 });
+    expect(countByFilter([...list, svc({ id: 'port-101-pihole', name: 'Pi-hole', source: 'port' })]).discovered).toBe(5);
     expect(isProblem({ status: 'paused' })).toBe(false);
   });
 
@@ -62,7 +68,10 @@ describe('filters and search', () => {
     expect(filterServices(list, 'configured', '').map((s) => s.id)).toEqual(['proxmox-ve', 'pi-hole', 'unbound', 'misc']);
     expect(filterServices(list, 'all', 'pihole').map((s) => s.id)).toEqual(['pi-hole', 'unbound']);
     expect(filterServices(list, 'all', 'media jelly').map((s) => s.id)).toEqual(['docker-102-jellyfin', 'docker-102-jellyseerr']);
-    expect(filterServices(list, 'docker', '503').map((s) => s.id)).toEqual(['docker-102-jellyseerr']);
+    expect(filterServices(list, 'discovered', '503').map((s) => s.id)).toEqual(['docker-102-jellyseerr']);
+    const withPort = [...list, svc({ id: 'port-108-pbs', name: 'Proxmox Backup Server', source: 'port' })];
+    expect(filterServices(withPort, 'discovered', 'backup').map((s) => s.id)).toEqual(['port-108-pbs']);
+    expect(filterServices(withPort, 'configured', 'backup')).toEqual([]);
     expect(matchesQuery(list[2]!, '5335')).toBe(true);
     expect(matchesQuery(list[0]!, '   ')).toBe(true);
     expect(matchesQuery(list[0]!, 'down')).toBe(false);
@@ -81,6 +90,7 @@ describe('grouping', () => {
       ['Other', 1, 0],
     ]);
     expect(groupName({ group: undefined, source: 'docker' })).toBe('Docker');
+    expect(groupName({ group: undefined, source: 'port' })).toBe('Apps');
     expect(groupName({ group: ' Home ', source: 'config' })).toBe('Home');
   });
 
@@ -149,5 +159,66 @@ describe('tiles', () => {
     expect(urlHost('http://10.10.20.2/admin')).toBe('10.10.20.2');
     expect(urlHost('/relative')).toBe('');
     expect(urlHost('::nonsense')).toBe('');
+  });
+});
+
+describe('favourites (per device, D49)', () => {
+  it('puts starred services first in starring order and removes them from their own group', () => {
+    const groups = groupServices(list, { favourites: ['docker-105-kuma', 'pi-hole', 'gone-service'] });
+    expect(groups[0]).toMatchObject({ name: FAVOURITES_GROUP, favourites: true });
+    expect(groups[0]!.services.map((s) => s.id)).toEqual(['docker-105-kuma', 'pi-hole']);
+    expect(groups.map((g) => g.name)).toEqual([FAVOURITES_GROUP, 'Infrastructure', 'Network', 'Media', 'Other']);
+    expect(groups.find((g) => g.name === 'Network')!.services.map((s) => s.id)).toEqual(['unbound']);
+  });
+
+  it('counts problems in the favourites group and skips it in the Problems view', () => {
+    expect(groupServices(list, { favourites: ['docker-102-jellyseerr'] })[0]!.problems).toBe(1);
+    const problems = groupServices(list, { favourites: ['docker-102-jellyseerr'], problemsFirst: true });
+    expect(problems.some((g) => g.favourites)).toBe(false);
+    expect(groupServices(list, { favourites: ['nope'] }).some((g) => g.favourites)).toBe(false);
+  });
+
+  it('parses stored prefs defensively', () => {
+    expect(parseServicePrefs(null)).toEqual({ favourites: [], density: 'auto' });
+    expect(parseServicePrefs('{bad json')).toEqual({ favourites: [], density: 'auto' });
+    expect(parseServicePrefs(JSON.stringify({ favourites: ['a', 'a', 3, '', 'b'], density: 'icons' }))).toEqual({ favourites: ['a', 'b'], density: 'icons' });
+    expect(parseServicePrefs(JSON.stringify({ favourites: 'a', density: 'huge' }))).toEqual({ favourites: [], density: 'auto' });
+  });
+
+  it('resolves the automatic density per device', () => {
+    expect(effectiveDensity('auto', 'iphone')).toBe('icons');
+    expect(effectiveDensity('auto', 'ipad')).toBe('tiles');
+    expect(effectiveDensity('auto', 'mac')).toBe('tiles');
+    expect(effectiveDensity('tiles', 'iphone')).toBe('tiles');
+    expect(effectiveDensity('icons', 'mac')).toBe('icons');
+  });
+});
+
+describe('HTTPS certificate chip (D47)', () => {
+  const NOW = Date.UTC(2026, 9, 12, 12);
+  const DAY = 86_400_000;
+  const fmt = (t: number) => new Date(t).toISOString().slice(0, 10);
+
+  it('is quiet for healthy certificates and services without TLS', () => {
+    expect(certStatus(undefined, NOW)).toBeUndefined();
+    expect(certStatus({ notAfter: NaN }, NOW)).toBeUndefined();
+    expect(certStatus({ notAfter: NOW + 60 * DAY, issuer: 'R11' }, NOW, 14, fmt)).toMatchObject({
+      tone: 'ok',
+      days: 60,
+      detail: 'Certificate valid until 2026-12-11 (issued by R11)',
+    });
+  });
+
+  it('warns inside the window, turns critical in the last days and once expired', () => {
+    expect(certStatus({ notAfter: NOW + 12 * DAY + 1000 }, NOW)).toMatchObject({ tone: 'warn', days: 12, label: 'Cert 12 d' });
+    expect(certStatus({ notAfter: NOW + 2 * DAY + 1000 }, NOW)).toMatchObject({ tone: 'crit', label: 'Cert 2 d' });
+    expect(certStatus({ notAfter: NOW + 3_600_000 }, NOW)).toMatchObject({ tone: 'crit', label: 'Cert expires today' });
+    expect(certStatus({ notAfter: NOW - DAY, selfSigned: true }, NOW, 14, fmt)).toMatchObject({
+      tone: 'crit',
+      label: 'Cert expired',
+      detail: 'Certificate expired on 2026-10-11 (self-signed)',
+    });
+    // a custom warning window (services.certWarnDays)
+    expect(certStatus({ notAfter: NOW + 20 * DAY + 1000 }, NOW, 30)!.tone).toBe('warn');
   });
 });

@@ -10,20 +10,25 @@
  *  - Pages turn every 12 s when the rows don't fit.
  *  - Optional WebAudio clack (prefs.boardSound, off by default; needs a tap to unlock audio).
  *  - Reduced motion: faces swap instantly with a subtle fade, the reflection sweep stops.
+ *  - Matrix theme: the same board in green phosphor (board.css / boardPage.css), on the Matrix page colour.
+ *  - Keep Screen On (D45): a screen wake lock while the board is visible, so a wall iPad or a Mac doesn't lock;
+ *    a per-device switch in the toolbar (on by default), hidden where the browser has no wake lock.
  */
-import { Maximize2, Minimize2, RotateCcw, TrainFront, Volume2, VolumeX } from 'lucide-react';
+import { Maximize2, Minimize2, RotateCcw, Sun, SunDim, TrainFront, Volume2, VolumeX } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { Button, IconButton, ToolbarGroup } from '../components';
 import { armGestureUnlock, boardAudioState, playFlapSteps, playTestClack, subscribeBoardAudio, unlockBoardAudio } from '../board/audio';
-import { boardSummary, computeBoardLayout, departureRows, labelsBlockHeight, pageCount, pageRows, rowsThatFit } from '../board/boardModel';
+import { BOARD_BG, boardSummary, computeBoardLayout, departureRows, labelsBlockHeight, pageCount, pageRows, rowsThatFit } from '../board/boardModel';
 import { BoardLabels, BoardRow, boardVars, measureRemarkEm } from '../board/BoardRows';
 import { useFlapGroup } from '../board/Flap';
 import { onFlapSteps } from '../board/flapEngine';
 import { FlipClock } from '../board/FlipClock';
+import { setKeepAwake, useKeepAwake, useWakeLock, wakeLockApi } from '../board/useWakeLock';
 import { useBreakpoint } from '../hooks/useMediaQuery';
 import { useElementSize } from '../hooks/useElementSize';
 import { useHotkey } from '../hooks/useHotkey';
-import { setPref, usePrefs } from '../prefs';
+import { useTheme } from '../hooks/useTheme';
+import { applyPrefsToDocument, getPrefs, setPref, usePrefs, usePrefsStore } from '../prefs';
 import { goBack } from '../router';
 import { useConnection, useMeta, useServices } from '../store';
 import '../board/board.css';
@@ -31,8 +36,6 @@ import '../board/boardPage.css';
 
 /** Auto-paging interval (DESIGN §5). */
 const PAGE_MS = 12_000;
-/** Page colour behind the board (also the iOS status bar / Safari toolbar tint while the board is open). */
-const BOARD_BG = '#060607';
 
 export default function BoardPage() {
   const services = useServices();
@@ -41,6 +44,8 @@ export default function BoardPage() {
   const breakpoint = useBreakpoint();
 
   const sound = usePrefs((p) => p.boardSound);
+  const { matrix } = useTheme();
+  const boardBg = matrix ? BOARD_BG.matrix : BOARD_BG.standard;
   const audio = useSyncExternalStore(subscribeBoardAudio, boardAudioState, () => 'unsupported' as const);
 
   const frameRef = useRef<HTMLDivElement>(null);
@@ -89,6 +94,11 @@ export default function BoardPage() {
     void unlockBoardAudio().then(playTestClack);
   };
 
+  // ── keep the screen on while the board shows (iPad wall display, a Mac left open)
+  const keepAwake = useKeepAwake();
+  const wakeLock = useWakeLock(keepAwake);
+  const canWakeLock = wakeLock !== 'unsupported' && !!wakeLockApi();
+
   // ── fullscreen (Mac, iPad; iPhone Safari has no element fullscreen)
   const canFullscreen = typeof document !== 'undefined' && document.fullscreenEnabled === true;
   const [isFullscreen, setIsFullscreen] = useState(() => typeof document !== 'undefined' && !!document.fullscreenElement);
@@ -114,19 +124,24 @@ export default function BoardPage() {
   }, [board.title]);
 
   // Safari tints its toolbar / the standalone status bar from the root background and theme-color: make them match
-  // the dark board while it is open (re-applied after a preference change, which rewrites theme-color).
+  // the dark board while it is open. Every preference change rewrites theme-color (applyPrefsToDocument, subscribed
+  // first), so repaint after each one; on leaving, the prefs (possibly changed meanwhile, e.g. the theme from another
+  // tab) put the app's own colours back.
   useEffect(() => {
     const root = document.documentElement;
     const prevBg = root.style.background;
-    const metas = [...document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')];
-    const prev = metas.map((m) => m.content);
-    root.style.background = BOARD_BG;
-    for (const m of metas) m.content = BOARD_BG;
-    return () => {
-      root.style.background = prevBg;
-      metas.forEach((m, i) => (m.content = prev[i] ?? m.content));
+    const paint = () => {
+      root.style.background = boardBg;
+      for (const m of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) m.content = boardBg;
     };
-  }, [sound]);
+    paint();
+    const unsubscribe = usePrefsStore.subscribe(paint);
+    return () => {
+      unsubscribe();
+      root.style.background = prevBg;
+      applyPrefsToDocument(getPrefs());
+    };
+  }, [boardBg]);
 
   const summary = boardSummary(services);
   const narrowPhone = breakpoint === 'iphone' && !!layout && layout.plat === 0;
@@ -150,7 +165,7 @@ export default function BoardPage() {
         <div className="bd-head-trailing">
           <FlipClock sound={sound} />
           <div className="bd-controls">
-            {(audio !== 'unsupported' || canFullscreen) && (
+            {(audio !== 'unsupported' || canFullscreen || canWakeLock) && (
               <ToolbarGroup label="Board options">
                 {audio !== 'unsupported' && (
                   <IconButton
@@ -158,6 +173,14 @@ export default function BoardPage() {
                     label={sound ? 'Turn board sound off' : 'Turn board sound on'}
                     pressed={sound}
                     onClick={toggleSound}
+                  />
+                )}
+                {canWakeLock && (
+                  <IconButton
+                    icon={keepAwake ? <Sun size={18} strokeWidth={2} /> : <SunDim size={18} strokeWidth={2} />}
+                    label={keepAwake ? 'Keep screen on: on (tap to let it sleep)' : 'Keep screen on: off'}
+                    pressed={keepAwake}
+                    onClick={() => setKeepAwake(!keepAwake)}
                   />
                 )}
                 {canFullscreen && (

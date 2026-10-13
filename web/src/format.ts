@@ -157,10 +157,13 @@ export function formatLatency(ms: number | undefined | null): string {
   return `${trimZero((ms / 1000).toFixed(1))} s`;
 }
 
-/** Celsius → "49 °C" (one decimal under 10). */
+/** Narrow no-break space (U+202F) between a number and its unit: never wraps, and stays narrow in mono faces. */
+export const UNIT_SPACE = '\u202f';
+
+/** Celsius → "49 °C" with a narrow no-break space (one decimal under 10). */
 export function formatTemp(celsius: number | undefined | null): string {
   if (!isNum(celsius)) return DASH;
-  return `${Math.abs(celsius) < 10 ? trimZero(celsius.toFixed(1)) : Math.round(celsius)} °C`;
+  return `${Math.abs(celsius) < 10 ? trimZero(celsius.toFixed(1)) : Math.round(celsius)}${UNIT_SPACE}°C`;
 }
 
 /** Plain number in the user's locale, e.g. 12345 → "12,345". */

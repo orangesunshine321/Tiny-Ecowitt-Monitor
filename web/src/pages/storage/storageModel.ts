@@ -3,7 +3,7 @@
  * ZFS vdev tree flattening. Semantics follow docs/research/pve-api-storage.md §1, §3-§5. Unit-tested in
  * tests/web-infra-storage.test.ts.
  */
-import type { PhysicalDisk, SmartAttribute, StoragePool, ZfsVdev } from '../../../../shared/types';
+import type { LvmThinPool, PhysicalDisk, SmartAttribute, StoragePool, ZfsVdev } from '../../../../shared/types';
 import type { StatusInfo, Thresholds, Tone } from '../../components/status';
 
 // ───────────────────────────────────────────────────────────── labels
@@ -240,4 +240,54 @@ export function poolProblems(pools: readonly StoragePool[], t: Thresholds): numb
 /** Natural device order: sda, sdb, …, nvme0n1, nvme1n1. */
 export function compareDevpath(a: string, b: string): number {
   return a.localeCompare(b, undefined, { numeric: true });
+}
+
+// ───────────────────────────────────────────────────────────── LVM-thin (D52)
+
+/** Thin-pool metadata thresholds: a full metadata volume turns the pool read-only and guests hit I/O errors. */
+export const THIN_META_THRESHOLDS: Thresholds = { warn: 0.8, crit: 0.9 };
+
+export interface ThinPoolView {
+  key: string;
+  /** "pve/data" */
+  label: string;
+  size: number;
+  used: number;
+  dataFraction: number;
+  metadataSize?: number;
+  metadataUsed?: number;
+  /** undefined when the metadata size is unknown */
+  metaFraction?: number;
+  /** worst of data (storage thresholds) and metadata (80/90 %) */
+  tone: 'ok' | 'warn' | 'crit';
+}
+
+const frac = (used: number | undefined, size: number | undefined): number | undefined =>
+  typeof used === 'number' && typeof size === 'number' && size > 0 ? Math.min(1, Math.max(0, used / size)) : undefined;
+
+/** LVM-thin pools for display, sorted by name; pools without a size are skipped. */
+export function thinPoolViews(pools: readonly LvmThinPool[] | undefined, dataThresholds: Thresholds): ThinPoolView[] {
+  if (!pools?.length) return [];
+  const rank = { ok: 0, warn: 1, crit: 2 } as const;
+  const toneOf = (f: number | undefined, t: Thresholds): ThinPoolView['tone'] => (f === undefined ? 'ok' : f >= t.crit ? 'crit' : f >= t.warn ? 'warn' : 'ok');
+  return pools
+    .filter((p) => p.size > 0)
+    .map((p) => {
+      const dataFraction = frac(p.used, p.size) ?? 0;
+      const metaFraction = frac(p.metadataUsed, p.metadataSize);
+      const a = toneOf(dataFraction, dataThresholds);
+      const b = toneOf(metaFraction, THIN_META_THRESHOLDS);
+      return {
+        key: `${p.vg}/${p.name}`,
+        label: `${p.vg}/${p.name}`,
+        size: p.size,
+        used: p.used,
+        dataFraction,
+        metadataSize: p.metadataSize,
+        metadataUsed: p.metadataUsed,
+        metaFraction,
+        tone: rank[a] >= rank[b] ? a : b,
+      };
+    })
+    .sort((x, y) => x.label.localeCompare(y.label));
 }

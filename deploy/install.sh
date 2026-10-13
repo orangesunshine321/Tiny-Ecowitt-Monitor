@@ -3,11 +3,7 @@
 #
 #   bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)"
 #
-# Until the pve1-dash branch is merged, "main" of that repository still holds the old Tiny Ecowitt app. Install from
-# the branch instead: name it in the URL and in PVE1_DASH_REF (README.md has the full command):
-#
-#   PVE1_DASH_REF=claude/homelab-dashboard-pve1-dizt16 bash -c "$(curl -fsSL \
-#     https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/claude/homelab-dashboard-pve1-dizt16/deploy/install.sh)"
+# A fixed version instead of the moving "main": PVE1_DASH_REF=<tag> in front of the command (README.md).
 #
 # What it does (details in docs/SETUP.md, the security model in docs/SECURITY.md):
 #   1. creates an unprivileged Debian LXC (tag "pve1-dash", no root password, nesting on, start on boot);
@@ -21,6 +17,7 @@
 # It is idempotent: run it again to upgrade or repair an existing install (it finds the container by its tag and
 # keeps the source the container was installed from). Refresh only the host helper after a dashboard update:
 #   bash -c "$(curl -fsSL .../deploy/install.sh)" -- --update-helper
+# At the end it runs the container's self-test, pve1-dash-doctor (read-only), and prints what to fix, if anything.
 #
 # Every question can be answered up front with an environment variable (see --help) and --yes accepts the defaults,
 # so it also runs unattended.
@@ -36,7 +33,8 @@ set -Eeuo pipefail
 
 readonly DEFAULT_REPO='https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git'
 readonly DEFAULT_REF='main'
-# Until it is merged, pve1-dash lives on this branch of DEFAULT_REPO ("main" still holds the old Tiny Ecowitt app).
+# The branch pve1-dash was developed on before it was merged into main. Containers installed from it still record it;
+# adopt_recorded_source moves them to main.
 readonly PREMERGE_REF='claude/homelab-dashboard-pve1-dizt16'
 readonly PVE_USER='pve1dash@pve'
 readonly DEFAULT_TOKEN_NAME='dashboard'
@@ -63,6 +61,10 @@ TOKEN_NAME=$DEFAULT_TOKEN_NAME
 TOKEN_ID="$PVE_USER!$DEFAULT_TOKEN_NAME"
 TOKEN_MANAGED=yes
 TOKEN_SECRET=''
+TLS_CA=''
+# Proxmox's cluster CA (a variable for tests).
+PVE_ROOT_CA=/etc/pve/pve-root-ca.pem
+CONFIG_HAS_PUBLIC_URL=''
 ROTATE_LATE=no
 REF_COMMIT=''
 REF_EXPLICIT=''
@@ -136,9 +138,6 @@ Options:
   --ctid N           the container to create, or the existing dashboard container to use
   --update-helper    see above (use after "pve1-dash-update" in the container says the helper changed)
 
-Before the pve1-dash branch is merged into main, "main" still holds the old Tiny Ecowitt app: install with
-PVE1_DASH_REF=claude/homelab-dashboard-pve1-dizt16 (README.md shows the whole command).
-
 Environment (each one also skips its question):
   PVE1_DASH_REPO, PVE1_DASH_REF     git source (default: the GitHub repo, ref "main"; an existing container keeps
                                     the source it was installed from)
@@ -150,18 +149,23 @@ Environment (each one also skips its question):
   PVE1_DASH_TEMPLATE_STORAGE        storage for the Debian template (content vztmpl)
   PVE1_DASH_DEBIAN                  Debian release of the template: 13 (default; 12 when pve-container is too old) or 12
   PVE1_DASH_BRIDGE, PVE1_DASH_VLAN  network bridge (vmbr0) and optional VLAN tag
-  PVE1_DASH_IP, PVE1_DASH_GATEWAY   "dhcp" (default) or a static CIDR such as 192.168.1.60/24, plus its gateway.
-                                    With an existing container, the network settings given here are applied to it.
+  PVE1_DASH_IP, PVE1_DASH_GATEWAY   "dhcp" (default) or a static CIDR such as 10.10.10.60/24, plus its gateway.
+                                    With an existing container, the network settings given here are applied to it
+                                    (the MAC address stays, so a DHCP reservation keeps working).
   PVE1_DASH_BRIDGE_MISSING_OK       yes: use a bridge that does not exist on this host (yet)
   PVE1_DASH_CORES, PVE1_DASH_MEMORY, PVE1_DASH_SWAP   1 core, 1024 MiB, 512 MiB
   PVE1_DASH_NODE_IP                 IP of this host that the dashboard connects to (auto-detected)
   PVE1_DASH_PVE_HOST                host name on a publicly trusted (ACME) certificate of this host: verify it with
                                     the public CAs instead of pinning it (asked when pveproxy-ssl.pem is in use)
-  PVE1_DASH_PUBLIC_URL              public HTTPS URL behind your reverse proxy, e.g. https://dash.home.lan
+  PVE1_DASH_PUBLIC_URL              public HTTPS URL behind your reverse proxy, e.g. https://dash.example.com
+                                    (also set in an existing container's config)
+  PVE1_DASH_ALLOWED_SOURCES         who may connect: CIDRs/addresses (e.g. "10.10.10.0/24"), or "any" (default for a
+                                    new config: this host's network; also set in an existing container's config)
   PVE1_DASH_VAPID_EMAIL             your real email address (Web Push contact; Apple rejects localhost)
   PVE1_DASH_SENSORS                 yes/no: install lm-sensors on this host for temperatures (no)
   PVE1_DASH_ROTATE_TOKEN            yes/no: replace an existing API token
   PVE1_DASH_EXISTING                update/new: what to do when a pve1-dash container already exists (update)
+  PVE1_DASH_SWITCH_TO_MAIN          yes/no: move a container that follows the old pre-merge branch to main (yes)
   PVE1_DASH_TRUST_CT_HELPER         yes: install the container's helper even if it differs from the repo copy
   PVE1_DASH_RAW_BASE                base URL for raw repo files (default: derived from a GitHub PVE1_DASH_REPO;
                                     file:///path/to/checkout works for local testing)
@@ -280,6 +284,21 @@ is_vapid_email() {
   [[ $domain != localhost* ]]
 }
 
+# An IPv4 address or CIDR (a.b.c.d/0-32).
+is_ipv4_cidr() {
+  is_ipv4 "${1%/*}" || return 1
+  [[ $1 != */* ]] && return 0
+  [[ ${1#*/} =~ ^[0-9]{1,2}$ ]] && ((10#${1#*/} <= 32))
+}
+
+# listen.allowedSources as asked: "any", or IPv4 addresses/CIDRs separated by spaces or commas.
+is_allowed_sources() {
+  local w
+  [[ $1 == any ]] && return 0
+  [[ -n ${1//[ ,]/} ]] || return 1
+  for w in ${1//,/ }; do is_ipv4_cidr "$w" || return 1; done
+}
+
 is_ref() { [[ $1 =~ ^[A-Za-z0-9._/-]{1,200}$ && $1 != *..* && $1 != -* ]]; }
 is_repo() { [[ $1 =~ ^(https://|git@|file:///)[A-Za-z0-9@:/._~+-]{3,300}$ ]]; }
 
@@ -290,6 +309,17 @@ ip_to_int() {
   local -a o
   IFS=. read -r -a o <<<"$1"
   printf '%s\n' "$(((10#${o[0]} << 24) | (10#${o[1]} << 16) | (10#${o[2]} << 8) | 10#${o[3]}))"
+}
+
+# 3232235786 -> 192.168.1.10
+int_to_ip() { printf '%d.%d.%d.%d\n' $(($1 >> 24 & 255)) $(($1 >> 16 & 255)) $(($1 >> 8 & 255)) $(($1 & 255)); }
+
+# 10.10.10.2/24 -> 10.10.10.0/24
+cidr_network() {
+  local ip=${1%/*} len=${1#*/} mask
+  is_ipv4 "$ip" && [[ $1 == */* && $len =~ ^[0-9]{1,2}$ ]] && ((10#$len <= 32)) || return 1
+  mask=$(((0xFFFFFFFF << (32 - 10#$len)) & 0xFFFFFFFF))
+  printf '%s/%s\n' "$(int_to_ip $(($(ip_to_int "$ip") & mask)))" "$((10#$len))"
 }
 
 # ip_in_cidr IP CIDR: is IP inside the network of CIDR (a.b.c.d/len)?
@@ -378,6 +408,26 @@ host_ipv4s() {
     if is_ipv4 "$w"; then out+=" $w"; fi
   done
   printf '%s\n' "${out# }"
+}
+
+# The network (a.b.c.d/len) of this host's address IP, from "ip -4 -o addr". Nothing for /31 and /32 (point-to-point
+# setups, no LAN to name).
+host_network() {
+  local cidr
+  cidr=$(ip -4 -o addr show 2>/dev/null | awk -v ip="$1" '
+    { for (i = 1; i < NF; i++) if ($i == "inet") { split($(i + 1), a, "/"); if (a[1] == ip) { print $(i + 1); exit } } }') || cidr=''
+  [[ $cidr == */* ]] && ((10#${cidr#*/} <= 30)) || return 1
+  cidr_network "$cidr"
+}
+
+# An example static address in NETWORK (a.b.c.d/len) for the IP question: .60 of a /24 (or larger) network.
+example_static_ip() {
+  local net=${1%/*} len=${1#*/}
+  if is_ipv4 "${net:-x}" && [[ $len =~ ^[0-9]{1,2}$ ]] && ((10#$len <= 25)); then
+    printf '%s/%s\n' "$(int_to_ip $(($(ip_to_int "$net") + 60)))" "$len"
+  else
+    printf '192.168.1.60/24\n'
+  fi
 }
 
 default_gateway() { ip -4 route show default 2>/dev/null | awk '$1 == "default" && $2 == "via" { print $3; exit }'; }
@@ -828,6 +878,17 @@ served_fingerprint() {
     openssl x509 -noout -fingerprint -sha256 2>/dev/null | normalize_fingerprint
 }
 
+# Does the certificate served on IP:8006 verify with Proxmox's cluster CA (/etc/pve/pve-root-ca.pem) for that address?
+# Then the dashboard can trust the CA instead of pinning the certificate: pveupdate renews pve-ssl.pem by itself (from
+# two weeks before it expires, with the same CA and addresses), which would break a pin overnight.
+pve_ca_verifies() {
+  local ip=$1 ca=${2:-$PVE_ROOT_CA} out
+  [[ -r $ca ]] || return 1
+  out=$(timeout 10 openssl s_client -connect "$ip:8006" -CAfile "$ca" -verify_ip "$ip" -verify_return_error \
+    </dev/null 2>&1) || return 1
+  grep -q 'Verify return code: 0 (ok)' <<<"$out"
+}
+
 # Does the certificate on :8006 verify for NAME against the public CAs, as a browser checks it? Then the dashboard can
 # check it the same way and needs no pin.
 cert_trusted_for() {
@@ -1086,7 +1147,7 @@ resolve_source() {
   REF_COMMIT=$(resolve_commit "$PVE1_DASH_REPO" "$PVE1_DASH_REF") || rc=$?
   case $rc in
     0) ok "source $PVE1_DASH_REPO @ $PVE1_DASH_REF (commit ${REF_COMMIT:0:12})" ;;
-    1) die "\"$PVE1_DASH_REF\" is not a branch or tag of $PVE1_DASH_REPO. For one commit, give its full 40-character id.$(premerge_hint)" ;;
+    1) die "\"$PVE1_DASH_REF\" is not a branch or tag of $PVE1_DASH_REPO. For one commit, give its full 40-character id." ;;
     *)
       REF_COMMIT=''
       warn "could not list the branches of $PVE1_DASH_REPO; using \"$PVE1_DASH_REF\" as it is."
@@ -1094,20 +1155,13 @@ resolve_source() {
   esac
 }
 
-premerge_hint() {
-  if [[ $PVE1_DASH_REPO == "$DEFAULT_REPO" && $PVE1_DASH_REF != "$PREMERGE_REF" ]]; then
-    printf ' Installing before pve1-dash is merged into main? Use PVE1_DASH_REF=%s (README.md shows the command).' "$PREMERGE_REF"
-  fi
-}
-
-# Fail fast when the source is not pve1-dash: until the pve1-dash branch is merged, "main" still holds the old
-# Tiny Ecowitt app.
+# Fail fast when the source is not pve1-dash (a wrong repository, or a ref from before pve1-dash existed).
 check_source() {
   local pkg=$WORK_DIR/package.json
   download_repo_file package.json "$pkg" 2>/dev/null ||
-    die "could not download package.json of $PVE1_DASH_REPO @ $PVE1_DASH_REF (a wrong ref, or a non-GitHub repository without PVE1_DASH_RAW_BASE?).$(premerge_hint)"
+    die "could not download package.json of $PVE1_DASH_REPO @ $PVE1_DASH_REF (a wrong ref, or a non-GitHub repository without PVE1_DASH_RAW_BASE?)."
   grep -qE '^[[:space:]]*"name":[[:space:]]*"pve1-dash"' "$pkg" ||
-    die "$PVE1_DASH_REPO @ $PVE1_DASH_REF is not pve1-dash (its package.json has another name).$(premerge_hint)"
+    die "$PVE1_DASH_REPO @ $PVE1_DASH_REF is not pve1-dash (its package.json has another name)."
 }
 
 # A value recorded in the container's /etc/pve1-dash/install.env (raw and untrusted: callers validate it).
@@ -1161,6 +1215,14 @@ adopt_recorded_source() {
   raw=$(ct_recorded "$ctid" PVE1_DASH_REF)
   [[ -n $raw && $raw != "$PVE1_DASH_REF" ]] || return 0
   rref=$(recorded_ref_candidate "$raw")
+  if [[ $rref == "$PREMERGE_REF" && $PVE1_DASH_REPO == "$DEFAULT_REPO" ]]; then
+    warn "container $ctid follows $rref, the branch pve1-dash was developed on before it was merged into main."
+    ask_yn PVE1_DASH_SWITCH_TO_MAIN "Switch it to $PVE1_DASH_REF (where pve1-dash lives now)?" yes
+    if [[ $PVE1_DASH_SWITCH_TO_MAIN == yes ]]; then
+      ok "switching container $ctid to $PVE1_DASH_REF"
+      return 0
+    fi
+  fi
   if [[ -z $rref ]]; then
     if is_ref "$raw"; then
       warn "container $ctid records PVE1_DASH_REF=$raw; only branch and tag names are taken over. Using \"$PVE1_DASH_REF\" (pass PVE1_DASH_REF=$raw to keep it)."
@@ -1320,7 +1382,10 @@ ask_new_ct_settings() {
 
   ask_bridge
   ask_valid PVE1_DASH_VLAN 'VLAN tag (empty for none)' '' is_vlan 'empty, or 1-4094'
-  ask_valid PVE1_DASH_IP 'IPv4: "dhcp" or a static address like 192.168.1.60/24' dhcp is_ip_setting 'dhcp, or an IPv4 address with /prefix'
+  def=$(detect_node_ip) && def=$(host_network "$def") || def=''
+  def=$(example_static_ip "$def")
+  say 'Your reverse proxy will forward to this address: a static one (or a DHCP reservation) keeps it from moving.'
+  ask_valid PVE1_DASH_IP "IPv4: \"dhcp\" or a static address like $def" dhcp is_ip_setting 'dhcp, or an IPv4 address with /prefix'
   if [[ $PVE1_DASH_IP != dhcp ]]; then
     ask_gateway
   else
@@ -1373,15 +1438,36 @@ apply_network_change() {
 }
 
 ask_common_settings() {
-  local detected need_config=$1
+  local detected need_config=$1 net
+  local -a words=()
   detected=$(detect_node_ip) || detected=''
   ask_valid PVE1_DASH_NODE_IP "IP of this Proxmox host (the dashboard connects to https://<ip>:8006 and ssh)" "$detected" is_ipv4 'an IPv4 address of this host'
   if [[ $need_config == yes ]]; then
-    say 'The public URL is where you will open the dashboard through your HTTPS reverse proxy (needed for iPhone push).'
-    ask_valid PVE1_DASH_PUBLIC_URL 'Public HTTPS URL (empty if you have none yet)' '' is_public_url 'an https:// URL such as https://dash.home.lan, or empty'
+    say 'The public URL is the https:// address you will open the dashboard under, through your reverse proxy. Push'
+    say 'notification links need it. Enter it now even if the proxy is not set up yet.'
+    ask_valid PVE1_DASH_PUBLIC_URL 'Public HTTPS URL, e.g. https://dash.example.com (empty: set it later)' '' is_public_url 'an https:// URL such as https://dash.example.com, or empty'
     say 'Web Push needs a contact address. Use your real email: Apple rejects localhost and made-up domains.'
     if ((ASSUME_YES)) && [[ -z ${PVE1_DASH_VAPID_EMAIL-} ]]; then die 'PVE1_DASH_VAPID_EMAIL is required with --yes.'; fi
     ask_valid PVE1_DASH_VAPID_EMAIL 'Your email for Web Push (VAPID contact)' '' is_vapid_email 'a real email address (not localhost, .lan, .local, .test, ...)'
+    net=$(host_network "$PVE1_DASH_NODE_IP") || net=''
+    say 'The dashboard has no login. It can refuse connections from outside your LAN (e.g. an IoT network); your'
+    say "reverse proxy's address must be inside, because the proxy is what connects. \"any\" allows everyone."
+    ask_valid PVE1_DASH_ALLOWED_SOURCES 'Allow connections from (CIDRs separated by spaces, or "any")' "${net:-any}" is_allowed_sources 'IPv4 networks such as 10.10.10.0/24 (or single addresses), or "any"'
+  else
+    if [[ -z ${PVE1_DASH_PUBLIC_URL-} && $CONFIG_HAS_PUBLIC_URL == no ]] && ((!ASSUME_YES)); then
+      say 'The existing config has no publicUrl (push notification links need it).'
+      ask_valid PVE1_DASH_PUBLIC_URL 'Public HTTPS URL to set, e.g. https://dash.example.com (empty: leave it)' '' is_public_url 'an https:// URL such as https://dash.example.com, or empty'
+    fi
+    is_public_url "${PVE1_DASH_PUBLIC_URL-}" || die "PVE1_DASH_PUBLIC_URL=\"$PVE1_DASH_PUBLIC_URL\": an https:// URL such as https://dash.example.com"
+    if [[ -n ${PVE1_DASH_ALLOWED_SOURCES-} ]]; then
+      is_allowed_sources "$PVE1_DASH_ALLOWED_SOURCES" || die "PVE1_DASH_ALLOWED_SOURCES=\"$PVE1_DASH_ALLOWED_SOURCES\": IPv4 networks such as 10.10.10.0/24, or \"any\""
+    fi
+  fi
+  PVE1_DASH_PUBLIC_URL=${PVE1_DASH_PUBLIC_URL-}
+  PVE1_DASH_PUBLIC_URL=${PVE1_DASH_PUBLIC_URL%/}
+  if [[ -n ${PVE1_DASH_ALLOWED_SOURCES-} ]]; then
+    read -r -a words <<<"${PVE1_DASH_ALLOWED_SOURCES//,/ }"
+    PVE1_DASH_ALLOWED_SOURCES=${words[*]}
   fi
   say 'Temperatures: the dashboard can show CPU/board temperatures if lm-sensors is installed on this host.'
   say 'That is one Debian package (apt install lm-sensors); the helper then only runs "sensors -j". Skip it if unsure.'
@@ -1399,7 +1485,18 @@ print_plan() {
     if [[ -n $NET0_NEW ]]; then say "Network         $NET0_CURRENT  →  $NET0_NEW (container restarts)"; fi
   fi
   say "Proxmox host    $NODE at $PVE1_DASH_NODE_IP"
-  [[ -n ${PVE1_DASH_PUBLIC_URL-} ]] && say "Public URL      $PVE1_DASH_PUBLIC_URL"
+  local where=''
+  if [[ $NEED_CONFIG == no ]]; then where=' (set in the existing config)'; fi
+  if [[ -n ${PVE1_DASH_PUBLIC_URL-} ]]; then
+    say "Public URL      $PVE1_DASH_PUBLIC_URL$where"
+  elif [[ $NEED_CONFIG == yes ]]; then
+    say 'Public URL      (none yet; set it later, the summary shows how)'
+  fi
+  case ${PVE1_DASH_ALLOWED_SOURCES-} in
+    '') ;;
+    any) say "Allowed from    everyone$where" ;;
+    *) say "Allowed from    $PVE1_DASH_ALLOWED_SOURCES and loopback$where" ;;
+  esac
   [[ -n ${PVE1_DASH_VAPID_EMAIL-} ]] && say "Push contact    mailto:$PVE1_DASH_VAPID_EMAIL"
   if [[ $TOKEN_MANAGED == yes ]]; then
     say "API token       $TOKEN_ID (PVEAuditor on /, read-only)"
@@ -1536,7 +1633,16 @@ collect_host_facts() {
     warn "pveproxy serves a different certificate than $cert; pinning the served one ($served)"
     TLS_FINGERPRINT=$served
   fi
-  ok "TLS pin ${TLS_FINGERPRINT:0:23}… ($(basename "$cert"))"
+  TLS_CA=''
+  # The default self-signed certificate: trust Proxmox's cluster CA when that verifies, so renewals don't matter.
+  if [[ $cert == */pve-ssl.pem ]] && pve_ca_verifies "$PVE1_DASH_NODE_IP" "$PVE_ROOT_CA"; then
+    TLS_CA=$(cat "$PVE_ROOT_CA") || TLS_CA=''
+  fi
+  if [[ -n $TLS_CA && $NEED_CONFIG == yes ]]; then
+    ok "TLS: the certificate verifies with Proxmox's cluster CA for $PVE1_DASH_NODE_IP (no pin to renew)"
+  else
+    ok "TLS pin ${TLS_FINGERPRINT:0:23}… ($(basename "$cert"))"
+  fi
   if [[ $cert == */pveproxy-ssl.pem ]]; then consider_public_ca; fi
   HOST_KEY=$(host_key_line /etc/ssh/ssh_host_ed25519_key.pub) || die '/etc/ssh/ssh_host_ed25519_key.pub is missing or not an ed25519 key.'
   ok 'host SSH key (ed25519) read for pinning'
@@ -1566,6 +1672,7 @@ run_lxc_setup() {
     export P1D_CTID=$ctid P1D_NODE=$NODE P1D_NODE_IP=$PVE1_DASH_NODE_IP P1D_TLS_FINGERPRINT=$TLS_FINGERPRINT
     export P1D_PUBLIC_URL=${PVE1_DASH_PUBLIC_URL-} P1D_VAPID_EMAIL=${PVE1_DASH_VAPID_EMAIL-} P1D_HOST_KEY=$HOST_KEY
     export P1D_TOKEN_ID=$TOKEN_ID P1D_TOKEN_SECRET=${TOKEN_SECRET-} P1D_COMMIT=$REF_COMMIT P1D_PVE_HOST=$PVE_HOST
+    export P1D_TLS_CA=$TLS_CA P1D_ALLOWED_SOURCES=${PVE1_DASH_ALLOWED_SOURCES-}
     P1D_NODE_IPS=$(host_ipv4s) || P1D_NODE_IPS=''
     P1D_TIMEZONE=${PVE1_DASH_TIMEZONE:-$(host_timezone)}
     export P1D_NODE_IPS P1D_TIMEZONE
@@ -1586,7 +1693,8 @@ run_lxc_setup() {
 write_setup_env() {
   local k
   for k in PVE1_DASH_REPO PVE1_DASH_REF P1D_CTID P1D_NODE P1D_NODE_IP P1D_TLS_FINGERPRINT P1D_PUBLIC_URL \
-    P1D_VAPID_EMAIL P1D_HOST_KEY P1D_TOKEN_ID P1D_TOKEN_SECRET P1D_COMMIT P1D_PVE_HOST P1D_NODE_IPS P1D_TIMEZONE; do
+    P1D_VAPID_EMAIL P1D_HOST_KEY P1D_TOKEN_ID P1D_TOKEN_SECRET P1D_COMMIT P1D_PVE_HOST P1D_NODE_IPS P1D_TIMEZONE \
+    P1D_TLS_CA P1D_ALLOWED_SOURCES; do
     printf '%s=%q\n' "$k" "${!k-}"
   done
 }
@@ -1748,6 +1856,13 @@ smoke_test() {
   esac
   if [[ $healthy == yes ]]; then
     ok "$base/healthz answers"
+    out=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$base/api/snapshot" 2>/dev/null) || out=''
+    if [[ $out == 403 ]]; then
+      ok 'this host is outside listen.allowedSources, so it cannot read the API (as configured); the doctor below checks from inside'
+      healthy=restricted
+    fi
+  fi
+  if [[ $healthy == yes ]]; then
     for ((i = 0; i < 15; i++)); do
       out=$(curl -fsS --max-time 10 "$base/api/snapshot" 2>/dev/null | collector_summary) || out=''
       [[ -z $out ]] || break
@@ -1758,13 +1873,14 @@ smoke_test() {
       error*) warn "the dashboard cannot read Proxmox: ${out#error } (docs/TROUBLESHOOTING.md \"Token 401/403\" / \"TLS fingerprint mismatch\")" ;;
       *) warn 'no Proxmox poll reported yet; check Settings → Data sources in the dashboard in a minute.' ;;
     esac
-  else
+  elif [[ $healthy == no ]]; then
     warn "no answer from $base/healthz yet: check \"pct exec $ctid -- journalctl -u pve1-dash -n 50\"."
   fi
   out=$(pct exec "$ctid" -- env -i PATH="$CT_PATH" runuser -u pve1dash -- \
     ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/pve1-dash/ssh/known_hosts \
     -o IdentitiesOnly=yes -o ConnectTimeout=10 -i /etc/pve1-dash/ssh/id_ed25519 "root@$PVE1_DASH_NODE_IP" version 2>&1) || :
-  if [[ $out == *'pve1-dash-helper 1'* ]]; then
+  # "pve1-dash-helper <protocol>" (a newer helper may speak a higher protocol and still answer this)
+  if [[ $out =~ pve1-dash-helper\ [0-9]+ ]]; then
     ok 'SSH helper reachable from the dashboard (forced command)'
   else
     warn "SSH helper test failed: $(sanitize <<<"${out:-no output}")"
@@ -1772,22 +1888,86 @@ smoke_test() {
   fi
 }
 
+# Text from the container (the doctor's report) shown safely, keeping UTF-8 (✓, →): C0/C1 control characters
+# (terminal escape sequences) and bidi/zero-width controls are printed as \x{..}, so they can't redraw the screen.
+sanitize_utf8() {
+  perl -CS -pe 's/([\x00-\x08\x0B-\x1F\x7F-\x9F\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}])/sprintf("\\x{%X}", ord $1)/ge' 2>/dev/null
+}
+
+# The container's read-only self-test as the last check of an install; it never fails the installer.
+run_ct_doctor() {
+  local ctid=$1 rc=0
+  pct exec "$ctid" -- env -i PATH="$CT_PATH" test -x /usr/local/bin/pve1-dash-doctor 2>/dev/null || return 0
+  say 'pve1-dash-doctor (in the container, read-only: config, Proxmox API and permissions, SSH helper, push):'
+  printf '\n'
+  if timeout 180 pct exec "$ctid" -- env -i PATH="$CT_PATH" HOME=/root LANG=C.UTF-8 TERM=dumb NO_COLOR=1 \
+    pve1-dash-doctor 2>&1 | sanitize_utf8; then
+    rc=0
+  else
+    rc=${PIPESTATUS[0]}
+  fi
+  printf '\n'
+  if ((rc == 0)); then
+    ok 'pve1-dash-doctor found nothing to fix'
+  else
+    warn "pve1-dash-doctor found something to look at (see its report above). Run it again any time: pct exec $ctid -- pve1-dash-doctor"
+  fi
+}
+
+# "<prefix> <gateway>" for making the DHCP address ADDR static: the prefix of this host's network when ADDR is in it
+# (else 24), and this host's gateway when it lies in that network.
+static_hint() {
+  local addr=$1 net gw len=24
+  net=$(host_network "$PVE1_DASH_NODE_IP") || net=''
+  if [[ -n $net ]] && ip_in_cidr "$addr" "$net"; then len=${net#*/}; fi
+  gw=$(default_gateway) || gw=''
+  if [[ -z $gw ]] || ! ip_in_cidr "$gw" "$addr/$len"; then gw='<router>'; fi
+  printf '%s %s\n' "$len" "$gw"
+}
+
 print_summary() {
-  local base=$1 raw update_cmd prefix=''
+  local base=$1 ct_ip=${2-} raw update_cmd prefix='' installer net0 mac len gw
   raw=$(raw_base "$PVE1_DASH_REPO" "$PVE1_DASH_REF" 2>/dev/null) || raw='<raw repo URL>'
   if [[ $PVE1_DASH_REF != "$DEFAULT_REF" ]]; then prefix="PVE1_DASH_REF=$PVE1_DASH_REF "; fi
   if [[ $PVE1_DASH_REPO != "$DEFAULT_REPO" ]]; then prefix+="PVE1_DASH_REPO=$PVE1_DASH_REPO "; fi
-  update_cmd="${prefix}bash -c \"\$(curl -fsSL $raw/deploy/install.sh)\" -- --update-helper"
+  installer="bash -c \"\$(curl -fsSL $raw/deploy/install.sh)\""
+  update_cmd="${prefix}$installer -- --update-helper"
   printf '\n%s🚉 pve1-dash is up!%s\n\n' "$C_B$C_G" "$C_0"
   say "Dashboard (LAN, plain HTTP):  $base"
   if [[ -n ${PVE1_DASH_PUBLIC_URL-} ]]; then say "Public URL (via your proxy):  $PVE1_DASH_PUBLIC_URL"; fi
+  if [[ -z ${PVE1_DASH_PUBLIC_URL-} && $CONFIG_HAS_PUBLIC_URL != yes ]]; then
+    printf '\n'
+    warn "publicUrl is not set: notification links and the guest setup command need it. Once you know the name, run"
+    warn "  PVE1_DASH_PUBLIC_URL=https://dash.example.com ${prefix}$installer"
+    warn "(it is set in the existing config and the dashboard restarts), or edit it: pct enter $CTID, then pve1-dash-config"
+  fi
+  net0=$(ct_net0 "$CTID") || net0=''
+  if [[ -n $ct_ip && $net0 == *ip=dhcp* ]]; then
+    mac=$(sed -nE 's/.*hwaddr=([0-9A-Fa-f:]{17}).*/\1/p' <<<"$net0")
+    read -r len gw <<<"$(static_hint "$ct_ip")"
+    printf '\n'
+    warn "The container got $ct_ip by DHCP, and your reverse proxy will forward to that address. Reserve it in your"
+    warn "router for MAC ${mac:-<see pct config $CTID>}, or make it static (applied in place, the MAC stays):"
+    warn "  PVE1_DASH_IP=$ct_ip/$len PVE1_DASH_GATEWAY=$gw ${prefix}$installer"
+  fi
+  case ${PVE1_DASH_ALLOWED_SOURCES:-any} in
+    any) ;;
+    *)
+      printf '\n'
+      say "Only $PVE1_DASH_ALLOWED_SOURCES may connect (listen.allowedSources). Your reverse proxy's address must be"
+      say 'inside; anything else gets HTTP 403. Change it with pve1-dash-config in the container.'
+      ;;
+  esac
   printf '\n%s  Next steps%s\n' "$C_B" "$C_0"
   say "1. Reverse proxy: forward ${PVE1_DASH_PUBLIC_URL:-your https URL} to $base with HTTP/2 on and"
-  say '   asset caching off. Recipes for Nginx Proxy Manager, nginx, Caddy, Traefik: deploy/reverse-proxy/README.md'
+  say '   asset caching off, nothing in the Advanced tab. Recipes for Nginx Proxy Manager, nginx, Caddy, Traefik:'
+  say '   deploy/reverse-proxy/README.md'
   say '2. iPhone/iPad push: open the public URL in Safari → Share → Add to Home Screen, open the app, then'
   say '   Settings → Notifications → Enable on this device.'
   say '3. VMs without the QEMU guest agent: Settings → Data sources → "Add a VM without guest agent".'
-  say "4. Update:    pct exec $CTID -- pve1-dash-update"
+  say "4. Something off? pct exec $CTID -- pve1-dash-doctor   (checks everything, prints the fix)"
+  say "   Edit the config safely: pct enter $CTID, then pve1-dash-config"
+  say "5. Update:    pct exec $CTID -- pve1-dash-update"
   say "             (if it says the host helper changed, run on this host: $update_cmd)"
   say "   Uninstall: bash -c \"\$(curl -fsSL $raw/deploy/uninstall.sh)\" -- --ctid $CTID"
   say "   Container shell: pct enter $CTID   ·   logs: pct exec $CTID -- journalctl -u pve1-dash -f"
@@ -1834,6 +2014,7 @@ update_helper_main() {
   install_host_helper "$CTID"
   authorize_dashboard_key "$CTID"
   printf '\n'
+  run_ct_doctor "$CTID"
   ok 'done'
 }
 
@@ -1898,7 +2079,11 @@ main() {
         die "container $CTID does not start. If its bridge or VLAN is wrong, re-run with PVE1_DASH_BRIDGE=... / PVE1_DASH_VLAN=... (applied to it), or fix it with \"pct set $CTID --net0 ...\"."
       not_started=yes
     fi
-    if ct_sh "$CTID" 'test -f /etc/pve1-dash/config.yaml' 2>/dev/null; then NEED_CONFIG=no; fi
+    if ct_sh "$CTID" 'test -f /etc/pve1-dash/config.yaml' 2>/dev/null; then
+      NEED_CONFIG=no
+      CONFIG_HAS_PUBLIC_URL=no
+      if ct_sh "$CTID" "grep -qE '^publicUrl:[[:space:]]*[^[:space:]#]' /etc/pve1-dash/config.yaml" 2>/dev/null; then CONFIG_HAS_PUBLIC_URL=yes; fi
+    fi
     adopt_recorded_source "$CTID"
   fi
   resolve_source
@@ -1937,7 +2122,9 @@ main() {
   collect_host_facts
 
   step 'Dashboard inside the container (Node.js, build, service)'
-  say 'this takes a few minutes (packages, Node.js download, npm install and build) ...'
+  say 'this takes 5-10 minutes (packages, Node.js download, npm install and build). Keep this shell open: closing the'
+  say 'web UI Shell, or clicking another item in its tree, ends the install. If that happens, run the same command'
+  say 'again; it continues where it stopped.'
   run_lxc_setup "$CTID"
   if [[ $ROTATE_LATE == yes ]]; then rotate_token_late "$CTID"; fi
   ok 'dashboard installed and running'
@@ -1955,7 +2142,8 @@ main() {
   read -r dash_host dash_port <<<"$endpoint"
   base=$(http_base "$dash_host" "$dash_port")
   smoke_test "$CTID" "$base"
-  print_summary "$base"
+  run_ct_doctor "$CTID"
+  print_summary "$base" "$ct_ip"
 }
 
 if [[ ${BASH_SOURCE[0]:-$0} == "$0" ]]; then

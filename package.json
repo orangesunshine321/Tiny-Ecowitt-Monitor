@@ -15,7 +15,7 @@
     "demo": "PVE1_DASH_DEMO=1 tsx server/index.ts",
     "build": "npm run build:web && npm run build:server",
     "build:web": "vite build",
-    "build:server": "esbuild server/index.ts --bundle --platform=node --format=esm --target=node20 --packages=external --sourcemap --outfile=dist/server/index.js",
+    "build:server": "esbuild server/index.ts server/doctor.ts --bundle --platform=node --format=esm --target=node20 --packages=external --sourcemap --outdir=dist/server",
     "start": "node dist/server/index.js",
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.web.json --noEmit && tsc -p tsconfig.webtests.json --noEmit",
     "test": "vitest run"

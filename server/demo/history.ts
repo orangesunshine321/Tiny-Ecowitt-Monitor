@@ -311,15 +311,15 @@ const RUNNING_TASK_GRACE_S = 20 * 60;
 export function demoTasks(sim: DemoSim, nowMs: number): DemoTask[] {
   const anchorS = Math.floor(sim.anchor / 1000);
   const nowS = Math.floor(nowMs / 1000);
-  const bootS = Math.floor(sim.nodeBootMs / 1000);
   const tasks: DemoTask[] = [];
 
   for (const [i, t] of DEMO_TASKS.entries()) {
     const starttime = t.type === 'vzdump' ? runStartFor(anchorS, t.hoursAgo, jobForTask(t.id)?.schedule) : anchorS - Math.round(t.hoursAgo * HOUR_S);
     if (starttime > nowS) continue;
-    const sinceBoot = Math.max(1, starttime - bootS);
-    const pid = 1_200 + Math.floor(sinceBoot / 37) + hashInt(400, 'pid', i);
-    const pstart = sinceBoot * 100 + hashInt(100, 'pstart', i); // clock ticks (USER_HZ 100) since boot
+    // pid and pstart come from the start time alone, so a backup run keeps its UPID across demo restarts
+    // (the alert engine persists the UPIDs it has seen; a new UPID per restart would re-alert every time)
+    const pid = 1_200 + hashInt(30_000, 'pid', i, starttime);
+    const pstart = (starttime % 10_000_000) * 100 + hashInt(100, 'pstart', i); // clock ticks (USER_HZ 100)
     let endtime = t.durationS !== undefined ? starttime + t.durationS : undefined;
     let status: string | undefined = endtime !== undefined ? t.status : undefined;
     if (t.status === 'RUNNING') {
