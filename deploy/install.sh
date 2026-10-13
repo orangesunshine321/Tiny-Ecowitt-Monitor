@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # pve1-dash installer. Run as root ON THE PROXMOX VE HOST (PVE 8.x or 9.x):
 #
-#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)"
+#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main/deploy/install.sh)"
 #
 # A fixed version instead of the moving "main": PVE1_DASH_REF=<tag> in front of the command (README.md).
 #
@@ -31,7 +31,7 @@ set -Eeuo pipefail
 
 # ───────────────────────────────────────────────────────────────────────── constants
 
-readonly DEFAULT_REPO='https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git'
+readonly DEFAULT_REPO='https://github.com/orangesunshine321/pve1_dashboard.git'
 readonly DEFAULT_REF='main'
 # The branch pve1-dash was developed on before it was merged into main. Containers installed from it still record it;
 # adopt_recorded_source moves them to main.

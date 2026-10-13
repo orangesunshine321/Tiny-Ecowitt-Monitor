@@ -21,7 +21,7 @@ export const DOC = {
   clock: `${DOCS}#-times-in-alerts-are-off-by-some-hours`,
 } as const;
 export const DEFAULT_INSTALL_ENV = '/etc/pve1-dash/install.env';
-const DEFAULT_REPO = 'https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor';
+const DEFAULT_REPO = 'https://github.com/orangesunshine321/pve1_dashboard';
 const DEFAULT_REF = 'main';
 
 export function check(

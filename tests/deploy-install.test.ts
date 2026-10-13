@@ -456,8 +456,8 @@ describe('containers', () => {
 
 describe('downloads', () => {
   it('derives the raw file URL from a GitHub repo URL', () => {
-    expect(ok('raw_base', ['https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git', 'main'])).toBe(
-      'https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main\n',
+    expect(ok('raw_base', ['https://github.com/orangesunshine321/pve1_dashboard.git', 'main'])).toBe(
+      'https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main\n',
     );
     expect(ok('raw_base', ['git@github.com:me/fork', 'v1.0'])).toBe('https://raw.githubusercontent.com/me/fork/v1.0\n');
     expect(status('raw_base', ['https://gitlab.com/me/repo.git', 'main'])).toBe(1);
@@ -767,19 +767,19 @@ describe('source: refs, commits and the pve1-dash check', () => {
   });
 
   it('fails fast when the ref does not hold pve1-dash (no stale pre-merge advice: main holds pve1-dash)', () => {
-    const good = sb.bash(SCRIPT, `PVE1_DASH_REPO='${'https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git'}' PVE1_DASH_REF=main WORK_DIR='${sb.dir}'; check_source && echo fine`, {
+    const good = sb.bash(SCRIPT, `PVE1_DASH_REPO='${'https://github.com/orangesunshine321/pve1_dashboard.git'}' PVE1_DASH_REF=main WORK_DIR='${sb.dir}'; check_source && echo fine`, {
       env: { PVE1_DASH_RAW_BASE: `file://${ROOT}` },
     });
     expect(good.stdout).toBe('fine\n');
     mkdirSync(join(sb.dir, 'old'));
     writeFileSync(join(sb.dir, 'old', 'package.json'), '{\n  "name": "tiny-ecowitt-monitor"\n}\n');
-    const old = sb.bash(SCRIPT, `PVE1_DASH_REPO='https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git' PVE1_DASH_REF=main WORK_DIR='${sb.dir}'; check_source`, {
+    const old = sb.bash(SCRIPT, `PVE1_DASH_REPO='https://github.com/orangesunshine321/pve1_dashboard.git' PVE1_DASH_REF=main WORK_DIR='${sb.dir}'; check_source`, {
       env: { PVE1_DASH_RAW_BASE: `file://${sb.dir}/old` },
     });
     expect(old.status).toBe(1);
     expect(old.stderr).toContain('is not pve1-dash');
     expect(old.stderr).not.toContain('claude/homelab-dashboard-pve1-dizt16');
-    const missing = sb.bash(SCRIPT, `PVE1_DASH_REPO='https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git' PVE1_DASH_REF=main WORK_DIR='${sb.dir}'; check_source`, {
+    const missing = sb.bash(SCRIPT, `PVE1_DASH_REPO='https://github.com/orangesunshine321/pve1_dashboard.git' PVE1_DASH_REF=main WORK_DIR='${sb.dir}'; check_source`, {
       env: { PVE1_DASH_RAW_BASE: `file://${sb.dir}/nowhere` },
     });
     expect(missing.status).toBe(1);
@@ -817,7 +817,7 @@ describe('source: refs, commits and the pve1-dash check', () => {
   });
 
   it('moves a container that follows the old pre-merge branch to main (asked; --yes switches)', () => {
-    const UPSTREAM = 'https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git';
+    const UPSTREAM = 'https://github.com/orangesunshine321/pve1_dashboard.git';
     const adopt = (extra = '') => {
       sb.put('pct-exec.txt', 'claude/homelab-dashboard-pve1-dizt16\n');
       return sb.bash(SCRIPT, `${withRefs}; ASSUME_YES=1 ${extra} REPO_EXPLICIT=x REF_EXPLICIT= PVE1_DASH_REPO=${UPSTREAM} PVE1_DASH_REF=main
@@ -1148,7 +1148,7 @@ describe('main (orchestration)', () => {
          case $2 in
            *publicUrl*) return 1 ;;
            *PVE1_DASH_REF*) echo v1.2.0 ;;
-           *PVE1_DASH_REPO*) echo https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git ;;
+           *PVE1_DASH_REPO*) echo https://github.com/orangesunshine321/pve1_dashboard.git ;;
            'test -f'*) return 0 ;;
            *config.yaml*) printf 'proxmox:\\n  tokenId: "pve1dash@pve!dashboard"\\n' ;;
            *'head -n 1 /etc/pve1-dash/token'*) echo old-secret-1234 ;;

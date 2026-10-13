@@ -140,11 +140,11 @@ describe('local checks', () => {
 
   it('installer command keeps a non-default ref recorded in install.env', () => {
     const env = join(dir, 'install.env');
-    writeFileSync(env, 'PVE1_DASH_REPO=https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor\nPVE1_DASH_REF=claude/homelab-dashboard-pve1-dizt16\n');
+    writeFileSync(env, 'PVE1_DASH_REPO=https://github.com/orangesunshine321/pve1_dashboard\nPVE1_DASH_REF=claude/homelab-dashboard-pve1-dizt16\n');
     expect(installerCommand('--update-helper', { installEnv: env })).toBe(
-      'PVE1_DASH_REF=claude/homelab-dashboard-pve1-dizt16 bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/claude/homelab-dashboard-pve1-dizt16/deploy/install.sh)" -- --update-helper',
+      'PVE1_DASH_REF=claude/homelab-dashboard-pve1-dizt16 bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/claude/homelab-dashboard-pve1-dizt16/deploy/install.sh)" -- --update-helper',
     );
-    expect(installerCommand('', { installEnv: join(dir, 'none') })).toBe('bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)"');
+    expect(installerCommand('', { installEnv: join(dir, 'none') })).toBe('bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main/deploy/install.sh)"');
   });
 });
 

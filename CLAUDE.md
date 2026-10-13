@@ -2,8 +2,8 @@
 
 pve1-dash is a **read-only** homelab dashboard for one Proxmox VE node (pve1). It is a Node.js/Fastify server and a
 React PWA. It runs in its own unprivileged LXC container, reads Proxmox through a `PVEAuditor` API token, and looks
-inside guests through one SSH key that is pinned to a read-only helper script on the host. The repository is still
-called Tiny-Ecowitt-Monitor for historical reasons; everything before commit `6ace15e` is the old Windows app (plus
+inside guests through one SSH key that is pinned to a read-only helper script on the host. The repository was
+called Tiny-Ecowitt-Monitor until 2026-10-13 (GitHub redirects the old URL); everything before commit `6ace15e` is the old Windows app (plus
 an abandoned first scaffold, `af7fa62`).
 
 **New here? Read `docs/HANDOFF.md` first.** It covers project state, decisions, the first-install watch-list and the backlog.
@@ -72,9 +72,10 @@ To find the dashboard CTID (host), use `pvesh get /nodes/pve1/lxc --output-forma
   - OpenSSH 10 `PerSourcePenalties`: failed logins from the CT (e.g. before its key is authorized) make sshd drop its
     connections for a while ("kex_exchange_identification: Connection reset by peer"). It clears by itself.
 - Push goes to an iPhone Home Screen web app (iOS 16.4+). Local use only: one owner, no scaling concerns.
-- Repo `https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor`. The one-line installer fetches `deploy/install.sh`
-  from **main** and installs `main` by default. The host checkout at `/root/Tiny-Ecowitt-Monitor` has no GitHub
-  credentials.
+- Repo `https://github.com/orangesunshine321/pve1_dashboard`. The one-line installer fetches `deploy/install.sh`
+  from **main** and installs `main` by default. The host checkout keeps its old path,
+  `/root/Tiny-Ecowitt-Monitor`. It pushes over SSH with a deploy key for this repo only (`/root/.ssh/pve1-dash-deploy`,
+  set as the checkout's `core.sshCommand`); fetches use HTTPS.
 
 ## Hard rules
 
@@ -207,7 +208,7 @@ are both **2** and must change together; no test checks this. The inner guest sc
 `deploy/helpers/pve1-dash-guest-inventory`, `deploy/helpers/pve1-dash-helper` and `server/inventory/innerScript.ts`
 (enforced by `tests/inventory-scripts.test.ts`). **Any** byte change to the host helper needs a helper refresh on
 the host after the container is updated: the one-liner
-`bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)" -- --update-helper`,
+`bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main/deploy/install.sh)" -- --update-helper`,
 or `bash deploy/install.sh --update-helper` from a checkout on an up-to-date `main`. `pve1-dash-update` prints the exact
 command, but only in the update that changed the helper (see Shipping a change); the sha256 comparison in Gotchas works
 any time. When the container's helper differs from the repo copy, `--update-helper` shows a diff and asks on the

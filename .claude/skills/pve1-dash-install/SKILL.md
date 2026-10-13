@@ -27,7 +27,7 @@ runs: **host** = pve1 as root, **CT** = the dashboard container (`pct exec <ctid
 
 ```bash
 # host or LAN: must print a number > 0 (the pre-merge main printed 0)
-curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh | grep -c PVE1_DASH_ALLOWED_SOURCES
+curl -fsSL https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main/deploy/install.sh | grep -c PVE1_DASH_ALLOWED_SOURCES
 ```
 
 (raw.githubusercontent.com caches branch URLs for a few minutes after a push.)
@@ -77,7 +77,7 @@ Three more work but are not listed there: `PVE1_DASH_TIMEZONE`, `PVE1_DASH_PROCE
 ## 3. Run it (owner, host)
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main/deploy/install.sh)"
 ```
 
 Unattended form, only if the owner wants it. They put in their own email:
@@ -85,7 +85,7 @@ Unattended form, only if the owner wants it. They put in their own email:
 ```bash
 PVE1_DASH_VAPID_EMAIL=<their email> PVE1_DASH_PUBLIC_URL=https://dash.bgreen.cloud \
 PVE1_DASH_ALLOWED_SOURCES="10.10.10.0/24 10.10.20.0/24" PVE1_DASH_IP=10.10.20.5/24 PVE1_DASH_GATEWAY=10.10.20.1 \
-  bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)" -- --yes
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main/deploy/install.sh)" -- --yes
 ```
 
 Even with `--yes`, three questions come **after** "Go ahead?" and can still matter:
@@ -202,7 +202,7 @@ If it fails, see `docs/TROUBLESHOOTING.md#-push-notifications-dont-arrive-on-iph
 - **Helper refresh**, when `pve1-dash-update` says the helper changed, or after a PR that changed the helper was
   merged (the notice appears only in the update that changed it), or whenever the CT and host helper hashes differ
   (`CLAUDE.md` → Gotchas) (host, ask first):
-  `bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)" -- --update-helper`.
+  `bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main/deploy/install.sh)" -- --update-helper`.
   When the container's helper differs from the repo copy, it shows a diff and asks on the terminal, which your Bash
   tool doesn't have, so it stops with "no terminal to ask". Then stop too: the owner reads
   `/var/log/pve1-dash-helper.diff` and re-runs the command in their own SSH or xterm.js terminal, because the helper
@@ -232,7 +232,7 @@ If it fails, see `docs/TROUBLESHOOTING.md#-push-notifications-dont-arrive-on-iph
 ## 8. Uninstall (destructive, needs explicit OK)
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/uninstall.sh)"   # host
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main/deploy/uninstall.sh)"   # host
 ```
 
 The owner runs it in their own terminal, like the installer, because it asks questions. It removes the container's

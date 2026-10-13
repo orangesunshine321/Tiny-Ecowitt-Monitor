@@ -4,7 +4,7 @@ import { ListGroup, ListRow, StatusBadge } from '../../components';
 import { useSnapshot } from '../../store';
 
 /** The project's home (README "Install"). */
-export const PROJECT_URL = 'https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor';
+export const PROJECT_URL = 'https://github.com/orangesunshine321/pve1_dashboard';
 
 export function AboutSection() {
   const meta = useSnapshot((s) => s.meta, Object.is);

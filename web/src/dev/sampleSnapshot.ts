@@ -1247,7 +1247,7 @@ function sampleDiagnostics(now: number): DiagnosticsReport {
       title: 'API token',
       status: scenario === 'auth' ? 'fail' : 'ok',
       detail: scenario === 'auth' ? err!.error : "Token pve1dash@pve!dashboard is valid.",
-      fix: scenario === 'auth' ? 'PVE1_DASH_ROTATE_TOKEN=yes bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)"' : undefined,
+      fix: scenario === 'auth' ? 'PVE1_DASH_ROTATE_TOKEN=yes bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main/deploy/install.sh)"' : undefined,
     },
     {
       id: 'pve.acl',

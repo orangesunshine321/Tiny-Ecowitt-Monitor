@@ -20,7 +20,7 @@
 
 set -Eeuo pipefail
 
-readonly DEFAULT_REPO='https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git'
+readonly DEFAULT_REPO='https://github.com/orangesunshine321/pve1_dashboard.git'
 # The branch pve1-dash lived on before it was merged into main. Installs from that time still record it.
 readonly PREMERGE_REF='claude/homelab-dashboard-pve1-dizt16'
 readonly APP_DIR=/opt/pve1-dash

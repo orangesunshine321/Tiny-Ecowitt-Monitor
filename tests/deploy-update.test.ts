@@ -102,7 +102,7 @@ describe('git source', () => {
 describe('helpers', () => {
   it('builds the same raw URL as install.sh', () => {
     for (const [repo, ref] of [
-      ['https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git', 'main'],
+      ['https://github.com/orangesunshine321/pve1_dashboard.git', 'main'],
       ['git@github.com:me/fork.git', 'v2.0'],
     ] as const) {
       const a = sb.call(SCRIPT, 'raw_base', [repo, ref]).stdout;
@@ -315,7 +315,7 @@ describe('install.env', () => {
   });
 
   it('moves an install that followed the deleted pre-merge branch to main, and stops with the command otherwise', () => {
-    const upstream = 'https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git';
+    const upstream = 'https://github.com/orangesunshine321/pve1_dashboard.git';
     const moved = sb.call(SCRIPT, 'gone_ref_fallback', [upstream, 'claude/homelab-dashboard-pve1-dizt16']);
     expect(moved.status).toBe(0);
     expect(moved.stdout).toBe('main\n');

@@ -253,7 +253,7 @@ per dashboard (options you added in front, like `from="..."`, are kept by the in
 without `restrict,command=`? Refresh it **(host)**:
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)" -- --update-helper
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main/deploy/install.sh)" -- --update-helper
 ```
 
 If `PermitRootLogin` is `no`, allow forced-command keys only:

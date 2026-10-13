@@ -46,7 +46,7 @@ No Proxmox needed: the demo runs a simulated homelab (a mock Proxmox API and fak
 newer (22+ to run the test suite).
 
 ```bash
-git clone https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git pve1-dash
+git clone https://github.com/orangesunshine321/pve1_dashboard.git pve1-dash
 cd pve1-dash
 npm ci && npm run build && npm run demo
 ```
@@ -58,7 +58,7 @@ Then open <http://localhost:8080>. (Port taken? `PVE1_DASH_PORT=8081 npm run dem
 On **pve1**, as root, over SSH or in the web UI's node → **Shell**:
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main/deploy/install.sh)"
 ```
 
 > **Keep the shell open for 5-10 minutes.** The web UI's Shell panel ends the install when you close it or click
@@ -96,7 +96,7 @@ Settings. Every step, and how to do it by hand, is in **[docs/SETUP.md](docs/SET
 | Uninstall | `bash -c "$(curl -fsSL …/deploy/uninstall.sh)"` (add `-- --yes` for no questions) |
 | Still off after the doctor | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) |
 
-`…` stands for `https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main`.
+`…` stands for `https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main`.
 
 ### 📋 Requirements
 

@@ -57,7 +57,7 @@ pct exec <devid> -- apt-get install -y ca-certificates curl git xz-utils shellch
 Add `openssh-server` only if the real-sshd suite should run (it also needs root and `/run/sshd`).
 
 Clone for option A (host):
-`pct exec <devid> -- git clone https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git /root/pve1-dash`. The Vite
+`pct exec <devid> -- git clone https://github.com/orangesunshine321/pve1_dashboard.git /root/pve1-dash`. The Vite
 and demo servers bind `0.0.0.0`, so a dev container exposes them to the LAN while they run. That is fine on
 the home LANs (10.10.10.0/24, 10.10.20.0/24), but stop them when done.
 
@@ -231,7 +231,7 @@ It needs Chromium at `/opt/pw-browsers/chromium`. File names drop the query stri
 - Run `npx vitest run tests/deploy-*.test.ts` plus `bash -n` on each script.
 - To try installer changes on the real host (host; the owner runs it in their own SSH/xterm.js shell, after an
   explicit OK, because the installer is interactive and changes the real dashboard): push, then the owner runs
-  `PVE1_DASH_REF=<40-char sha> bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/<40-char sha>/deploy/install.sh)"`
+  `PVE1_DASH_REF=<40-char sha> bash -c "$(curl -fsSL https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/<40-char sha>/deploy/install.sh)"`
   (unverified URL form). Commit URLs aren't cached the way branch URLs are, and the ref must be given too, because
   `install.sh` defaults to `main`. That run records the sha in `install.env`, so later plain updates stay on the trial
   commit ("already up to date"). Once the change is merged or abandoned, move the container back (host, ask first,
@@ -291,7 +291,7 @@ It needs Chromium at `/opt/pw-browsers/chromium`. File names drop the query stri
 
 The local agent needs its own access to push: `gh` (installed in the dev container above; the Debian package is
 `gh`, unverified on this host), or an SSH key added to the owner's GitHub account plus
-`git remote set-url origin git@github.com:orangesunshine321/Tiny-Ecowitt-Monitor.git`.
+`git remote set-url origin git@github.com:orangesunshine321/pve1_dashboard.git`.
 
 - Ask the owner which one they want, and where. Prefer the dev container (option A): it keeps credentials off the
   hypervisor.

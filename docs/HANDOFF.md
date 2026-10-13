@@ -11,7 +11,7 @@ shell. The native installer needs no Node.js, so nothing Node-related lands on t
 
 ```bash
 apt update && apt install -y git        # add gh too if the agent should push from the host (see the develop skill)
-git clone https://github.com/orangesunshine321/Tiny-Ecowitt-Monitor.git /root/Tiny-Ecowitt-Monitor
+git clone https://github.com/orangesunshine321/pve1_dashboard.git /root/Tiny-Ecowitt-Monitor
 curl -fsSL https://claude.ai/install.sh | bash   # Claude Code's native installer (puts `claude` in ~/.local/bin)
 cd /root/Tiny-Ecowitt-Monitor && claude          # log in when asked
 ```
@@ -40,7 +40,7 @@ when it writes the file itself. For development in a separate container instead 
    on the host and are read-only:
    ```bash
    git fetch origin && git log --oneline -5 origin/main
-   curl -fsSL https://raw.githubusercontent.com/orangesunshine321/Tiny-Ecowitt-Monitor/main/deploy/install.sh | grep -c PVE1_DASH_ALLOWED_SOURCES   # must be > 0
+   curl -fsSL https://raw.githubusercontent.com/orangesunshine321/pve1_dashboard/main/deploy/install.sh | grep -c PVE1_DASH_ALLOWED_SOURCES   # must be > 0
    ```
    If the count is 0, `main` still holds the first release (`ee7818d`) without the doctor, the config tool,
    `allowedSources` and helper protocol v2. Tell the owner before anything is installed.
