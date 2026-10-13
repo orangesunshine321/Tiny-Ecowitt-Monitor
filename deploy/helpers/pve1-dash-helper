@@ -412,7 +412,7 @@ inspect_guest() { # <vmid> <lxc|qemu> <base path>
   local vmid=$1 type=$2 base=$3 transport limit rc cfg size
   local out=$base.out err=$base.err
   # Skipped guests write no block, like a VM without the agent ($vmid is digits only, checked by the caller).
-  if [[ -r $SKIP_FILE ]] && grep -qE "^[[:space:]]*$vmid[[:space:]]*(#.*)?$" "$SKIP_FILE"; then return 0; fi
+  if [[ -r $SKIP_FILE ]] && grep -qE "^[[:space:]]*${vmid}[[:space:]]*(#.*)?$" "$SKIP_FILE"; then return 0; fi
   if [[ $type == lxc ]]; then
     transport=pct-exec
     limit=$GUEST_TIMEOUT
@@ -651,6 +651,7 @@ main() {
       cmd_hostinfo
       ;;
     backups)
+      # shellcheck disable=SC2015 # deny exits, so this is if-not-valid-then-deny
       ((n == 2)) && [[ ${argv[1]} =~ $re_storage ]] || deny
       cmd_backups "${argv[1]}"
       ;;

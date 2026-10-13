@@ -59,6 +59,7 @@ readonly MIN_FREE_MIB=${PVE1_DASH_MIN_FREE_MIB:-1024}
 # Every step checks its own result: try_update_node runs this where errexit is off (a failed step there would
 # otherwise go unnoticed). The working version is only touched once the new one is unpacked and runs, and older
 # versions are only deleted after the switch is verified.
+# shellcheck disable=SC2120 # the major version argument is optional (the tests pass one)
 install_node() {
   local major=${1:-$NODE_MAJOR} dist arch sums line sha file version dest tmp current='' got prev old
   dist="${PVE1_DASH_NODE_DIST:-https://nodejs.org/dist}/latest-v${major}.x"
@@ -119,6 +120,7 @@ install_node() {
   if link_node_bins; then got=$("$BIN_DIR/node" --version 2>/dev/null) || got=''; fi
   if [[ $got != "$version" ]]; then
     if [[ -n $prev && -d $prev ]]; then
+      # shellcheck disable=SC2015 # best-effort rollback: any failed step just leaves it
       ln -sfn "$prev" "$NODE_ROOT/node.new" && mv -Tf "$NODE_ROOT/node.new" "$NODE_ROOT/node" && link_node_bins || :
     fi
     die "$BIN_DIR/node does not run Node.js $version after the switch (it printed \"$got\")${prev:+; switched back to $prev}"
@@ -134,6 +136,7 @@ install_node() {
 # a working Node.js exists.
 try_update_node() {
   local rc=0
+  # shellcheck disable=SC2119 # the default major version
   (install_node) || rc=$?
   if ((rc == 0)); then return 0; fi
   [[ -x $BIN_DIR/node ]] || die 'Node.js is not installed and could not be installed'
