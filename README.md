@@ -162,6 +162,18 @@ docs/                SETUP, SECURITY, TROUBLESHOOTING, helper protocol, design b
 tests/               vitest suites (server modules, deploy scripts with stubbed Proxmox tools)
 ```
 
+### 🤖 Working on pve1-dash with Claude Code
+
+Start Claude Code at the root of a checkout of this repo (for example on the Proxmox host), never in a subdirectory:
+`.claude/settings.json` is read only from the directory Claude Code starts in, so elsewhere its rules are silently
+missing. To set that up on pve1 (git, the clone, and Claude Code's native installer, which needs no Node.js), follow
+[docs/HANDOFF.md → Bootstrap on pve1](docs/HANDOFF.md#-bootstrap-on-pve1-owner-host). Claude Code loads
+[CLAUDE.md](CLAUDE.md), which has the hard rules and shows where each command runs. It also loads the project skills
+in `.claude/skills/`: install, troubleshoot and develop. The project state, the decisions behind it, the
+first-install watch-list and the backlog are in [docs/HANDOFF.md](docs/HANDOFF.md). `.claude/settings.json` starts
+sessions in Manual mode, turns off auto mode, makes dangerous Proxmox commands ask first and denies the worst ones.
+That is a safety net, not a security boundary.
+
 ## 🙏 Credits & licenses
 
 - pve1-dash is MIT licensed (see `package.json`).

@@ -450,7 +450,7 @@ function buildInventory(g: DemoGuest, now: number): GuestInventory | undefined {
     ...containers.flatMap((c, i) => c.ports.filter((p) => c.state === 'running' && p.hostPort).map((p) => ({ proto: 'tcp' as const, address: '0.0.0.0', port: p.hostPort!, process: 'docker-proxy', pid: 2300 + i }))),
     ...(EXTRA_PORTS[g.vmid] ?? []),
   ];
-  const extraUnits = (EXTRA_PORTS[g.vmid] ?? []).map((p) => ({ unit: p.process === 'syncthing' ? 'syncthing@brandon' : 'cockpit', sub: 'running', system: false, description: `${p.process} service` }));
+  const extraUnits = (EXTRA_PORTS[g.vmid] ?? []).map((p) => ({ unit: p.process === 'syncthing' ? 'syncthing@admin' : 'cockpit', sub: 'running', system: false, description: `${p.process} service` }));
   return {
     vmid: g.vmid,
     source: g.inventoryVia ?? 'pct-exec',
@@ -1269,7 +1269,7 @@ function sampleDiagnostics(now: number): DiagnosticsReport {
       fix: 'ssh-keyscan -t ed25519 10.10.20.60 | sudo tee -a /var/lib/pve1-dash/known_hosts',
     },
     { id: 'collectors', group: 'system', title: 'Collectors', status: err ? 'fail' : 'ok', detail: err ? 'Node status has been failing for 4 minutes.' : 'All 15 collectors ran within their interval.' },
-    { id: 'push.vapid', group: 'push', title: 'Web Push keys', status: 'ok', detail: 'VAPID keys present; subject mailto:brandon@example.com.' },
+    { id: 'push.vapid', group: 'push', title: 'Web Push keys', status: 'ok', detail: 'VAPID keys present; subject mailto:owner@example.com.' },
     { id: 'push.https', group: 'push', title: 'HTTPS for iPhone push', status: 'ok', detail: 'publicUrl is https, so Home Screen web apps on iOS can subscribe.' },
     { id: 'system.node', group: 'system', title: 'Node.js', status: 'ok', detail: 'Node 22.20.0.' },
     { id: 'system.disk', group: 'system', title: 'Free disk space', status: 'ok', detail: '2.7 GiB free in /var/lib/pve1-dash.' },

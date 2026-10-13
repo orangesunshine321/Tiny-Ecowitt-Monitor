@@ -358,8 +358,8 @@ describe('createPushService', () => {
   it('subscribe upserts by endpoint; devices() never exposes the endpoint', async () => {
     const push = createPushService(makeCtx(dataDir));
     const sub = subscription();
-    const dev = await push.subscribe({ subscription: sub, name: "Brandon's iPhone" });
-    expect(dev).toMatchObject({ name: "Brandon's iPhone", endpointHost: 'web.push.apple.com', prefs: defaultPrefs() });
+    const dev = await push.subscribe({ subscription: sub, name: "Owner's iPhone" });
+    expect(dev).toMatchObject({ name: "Owner's iPhone", endpointHost: 'web.push.apple.com', prefs: defaultPrefs() });
     const again = await push.subscribe({ subscription: { ...sub, keys: subscription().keys }, name: 'iPhone', prefs: { minSeverity: 'critical' } });
     expect(again.id).toBe(dev.id);
     expect(again.prefs.minSeverity).toBe('critical');
@@ -523,13 +523,13 @@ describe('createPushService', () => {
 
   it('replacesId renews a subscription in place: same id, name and prefs, new endpoint, no duplicate', async () => {
     const push = createPushService(makeCtx(dataDir));
-    const first = await push.subscribe({ subscription: subscription(), name: "Brandon's iPhone", prefs: { kinds: ['backup_failed'], minSeverity: 'critical' } });
+    const first = await push.subscribe({ subscription: subscription(), name: "Owner's iPhone", prefs: { kinds: ['backup_failed'], minSeverity: 'critical' } });
     await push.updatePrefs(first.id, { recoveries: false });
     // Safari dropped the subscription: the app made a new one and posts it with its stored device id
     const renewedSub = subscription();
     const renewed = await push.subscribe({ subscription: renewedSub, name: 'iPhone', replacesId: first.id, origin: 'https://dash.example.net' });
     expect(renewed.id).toBe(first.id);
-    expect(renewed).toMatchObject({ name: "Brandon's iPhone", prefs: { kinds: ['backup_failed'], minSeverity: 'critical', recoveries: false } });
+    expect(renewed).toMatchObject({ name: "Owner's iPhone", prefs: { kinds: ['backup_failed'], minSeverity: 'critical', recoveries: false } });
     expect(push.devices()).toHaveLength(1);
     expect(readEndpoint(first.id)).toBe(renewedSub.endpoint);
     // the next alert goes to the new endpoint only

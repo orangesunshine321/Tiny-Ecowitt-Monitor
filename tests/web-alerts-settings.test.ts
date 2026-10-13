@@ -155,7 +155,7 @@ describe('notification state', () => {
   });
 
   it('cleans device names', () => {
-    expect(cleanDeviceName('  Brandon’s   iPhone \n')).toBe('Brandon’s iPhone');
+    expect(cleanDeviceName('  Owner’s   iPhone \n')).toBe('Owner’s iPhone');
     expect(cleanDeviceName('   ')).toBe('');
     expect(cleanDeviceName('x'.repeat(80))).toHaveLength(60);
   });

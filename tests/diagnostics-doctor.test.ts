@@ -39,7 +39,7 @@ afterAll(async () => {
 });
 
 const base = (over: Record<string, unknown> = {}): Config =>
-  ConfigSchema.parse({ dataDir: dir, alerts: { vapidSubject: 'mailto:me@bgreen.cloud' }, proxmox: { url: 'https://10.10.10.2:8006', tokenId: TOKEN, tokenSecret: SECRET }, ...over });
+  ConfigSchema.parse({ dataDir: dir, alerts: { vapidSubject: 'mailto:push@homelab.example.net' }, proxmox: { url: 'https://10.10.10.2:8006', tokenId: TOKEN, tokenSecret: SECRET }, ...over });
 const ids = (checks: DiagnosticCheck[]) => Object.fromEntries(checks.map((c) => [c.id, c]));
 
 describe('local checks', () => {
@@ -48,7 +48,7 @@ describe('local checks', () => {
     expect(vapidSubjectProblem('mailto:me@pve.lan')?.status).toBe('fail');
     expect(vapidSubjectProblem('not a subject')?.status).toBe('fail');
     expect(vapidSubjectProblem('mailto:admin@example.com')?.status).toBe('warn');
-    expect(vapidSubjectProblem('mailto:brandon@bgreen.cloud')).toBeUndefined();
+    expect(vapidSubjectProblem('mailto:push@homelab.example.net')).toBeUndefined(); // a subdomain of a reserved name: no real mailbox
     expect(vapidSubjectProblem('https://dash.bgreen.cloud')).toBeUndefined();
   });
 
@@ -244,7 +244,7 @@ describe('format + doctor CLI', () => {
     return { out, err, io: { out: (s: string) => void out.push(s), err: (s: string) => void err.push(s), isTTY: false } };
   };
   const goodYaml = (port: number) =>
-    `publicUrl: "https://dash.bgreen.cloud"\ndataDir: ${dir}\nlisten:\n  port: ${port}\nproxmox:\n  url: "${mock.url}"\n  tokenId: "${TOKEN}"\n  tokenSecret: "${SECRET}"\nalerts:\n  vapidSubject: "mailto:me@bgreen.cloud"\n`;
+    `publicUrl: "https://dash.bgreen.cloud"\ndataDir: ${dir}\nlisten:\n  port: ${port}\nproxmox:\n  url: "${mock.url}"\n  tokenId: "${TOKEN}"\n  tokenSecret: "${SECRET}"\nalerts:\n  vapidSubject: "mailto:owner@example.com"\n`;
 
   it('standalone --json: exit 1 for the plain-http Proxmox URL, report is JSON, secret never printed', async () => {
     const path = writeConfig('c1.yaml', goodYaml(P_DOWN));
