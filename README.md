@@ -5,7 +5,7 @@
 🎉 The Proxmox web UI is great for *doing* things. pve1-dash is for *looking*: a calm, glassy (macOS/iOS 26 "Liquid
 Glass" style) dashboard you can leave open on a Mac, pin to an iPad, or add to your iPhone's Home Screen, with push
 alerts when something breaks. And because a status page deserves some joy, your services also show up on a
-retro-futuristic **split-flap train-station departure board**. 🚂
+retro-futuristic **split-flap status board** (the look of an old station board, in plain words). 🚂
 
 It is **pure information**: no power buttons, no consoles of its own, no config changes. Console buttons just open
 Proxmox's own console. Works with **Proxmox VE 8.x and 9.x**.
@@ -21,7 +21,7 @@ Proxmox's own console. Works with **Proxmox VE 8.x and 9.x**.
 | **Guests** | Every VM and container with status, CPU/memory meters, IPs, tags and sparklines, as a grid or a sortable list. |
 | **Inside your guests** | Running services, Docker containers (with health and compose project), IP addresses and listening ports, collected read-only over SSH (`pct exec` for containers, the QEMU guest agent for VMs, direct SSH for VMs without it). |
 | **Service launcher** | Big tiles for your apps with health checks (HTTP or TCP), latency, 24 h uptime strips. Docker containers with published ports appear automatically. |
-| **Departure board** | Your services as a fullscreen split-flap board: ON TIME, DELAYED, CANCELLED. Optional clack sound. |
+| **Status board** | Every service on a fullscreen split-flap board, worst first: UP, SLOW, DOWN, STOPPED (its guest is off), with the guest it runs on and its response time. Optional clack sound. |
 | **Storage, ZFS & disks** | Pools with usage meters, ZFS health and vdev tree, SMART health and SSD wear per disk. |
 | **Backups** | Coverage per guest ("backed up in the last N days?"), jobs and next runs, recent backup tasks and files. |
 | **Tasks** | The Proxmox task list with readable names, durations and logs. |
@@ -36,9 +36,9 @@ Proxmox's own console. Works with **Proxmox VE 8.x and 9.x**.
 |---|---|
 | ![Overview, light](docs/screenshots/overview-light.png) | ![Overview, dark](docs/screenshots/overview-dark.png) |
 | ![Guests](docs/screenshots/guests.png) | ![Guest detail](docs/screenshots/guest-detail.png) |
-| ![Services](docs/screenshots/services.png) | ![Departure board](docs/screenshots/board.png) |
+| ![Services](docs/screenshots/services.png) | ![Status board](docs/screenshots/board.png) |
 | ![Storage](docs/screenshots/storage.png) | ![Backups](docs/screenshots/backups.png) |
-| ![iPhone: overview](docs/screenshots/iphone-overview.png) | ![iPhone: departure board](docs/screenshots/iphone-board.png) |
+| ![iPhone: overview](docs/screenshots/iphone-overview.png) | ![iPhone: status board](docs/screenshots/iphone-board.png) |
 
 ## 🚀 Quick start: try the demo
 

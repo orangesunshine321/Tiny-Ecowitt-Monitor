@@ -100,7 +100,7 @@ The feature list is in [README.md](../README.md#-features). Themes are System, L
   coverage 30 min. After pve1 boots: onboot guests get 10 min before a stop is judged. After a guest boots: health
   checks don't count it down for 120 s.
 - **Design:** Apple "Liquid Glass" (glass for chrome, not content), Safari-first, Declarative Web Push, and a
-  split-flap departure board. See [DESIGN.md](DESIGN.md) (written before the Matrix theme) and `docs/research/`.
+  split-flap status board (renamed from "departure board" in plain words, 2026-10-13). See [DESIGN.md](DESIGN.md) (written before the Matrix theme) and `docs/research/`.
 - **Demo mode** mocks PVE **9.0.10** only, so PVE 8 code paths were never run end to end.
 
 ## 🧪 Never tested on real hardware

@@ -10,9 +10,9 @@
  *  - HTTPS services whose certificate expires within 14 days (or has expired) carry a "Cert 5 d" chip (D47).
  *  - Small groups pack side by side (each group spans as many columns as it has tiles), so tile widths stay equal
  *    and single-service groups don't leave half-empty rows.
- *  - "Departures" opens the split-flap board.
+ *  - "Status board" opens the split-flap board.
  */
-import { CircleCheck, Grid3x3, LayoutGrid, Rows3, SearchX, TrainFront } from 'lucide-react';
+import { Activity, CircleCheck, Grid3x3, LayoutGrid, Rows3, SearchX } from 'lucide-react';
 import { useMemo, type CSSProperties } from 'react';
 import { Button, EmptyState, IconButton, PageHeader, SegmentedControl, ToolbarGroup, type SegmentOption } from '../components';
 import { plural } from '../format';
@@ -88,12 +88,12 @@ export default function ServicesPage() {
         />
       </ToolbarGroup>
     )}
-    <ToolbarGroup label="Departure board">
+    <ToolbarGroup label="Status board">
       {breakpoint === 'iphone' ? (
-        <IconButton icon={<TrainFront size={18} strokeWidth={2} />} label="Departure board" onClick={() => navigate('/board')} />
+        <IconButton icon={<Activity size={18} strokeWidth={2} />} label="Status board" onClick={() => navigate('/board')} />
       ) : (
-        <Button variant="glass" icon={<TrainFront size={16} strokeWidth={2.1} />} href="/board">
-          Departures
+        <Button variant="glass" icon={<Activity size={16} strokeWidth={2.1} />} href="/board">
+          Status board
         </Button>
       )}
     </ToolbarGroup>

@@ -8,7 +8,7 @@ import {
   ListChecks,
   Network,
   Settings,
-  TrainFront,
+  Activity,
   type LucideIcon,
 } from 'lucide-react';
 import type { RouteId } from '../router';
@@ -32,7 +32,7 @@ export const NAV: readonly NavItem[] = [
   { id: 'overview', path: '/', label: 'Overview', icon: Gauge, group: 'library', tab: true },
   { id: 'guests', path: '/guests', label: 'Guests', icon: Boxes, group: 'library', badge: 'runningGuests', tab: true },
   { id: 'services', path: '/services', label: 'Services', icon: LayoutGrid, group: 'library', badge: 'servicesDown', tab: true },
-  { id: 'board', path: '/board', label: 'Board', icon: TrainFront, group: 'library', tab: true },
+  { id: 'board', path: '/board', label: 'Board', icon: Activity, group: 'library', tab: true },
   { id: 'storage', path: '/storage', label: 'Storage', icon: HardDrive, group: 'infrastructure' },
   { id: 'backups', path: '/backups', label: 'Backups', icon: Archive, group: 'infrastructure' },
   { id: 'tasks', path: '/tasks', label: 'Tasks', icon: ListChecks, group: 'infrastructure' },

@@ -91,7 +91,7 @@ const BOARD_DOM = `
 <div class="bd-page">
   <header class="bd-head">
     <div class="bd-sign"><span class="bd-sign-icon"></span>
-      <div class="bd-sign-text"><h1 class="bd-title" id="title">DEPARTURES</h1><p class="bd-station" id="station">PVE1 CENTRAL</p></div>
+      <div class="bd-sign-text"><h1 class="bd-title" id="title">SERVICE STATUS</h1><p class="bd-station" id="station">PVE1</p></div>
     </div>
     <div class="fb bd-clock" style="--cw: 30px; --ch: 42px"><span class="flap-text"><span class="flap" id="clock">0</span></span>
       <span class="bd-clock-colon"><i id="colon"></i><i></i></span></div>
@@ -100,11 +100,11 @@ const BOARD_DOM = `
     <div class="bd-sweep" id="sweep"></div>
     <div class="bd-area">
       <div class="fb bd-board" style="--cw: 28px; --ch: 40px; --cg: 3px; --colgap: 16px; --lampw: 24px; --rw: 200px">
-        <div class="fb-labels" id="labels"><span>Time</span><span>Destination</span></div>
+        <div class="fb-labels" id="labels"><span>Checked</span><span>Service</span></div>
         <div class="fb-row">
           <span class="flap-text fb-amber"><span class="flap" id="accent"><span class="flap-half flap-top" id="face"></span></span></span>
           <span class="flap-text"><span class="flap" id="dest">J</span></span>
-          <span class="fb-remark"><span class="fb-lamp" data-lamp="green" id="lamp-green"></span><span class="flap" data-variant="word" id="remark">ON TIME</span></span>
+          <span class="fb-remark"><span class="fb-lamp" data-lamp="green" id="lamp-green"></span><span class="flap" data-variant="word" id="remark">UP</span></span>
         </div>
         <div class="fb-row">
           <span class="fb-lamp" data-lamp="amber" id="lamp-amber"></span><span class="fb-lamp" data-lamp="red" id="lamp-red"></span>
@@ -119,7 +119,7 @@ const BOARD_DOM = `
     <span class="bd-legend"><i data-lamp="green" id="legend-green"></i><i data-lamp="amber" id="legend-amber"></i><i data-lamp="red" id="legend-red"></i></span>
   </footer>
 </div>
-<div class="mb" id="mb"><div class="mb-empty" id="mb-empty">No departures scheduled</div></div>`;
+<div class="mb" id="mb"><div class="mb-empty" id="mb-empty">No services yet</div></div>`;
 
 describe.skipIf(!CHROMIUM)('the board in Chromium', () => {
   let browser: Browser;

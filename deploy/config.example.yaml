@@ -202,10 +202,10 @@ services:
   # Tiles warn when an https service's certificate expires within this many days.
   certWarnDays: 14
 
-# The split-flap departure board (/board).
+# The split-flap status board (/board): every service with its status, worst first.
 board:
-  title: DEPARTURES
-  station: PVE1 CENTRAL
+  title: SERVICE STATUS
+  station: PVE1
   # The "clack" sound; off by default (each viewer can also toggle it in Settings → Appearance).
   sound: false
 

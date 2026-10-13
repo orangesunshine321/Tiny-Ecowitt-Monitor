@@ -85,7 +85,7 @@ describe('sections with every child commented out (null)', () => {
     expect(c.inventory.enabled).toBe(false);
     expect(c.services.items).toEqual([]);
     expect(c.services.hide).toEqual([]);
-    expect(c.board.title).toBe('DEPARTURES');
+    expect(c.board.title).toBe('SERVICE STATUS');
     expect(c.listen.allowedSources).toEqual([]);
     expect(c.publicUrl).toBeUndefined();
   });

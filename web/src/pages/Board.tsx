@@ -1,10 +1,10 @@
 /**
- * Departure board (DESIGN §5 Board): the fullscreen, retro-futuristic split-flap board of service statuses.
+ * Status board (DESIGN §5 Board): the fullscreen, retro-futuristic split-flap board of service statuses.
  *
  *  - No app chrome; Esc or the glass Done button returns to the previous page.
  *  - Header: meta.board title and station, plus a live flip clock.
- *  - Rows: problems first (down → slow → unknown → up, then by name). REMARKS: ON TIME · DELAYED · CANCELLED ·
- *    NOT IN SERVICE · BOARDING, with a coloured lamp per row (the text stays white/amber).
+ *  - Rows: problems first (down → slow → unknown → up, then by name). STATUS: UP · SLOW · DOWN · STOPPED ·
+ *    UNKNOWN, with a coloured lamp per row (the text stays white/amber).
  *  - Responsive: every column on Mac/iPad; narrower screens drop the platform name for the vmid, then the platform
  *    and latency columns (iPhone portrait suggests rotating).
  *  - Pages turn every 12 s when the rows don't fit.
@@ -14,7 +14,7 @@
  *  - Keep Screen On (D45): a screen wake lock while the board is visible, so a wall iPad or a Mac doesn't lock;
  *    a per-device switch in the toolbar (on by default), hidden where the browser has no wake lock.
  */
-import { Maximize2, Minimize2, RotateCcw, Sun, SunDim, TrainFront, Volume2, VolumeX } from 'lucide-react';
+import { Activity, Maximize2, Minimize2, RotateCcw, Sun, SunDim, Volume2, VolumeX } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { Button, IconButton, ToolbarGroup } from '../components';
 import { armGestureUnlock, boardAudioState, playFlapSteps, playTestClack, subscribeBoardAudio, unlockBoardAudio } from '../board/audio';
@@ -120,7 +120,7 @@ export default function BoardPage() {
   );
 
   useEffect(() => {
-    document.title = `${titleCase(board.title || 'Departures')} · pve1`;
+    document.title = `${titleCase(board.title || 'Service status')} · pve1`;
   }, [board.title]);
 
   // Safari tints its toolbar / the standalone status bar from the root background and theme-color: make them match
@@ -151,10 +151,10 @@ export default function BoardPage() {
       <header className="bd-head">
         <div className="bd-sign">
           <span className="bd-sign-icon" aria-hidden="true">
-            <TrainFront size={22} strokeWidth={2.1} />
+            <Activity size={22} strokeWidth={2.1} />
           </span>
           <div className="bd-sign-text">
-            <h1 className="bd-title">{board.title || 'DEPARTURES'}</h1>
+            <h1 className="bd-title">{board.title || 'SERVICE STATUS'}</h1>
             <p className="bd-station">
               {board.station}
               {board.station && services.length > 0 && <span className="bd-station-summary"> · {summary}</span>}
@@ -199,7 +199,7 @@ export default function BoardPage() {
         </div>
       </header>
 
-      <main ref={frameRef} className="bd-frame" aria-label="Departure board">
+      <main ref={frameRef} className="bd-frame" aria-label="Status board">
         <div className="bd-sweep" aria-hidden="true" />
         <div ref={areaRef} className="bd-area">
           {layout && (
@@ -217,13 +217,13 @@ export default function BoardPage() {
         <div className="bd-foot-start">
           {connection === 'offline' || connection === 'stale' ? (
             <span className="bd-note" data-tone="warn">
-              {connection === 'offline' ? 'Offline · showing the last known departures' : 'Waiting for fresh data'}
+              {connection === 'offline' ? 'Offline · showing the last known status' : 'Waiting for fresh data'}
             </span>
           ) : sound && audio === 'locked' ? (
             <span className="bd-note">Tap anywhere to start the sound</span>
           ) : narrowPhone ? (
             <span className="bd-note">
-              <RotateCcw size={13} strokeWidth={2.2} aria-hidden="true" /> Rotate for platforms and latency
+              <RotateCcw size={13} strokeWidth={2.2} aria-hidden="true" /> Rotate to see guests and response times
             </span>
           ) : (
             <span className="bd-note">{services.length ? `${services.length} services` : 'No services configured'}</span>
@@ -248,14 +248,14 @@ export default function BoardPage() {
         )}
         <div className="bd-foot-end">
           <span className="bd-legend" aria-hidden="true">
-            <i data-lamp="green" /> On time <i data-lamp="amber" /> Delayed <i data-lamp="red" /> Cancelled
+            <i data-lamp="green" /> Up <i data-lamp="amber" /> Slow <i data-lamp="red" /> Down
           </span>
         </div>
       </footer>
 
-      {/* The flaps are decorative; this is the board for assistive tech (all departures, not just one page). */}
+      {/* The flaps are decorative; this is the board for assistive tech (all services, not just one page). */}
       <div className="sr-only">
-        <h2>Departures</h2>
+        <h2>Service status</h2>
         <p aria-live="polite">{summary}</p>
         <ul>
           {rows.map((r) => (

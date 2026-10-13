@@ -113,7 +113,7 @@ export interface RouteDef {
   /** default document title (pages can refine it via PageHeader) */
   title: string;
   component: LazyPage;
-  /** render without the app shell (the departure board) */
+  /** render without the app shell (the status board) */
   fullscreen?: boolean;
 }
 
@@ -122,7 +122,7 @@ export const ROUTES: readonly RouteDef[] = [
   { id: 'guests', path: '/guests', title: 'Guests', component: lazyPage(() => import('./pages/Guests')) },
   { id: 'guest', path: '/guests/:vmid', title: 'Guest', component: lazyPage(() => import('./pages/GuestDetail')) },
   { id: 'services', path: '/services', title: 'Services', component: lazyPage(() => import('./pages/Services')) },
-  { id: 'board', path: '/board', title: 'Departures', component: lazyPage(() => import('./pages/Board')), fullscreen: true },
+  { id: 'board', path: '/board', title: 'Status board', component: lazyPage(() => import('./pages/Board')), fullscreen: true },
   { id: 'storage', path: '/storage', title: 'Storage', component: lazyPage(() => import('./pages/Storage')) },
   { id: 'backups', path: '/backups', title: 'Backups', component: lazyPage(() => import('./pages/Backups')) },
   { id: 'tasks', path: '/tasks', title: 'Tasks', component: lazyPage(() => import('./pages/Tasks')) },

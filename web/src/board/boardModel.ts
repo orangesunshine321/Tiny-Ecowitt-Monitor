@@ -1,24 +1,25 @@
 /**
- * Departure-board model (DESIGN §5 Board): service → departure row, ordering, column layout and paging.
+ * Status-board model (DESIGN §5 Board): service → board row, ordering, column layout and paging. The code keeps the
+ * station-board names (departure, dest, platform, remark); what the board shows is plain words.
  * Everything here is pure so it can be unit tested (tests/web-board.test.ts).
  */
 import type { ServiceEntry, ServiceStatus } from '../../../shared/types';
 
 // ───────────────────────────────────────────────────────────── vocabulary
 
-/** REMARKS word per status (the board's own language). */
+/** STATUS word per status, in plain words (the board looks like a station board but doesn't talk like one). */
 export const REMARK: Readonly<Record<ServiceStatus, string>> = Object.freeze({
-  up: 'ON TIME',
-  slow: 'DELAYED',
-  down: 'CANCELLED',
-  paused: 'NOT IN SERVICE',
-  unknown: 'BOARDING',
+  up: 'UP',
+  slow: 'SLOW',
+  down: 'DOWN',
+  paused: 'STOPPED',
+  unknown: 'UNKNOWN',
 });
 
-/** Faces of the REMARKS word flap, in drum order (home = blank). */
-export const REMARK_DRUM: readonly string[] = Object.freeze(['', 'ON TIME', 'DELAYED', 'BOARDING', 'CANCELLED', 'NOT IN SERVICE']);
+/** Faces of the STATUS word flap, in drum order (home = blank). */
+export const REMARK_DRUM: readonly string[] = Object.freeze(['', 'UP', 'SLOW', 'UNKNOWN', 'DOWN', 'STOPPED']);
 
-/** Row lamp colour: green ON TIME, amber DELAYED, red CANCELLED, gray NOT IN SERVICE; BOARDING blinks dimly. */
+/** Row lamp colour: green UP, amber SLOW, red DOWN, gray STOPPED (its guest is stopped); UNKNOWN blinks dimly. */
 export type Lamp = 'green' | 'amber' | 'red' | 'gray' | 'blink' | 'off';
 
 export const LAMP: Readonly<Record<ServiceStatus, Lamp>> = Object.freeze({
@@ -113,17 +114,17 @@ export function departureRows(services: readonly ServiceEntry[]): DepartureRow[]
   return sortDepartures(services).map(toDepartureRow);
 }
 
-/** Counts in board language for the header/summary: "2 cancelled · 1 delayed" or "All on time". */
+/** Counts for the header/summary: "2 down · 1 slow" or "All up". */
 export function boardSummary(services: readonly ServiceEntry[]): string {
   const n = (st: ServiceStatus) => services.filter((s) => s.status === st).length;
   const parts = [
-    n('down') ? `${n('down')} cancelled` : '',
-    n('slow') ? `${n('slow')} delayed` : '',
-    n('unknown') ? `${n('unknown')} boarding` : '',
+    n('down') ? `${n('down')} down` : '',
+    n('slow') ? `${n('slow')} slow` : '',
+    n('unknown') ? `${n('unknown')} unknown` : '',
   ].filter(Boolean);
   if (parts.length) return parts.join(' · ');
-  if (!services.length) return 'No departures';
-  return n('up') ? 'All on time' : 'Not in service';
+  if (!services.length) return 'No services';
+  return n('up') ? 'All up' : 'All stopped';
 }
 
 // ───────────────────────────────────────────────────────────── paging

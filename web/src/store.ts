@@ -111,7 +111,7 @@ export const EMPTY_SNAPSHOT: Snapshot = Object.freeze<Snapshot>({
     serverTime: 0,
     inventoryEnabled: false,
     pushEnabled: false,
-    board: { title: 'DEPARTURES', station: '', sound: false },
+    board: { title: 'SERVICE STATUS', station: '', sound: false },
     thresholds: { storageWarnPercent: 85, storageCritPercent: 95, backupStaleDays: 7, slowMs: 1500, wearWarnPercent: 80 },
     collectors: [],
   },

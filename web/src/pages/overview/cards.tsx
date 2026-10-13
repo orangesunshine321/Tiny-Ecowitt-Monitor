@@ -1,5 +1,5 @@
-/** Overview summary cards: Guests, Storage, Temperatures, Favourites and Departures. */
-import { ArrowDownToLine, Boxes, ChevronRight, CircuitBoard, Cpu, HardDrive, Star, TrainFront } from 'lucide-react';
+/** Overview summary cards: Guests, Storage, Temperatures, Favourites and Service status. */
+import { Activity, ArrowDownToLine, Boxes, ChevronRight, CircuitBoard, Cpu, HardDrive, Star } from 'lucide-react';
 import { useMemo, type CSSProperties } from 'react';
 import type { Snapshot } from '../../../../shared/types';
 import { MiniBoard } from '../../board/MiniBoard';
@@ -268,14 +268,14 @@ export function DeparturesCard({ style }: { style?: CSSProperties }) {
   const ordered = useMemo(() => departureOrder(services), [services]);
   const down = services.filter((s) => s.status === 'down').length;
   const slow = services.filter((s) => s.status === 'slow').length;
-  // the board's own vocabulary: CANCELLED (down), DELAYED (slow), ON TIME (up)
-  const state = down ? `${down} cancelled` : slow ? `${slow} delayed` : services.length ? 'All on time' : undefined;
+  // the board's words: DOWN, SLOW, UP
+  const state = down ? `${down} down` : slow ? `${slow} slow` : services.length ? 'All up' : undefined;
   return (
-    <Card title="Departures" subtitle={[board.station || undefined, state].filter(Boolean).join(' · ') || undefined} href="/board" style={style}>
+    <Card title="Service status" subtitle={[board.station || undefined, state].filter(Boolean).join(' · ') || undefined} href="/board" style={style}>
       {services.length === 0 ? (
         <EmptyState
           compact
-          icon={<TrainFront size={22} strokeWidth={1.9} />}
+          icon={<Activity size={22} strokeWidth={1.9} />}
           title="No services yet"
           message="Add services in config.yaml, or publish Docker ports and they appear here."
         />
